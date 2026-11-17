@@ -47,6 +47,8 @@ impl KeyHandler {
             (Some('['), KeyCode::Char('c')) => Action::PrevHunk(n),
             (Some(']'), KeyCode::Char('f')) => Action::NextFile(n),
             (Some('['), KeyCode::Char('f')) => Action::PrevFile(n),
+            (Some(']'), KeyCode::Char('u')) => Action::NextUnreviewed(n),
+            (Some('['), KeyCode::Char('u')) => Action::PrevUnreviewed(n),
             (Some('z'), KeyCode::Char('a')) => Action::ToggleFold,
             (Some('z'), KeyCode::Char('o')) => Action::OpenFold,
             (Some('z'), KeyCode::Char('c')) => Action::CloseFold,
@@ -74,6 +76,8 @@ impl KeyHandler {
             (None, KeyCode::Char('l')) => Action::FocusDiff,
             (None, KeyCode::Enter) => Action::Select,
             (None, KeyCode::Char('s')) => Action::ToggleSidebar,
+            (None, KeyCode::Char('r')) => Action::ToggleReviewed,
+            (None, KeyCode::Char('R')) => Action::ToggleFileReviewed,
             _ => return None,
         };
         Some(action)

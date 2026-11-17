@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use git2::{Delta, DiffOptions, Patch, Repository, Tree};
@@ -91,6 +91,21 @@ impl GitSource {
         diff.find_similar(None)?;
         Ok(diff)
     }
+
+    /// File name for this spec's saved state. Revisions stay symbolic so the
+    /// state follows a branch as it gets new commits.
+    fn state_key(&self) -> String {
+        let key = match &self.spec {
+            DiffSpec::WorkTree => "worktree".to_string(),
+            DiffSpec::Staged => "staged".to_string(),
+            DiffSpec::RevToWorkTree(rev) => format!("rev-{rev}"),
+            DiffSpec::Range { from, to } => format!("range-{from}..{to}"),
+            DiffSpec::MergeBase { from, to } => format!("mergebase-{from}...{to}"),
+        };
+        key.chars()
+            .map(|c| if c.is_ascii_alphanumeric() || "-_.".contains(c) { c } else { '_' })
+            .collect()
+    }
 }
 
 impl DiffSource for GitSource {
@@ -123,7 +138,12 @@ impl DiffSource for GitSource {
             }
             files.push(file);
         }
-        Ok(Diff { files })
+        Ok(Diff::new(files))
+    }
+
+    fn state_file(&self) -> PathBuf {
+        // `.git` itself, or `.git/worktrees/<name>` in a linked worktree.
+        self.repo.path().join("rrrev").join(format!("{}.json", self.state_key()))
     }
 }
 
@@ -159,6 +179,7 @@ fn read_hunks(patch: &Patch) -> Result<Vec<Hunk>> {
             });
         }
         hunks.push(Hunk {
+            id: Default::default(),
             header: clean(hunk.header()),
             old_start: hunk.old_start(),
             old_lines: hunk.old_lines(),
@@ -234,5 +255,14 @@ mod tests {
 
         let new = diff.files.iter().find(|f| f.new_path.as_deref() == Some("new.txt")).unwrap();
         assert_eq!(new.status, FileStatus::Added);
+    }
+
+    #[test]
+    fn state_file_lives_in_the_git_dir_with_a_safe_name() {
+        let dir = tempfile::tempdir().unwrap();
+        Repository::init(dir.path()).unwrap();
+        let spec = DiffSpec::from_args(Some("main..feature/auth"), false);
+        let path = GitSource::discover(dir.path(), spec).unwrap().state_file();
+        assert!(path.ends_with(".git/rrrev/range-main..feature_auth.json"), "{path:?}");
     }
 }

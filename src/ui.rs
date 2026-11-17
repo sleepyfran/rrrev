@@ -36,8 +36,30 @@ pub fn render(frame: &mut Frame, app: &mut App, pending: &str) {
 
 fn render_title(frame: &mut Frame, area: Rect, app: &App) {
     let files = app.diff.files.len();
-    let text = format!(" rrrev ─ {} ─ {files} file{}", app.title, if files == 1 { "" } else { "s" });
-    frame.render_widget(Paragraph::new(text).reversed(), area);
+    let left = format!(" rrrev ─ {} ─ {files} file{}", app.title, if files == 1 { "" } else { "s" });
+    let progress = app.progress();
+    let done = if progress.is_complete() { " ✓" } else { "" };
+    let right = format!("{}/{} hunks reviewed{done} ", progress.reviewed, progress.total);
+    let pad = (area.width as usize).saturating_sub(left.chars().count() + right.chars().count());
+    let right_style = if progress.is_complete() { Style::new().fg(Color::Green) } else { Style::new() };
+    let line = Line::from(vec![
+        Span::raw(left),
+        Span::raw(" ".repeat(pad)),
+        Span::styled(right, right_style.bold()),
+    ]);
+    frame.render_widget(Paragraph::new(line).reversed(), area);
+}
+
+/// `✓` for a fully reviewed file, `◐` for a partly reviewed one.
+fn review_mark(app: &App, file: usize) -> Span<'static> {
+    let progress = app.file_progress(file);
+    if progress.is_complete() {
+        Span::styled("✓", Style::new().fg(Color::Green))
+    } else if progress.reviewed > 0 {
+        Span::styled("◐", Style::new().fg(Color::Yellow))
+    } else {
+        Span::raw(" ")
+    }
 }
 
 fn status_style(status: FileStatus) -> Style {
@@ -70,8 +92,8 @@ fn render_sidebar(frame: &mut Frame, area: Rect, app: &App) {
         let (added, removed) = file.stats();
         let stats = format!(" +{added} -{removed}");
         let fold = if app.collapsed[idx] { "▸" } else { " " };
-        // Status letter, space, fold marker, space.
-        let path_width = (inner.width as usize).saturating_sub(4 + stats.chars().count());
+        // Status letter, space, review mark, fold marker, space.
+        let path_width = (inner.width as usize).saturating_sub(5 + stats.chars().count());
         let path = truncate_left(file.path(), path_width);
         let (dir, name) = match path.rfind('/') {
             Some(i) => path.split_at(i + 1),
@@ -81,7 +103,9 @@ fn render_sidebar(frame: &mut Frame, area: Rect, app: &App) {
 
         let line = Line::from(vec![
             Span::styled(file.status.label(), status_style(file.status)),
-            Span::raw(format!(" {fold} ")),
+            Span::raw(" "),
+            review_mark(app, idx),
+            Span::raw(format!("{fold} ")),
             Span::raw(dir.to_string()).dim(),
             Span::raw(name.to_string()),
             Span::raw(" ".repeat(pad)),
@@ -137,6 +161,8 @@ fn row_line(app: &App, row: Row) -> Line<'static> {
                 Span::styled(format!(" {} ", f.status.label()), status_style(f.status).reversed()),
                 Span::raw(" "),
                 Span::styled(f.display_path(), Style::new().bold().add_modifier(Modifier::UNDERLINED)),
+                Span::raw(" "),
+                review_mark(app, file),
             ];
             if f.is_binary {
                 spans.push(Span::raw(" (binary)").dim());
@@ -147,26 +173,39 @@ fn row_line(app: &App, row: Row) -> Line<'static> {
             Line::from(spans)
         }
         Row::Hunk { file, hunk } => {
-            let header = &app.diff.files[file].hunks[hunk].header;
-            Line::from(Span::styled(format!(" {header}"), Style::new().fg(Color::Cyan)))
+            let header = &app.hunk(file, hunk).header;
+            if app.is_reviewed(file, hunk) {
+                Line::from(vec![
+                    Span::styled("✓", Style::new().fg(Color::Green).bold()),
+                    Span::styled(format!(" {header}"), Style::new().fg(Color::Cyan).dim()),
+                ])
+            } else {
+                Line::from(Span::styled(format!("  {header}"), Style::new().fg(Color::Cyan)))
+            }
         }
-        Row::Line { file, hunk, line } => {
-            let l = app.line(file, hunk, line);
-            let w = app.gutter_width;
-            let no = |n: Option<u32>| n.map_or_else(|| " ".repeat(w), |n| format!("{n:>w$}"));
-            let gutter = format!(" {} {} ", no(l.old_no), no(l.new_no));
-            let (sign, style) = match l.kind {
-                LineKind::Added => ("+", Style::new().fg(Color::Green)),
-                LineKind::Removed => ("-", Style::new().fg(Color::Red)),
-                LineKind::Context => (" ", Style::new()),
-                LineKind::NoNewline => (" ", Style::new().dim().italic()),
-            };
-            Line::from(vec![
-                Span::styled(gutter, Style::new().dim()),
-                Span::styled(format!("{sign} {}", l.content.replace('\t', "    ")), style),
-            ])
+        // Reviewed hunks fade out so what's left to read stands out.
+        Row::Line { file, hunk, line } if app.is_reviewed(file, hunk) => {
+            diff_line(app, file, hunk, line).patch_style(Style::new().dim())
         }
+        Row::Line { file, hunk, line } => diff_line(app, file, hunk, line),
     }
+}
+
+fn diff_line(app: &App, file: usize, hunk: usize, line: usize) -> Line<'static> {
+    let l = app.line(file, hunk, line);
+    let w = app.gutter_width;
+    let no = |n: Option<u32>| n.map_or_else(|| " ".repeat(w), |n| format!("{n:>w$}"));
+    let gutter = format!(" {} {} ", no(l.old_no), no(l.new_no));
+    let (sign, style) = match l.kind {
+        LineKind::Added => ("+", Style::new().fg(Color::Green)),
+        LineKind::Removed => ("-", Style::new().fg(Color::Red)),
+        LineKind::Context => (" ", Style::new()),
+        LineKind::NoNewline => (" ", Style::new().dim().italic()),
+    };
+    Line::from(vec![
+        Span::styled(gutter, Style::new().dim()),
+        Span::styled(format!("{sign} {}", l.content.replace('\t', "    ")), style),
+    ])
 }
 
 fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
@@ -191,17 +230,23 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
         }
     }
     let left = parts.join("  ");
-    let hints = " ]c hunk  ]f file  za fold  Tab files  s sidebar  q quit ";
-    let mut right = format!("{pending:>6} {hints}");
-    // Hints are the first thing to go in a narrow pane; pending keys stay.
-    if left.chars().count() + right.chars().count() > area.width as usize {
-        right = format!("{pending:>6} ");
-    }
-    let pad = (area.width as usize).saturating_sub(left.chars().count() + right.chars().count());
+    // A message takes the hints' place; hints are also the first thing to go
+    // in a narrow pane, while pending keys always stay.
+    let (hints, hint_style) = match &app.message {
+        Some(msg) if msg.starts_with("error:") => (format!(" {msg} "), Style::new().fg(Color::Red).bold()),
+        Some(msg) => (format!(" {msg} "), Style::new().bold()),
+        None => (" r review  ]u unreviewed  ]c hunk  za fold  Tab files  q quit ".to_string(), Style::new().dim()),
+    };
+    let pending = format!("{pending:>6}");
+    let fits = left.chars().count() + pending.len() + hints.chars().count() <= area.width as usize;
+    let hints = if fits { hints } else { " ".to_string() };
+    let used = left.chars().count() + pending.chars().count() + hints.chars().count();
+    let pad = (area.width as usize).saturating_sub(used);
     let line = Line::from(vec![
         Span::raw(left).bold(),
         Span::raw(" ".repeat(pad)),
-        Span::raw(right).dim(),
+        Span::raw(pending).dim(),
+        Span::styled(hints, hint_style),
     ]);
     frame.render_widget(Paragraph::new(line).reversed(), area);
 }
