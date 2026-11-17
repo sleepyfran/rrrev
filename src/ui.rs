@@ -3,13 +3,17 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph},
 };
 
 use crate::app::{App, CommentTarget, Focus, Mode, Progress, Row, View, find_matches};
 use crate::diff::{FileStatus, LineKind};
 use crate::help;
 use crate::text::wrap_words;
+
+/// Below this many columns the sidebar won't dock, as it would leave too
+/// little room for code; it opens as a pop-up instead.
+const COMPACT_BELOW: u16 = 100;
 
 /// `pending` holds the keys of an unfinished command, e.g. `3]`.
 pub fn render(frame: &mut Frame, app: &mut App, pending: &str) {
@@ -20,14 +24,12 @@ pub fn render(frame: &mut Frame, app: &mut App, pending: &str) {
     ])
     .areas(frame.area());
 
-    let body = if app.show_sidebar {
+    app.set_compact(frame.area().width < COMPACT_BELOW);
+    let body = if app.show_sidebar && !app.compact {
         let width = (main.width * 3 / 10).clamp(24, 48).min(main.width / 2);
         let [sidebar, body] =
             Layout::horizontal([Constraint::Length(width), Constraint::Min(0)]).areas(main);
-        match app.view {
-            View::Files => render_files_sidebar(frame, sidebar, app),
-            View::Plan => render_plan_sidebar(frame, sidebar, app),
-        }
+        render_sidebar(frame, sidebar, app, false);
         body
     } else {
         main
@@ -44,9 +46,26 @@ pub fn render(frame: &mut Frame, app: &mut App, pending: &str) {
         render_comment_box(frame, area, app);
     }
     render_status(frame, status, app, pending);
+    let sidebar_popup = app.compact && app.focus == Focus::Sidebar;
+    if sidebar_popup || app.help_scroll.is_some() {
+        dim_backdrop(frame);
+    }
+    if sidebar_popup {
+        render_sidebar(frame, main, app, true);
+    }
     if app.help_scroll.is_some() {
         render_help(frame, frame.area(), app);
     }
+}
+
+/// Greys out everything drawn so far, so a pop-up drawn on top stands out.
+/// Done with plain colours rather than the dim attribute, which many
+/// terminals barely show; backgrounds go too, so no highlight can leave grey
+/// text on a grey row.
+fn dim_backdrop(frame: &mut Frame) {
+    let area = frame.area();
+    let style = Style::new().fg(Color::DarkGray).bg(Color::Reset).remove_modifier(Modifier::BOLD | Modifier::REVERSED);
+    frame.buffer_mut().set_style(area, style);
 }
 
 /// The `?` overlay: every key and command, grouped, centred over the screen.
@@ -74,14 +93,10 @@ fn render_help(frame: &mut Frame, area: Rect, app: &mut App) {
     }
 
     let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(2));
-    let rect = Rect {
-        x: area.x + (area.width - width) / 2,
-        y: area.y + (area.height - height) / 2,
-        width,
-        height,
-    };
+    let rect = centered(area, width, height);
     let block = Block::bordered()
-        .border_style(Style::new().fg(Color::Magenta))
+        .border_type(BorderType::Thick)
+        .border_style(Style::new().fg(Color::Magenta).bold())
         .title(Span::styled(" Keys ", Style::new().bold()))
         .title_bottom(Line::from(" j/k scroll · Esc close ").dim());
     let inner = block.inner(rect);
@@ -171,14 +186,36 @@ fn status_style(status: FileStatus) -> Style {
     Style::new().fg(color).bold()
 }
 
-/// Draws the sidebar's frame and returns the area inside it.
-fn sidebar_frame(frame: &mut Frame, area: Rect, app: &App, title: &str) -> Rect {
+fn centered(area: Rect, width: u16, height: u16) -> Rect {
+    let (width, height) = (width.min(area.width), height.min(area.height));
+    Rect { x: area.x + (area.width - width) / 2, y: area.y + (area.height - height) / 2, width, height }
+}
+
+/// The file list or the plan, docked at the left of `area` or as a pop-up
+/// centred over it.
+fn render_sidebar(frame: &mut Frame, area: Rect, app: &App, popup: bool) {
+    match app.view {
+        View::Files => render_files_sidebar(frame, area, app, popup),
+        View::Plan => render_plan_sidebar(frame, area, app, popup),
+    }
+}
+
+/// Draws the sidebar's frame, sized for `entries` when it's a pop-up, and
+/// returns the area inside it.
+fn sidebar_frame(frame: &mut Frame, area: Rect, app: &App, title: &str, entries: usize, popup: bool) -> Rect {
     let focused = app.focus == Focus::Sidebar;
     let border_style = if focused { Style::new().fg(Color::Cyan) } else { Style::new().dim() };
-    let block = Block::new()
-        .borders(Borders::RIGHT)
-        .border_style(border_style)
-        .title(Span::styled(format!(" {title} "), if focused { Style::new().bold() } else { Style::new().dim() }));
+    let title = Span::styled(format!(" {title} "), if focused { Style::new().bold() } else { Style::new().dim() });
+    let (area, block) = if popup {
+        let height = (entries as u16 + 2).clamp(3, area.height.saturating_sub(2));
+        let rect = centered(area, 72.min(area.width.saturating_sub(4)), height);
+        frame.render_widget(Clear, rect);
+        let hint = Line::from(" j/k move · Enter / Esc close ").dim();
+        let border = Style::new().fg(Color::Cyan).bold();
+        (rect, Block::bordered().border_type(BorderType::Thick).border_style(border).title(title).title_bottom(hint))
+    } else {
+        (area, Block::new().borders(Borders::RIGHT).border_style(border_style).title(title))
+    };
     let inner = block.inner(area);
     frame.render_widget(block, area);
     inner
@@ -201,8 +238,8 @@ fn sidebar_start(selected: Option<usize>, height: usize) -> usize {
     selected.map_or(0, |s| (s + 1).saturating_sub(height))
 }
 
-fn render_plan_sidebar(frame: &mut Frame, area: Rect, app: &App) {
-    let inner = sidebar_frame(frame, area, app, "Plan");
+fn render_plan_sidebar(frame: &mut Frame, area: Rect, app: &App, popup: bool) {
+    let inner = sidebar_frame(frame, area, app, "Plan", app.plan.len(), popup);
     let focused = app.focus == Focus::Sidebar;
     let height = inner.height as usize;
     let first = sidebar_start(Some(app.page), height);
@@ -235,8 +272,8 @@ fn truncate_right(text: &str, width: usize) -> String {
     if width == 0 { head } else { format!("{head}…") }
 }
 
-fn render_files_sidebar(frame: &mut Frame, area: Rect, app: &App) {
-    let inner = sidebar_frame(frame, area, app, "Files");
+fn render_files_sidebar(frame: &mut Frame, area: Rect, app: &App, popup: bool) {
+    let inner = sidebar_frame(frame, area, app, "Files", app.diff.files.len(), popup);
     let focused = app.focus == Focus::Sidebar;
     let height = inner.height as usize;
     let selected = app.current_file();
@@ -387,15 +424,35 @@ fn diff_line(app: &App, file: usize, hunk: usize, line: usize) -> Line<'static> 
     } else {
         Span::raw(" ")
     };
-    let gutter = format!("{} {} ", no(l.old_no), no(l.new_no));
-    let (sign, style) = match l.kind {
-        LineKind::Added => ("+", Style::new().fg(Color::Green)),
-        LineKind::Removed => ("-", Style::new().fg(Color::Red)),
-        LineKind::Context => (" ", Style::new()),
-        LineKind::NoNewline => (" ", Style::new().dim().italic()),
+    // The change shows only in the gutter: a coloured bar, and the changed
+    // side's line number in the same colour. The code keeps its own colours.
+    let change = match l.kind {
+        LineKind::Added => Some(Color::Green),
+        LineKind::Removed => Some(Color::Red),
+        LineKind::Context | LineKind::NoNewline => None,
     };
-    let mut spans = vec![marker, Span::styled(gutter, Style::new().dim()), Span::styled(format!("{sign} "), style)];
-    spans.extend(highlighted(l.content.replace('\t', "    "), style, app));
+    let number_style = |side_changed: bool| match change {
+        Some(color) if side_changed => Style::new().fg(color),
+        _ => Style::new().dim(),
+    };
+    let bar = match change {
+        Some(color) => Span::styled("▌", Style::new().fg(color)),
+        None => Span::raw(" "),
+    };
+    let text_style = match l.kind {
+        LineKind::NoNewline => Style::new().dim().italic(),
+        _ => Style::new(),
+    };
+    let mut spans = vec![
+        marker,
+        Span::styled(no(l.old_no), number_style(l.kind == LineKind::Removed)),
+        Span::raw(" "),
+        Span::styled(no(l.new_no), number_style(l.kind == LineKind::Added)),
+        Span::raw(" "),
+        bar,
+        Span::raw(" "),
+    ];
+    spans.extend(highlighted(l.content.replace('\t', "    "), text_style, app));
     Line::from(spans)
 }
 

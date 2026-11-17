@@ -28,6 +28,8 @@ pub struct PlanPage {
 
 /// Places a saved plan on the current diff. Hunks it doesn't mention (new
 /// since it was made, or left out) go in a last group, so none go unseen.
+/// A plan with none of the diff's hunks was made for another diff and
+/// resolves to nothing.
 pub(super) fn resolve(plan: &Plan, diff: &Diff) -> Vec<PlanPage> {
     let positions: HashMap<&HunkId, (usize, usize)> = diff
         .files
@@ -51,6 +53,9 @@ pub(super) fn resolve(plan: &Plan, diff: &Diff) -> Vec<PlanPage> {
         })
         .filter(|page| !page.hunks.is_empty())
         .collect();
+    if pages.is_empty() {
+        return pages;
+    }
 
     let mut rest: Vec<(usize, usize)> = positions.into_values().filter(|p| !placed.contains(p)).collect();
     rest.sort();
@@ -134,7 +139,12 @@ impl App {
         };
         let known: HashSet<&HunkId> = self.diff.files.iter().flat_map(|f| &f.hunks).map(|h| &h.id).collect();
         let plan = plan.sanitize(&known);
-        self.plan = resolve(&plan, &self.diff);
+        let pages = resolve(&plan, &self.diff);
+        if pages.is_empty() {
+            self.message = Some("error: the organizer didn't place any hunks".to_string());
+            return;
+        }
+        self.plan = pages;
         self.review.set_plan(plan);
         // A fresh plan is read from the top.
         self.view = View::Plan;
@@ -386,6 +396,31 @@ mod tests {
         let reopened = App::new(String::new(), app.diff.clone(), app.review);
         assert_eq!(reopened.view, View::Plan);
         assert_eq!(reopened.plan, app.plan);
+    }
+
+    #[test]
+    fn a_plan_for_another_diff_is_not_shown() {
+        let app = organized_app();
+        let other = Diff::new(vec![file("c.rs", &[2]), file("d.rs", &[1])]);
+        let reopened = App::new(String::new(), other, app.review);
+        assert_eq!(reopened.view, View::Files);
+        assert!(reopened.plan.is_empty());
+        assert!(reopened.message.as_deref().unwrap().starts_with("Saved plan is for another diff"));
+        // Kept, in case that diff comes back.
+        assert!(reopened.review.plan().is_some());
+    }
+
+    #[test]
+    fn a_useless_answer_keeps_the_old_view() {
+        let mut app = sample_app();
+        command(&mut app, "organize");
+        let Some(Effect::Organize { job, .. }) = app.effect.take() else { panic!() };
+        let bogus: HunkId = serde_json::from_str("\"nope\"").unwrap();
+        let plan = Plan { groups: vec![PlanGroup { title: "x".into(), rationale: String::new(), hunks: vec![bogus] }] };
+        app.finish_organize(job, Ok(plan));
+        assert_eq!(app.view, View::Files);
+        assert!(app.review.plan().is_none());
+        assert_eq!(app.message.as_deref(), Some("error: the organizer didn't place any hunks"));
     }
 
     #[test]

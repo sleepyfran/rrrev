@@ -200,22 +200,44 @@ impl App {
         self.rebuild_rows();
     }
 
+    /// Whether the screen is too narrow to dock the sidebar, reported by the
+    /// UI each frame. Then the sidebar only shows as a pop-up, open while it
+    /// has focus.
+    pub fn set_compact(&mut self, compact: bool) {
+        self.compact = compact;
+        // Widening with the docked sidebar hidden leaves nothing to focus.
+        if !self.sidebar_available() {
+            self.focus = Focus::Diff;
+        }
+    }
+
+    /// Whether the sidebar can take focus: docked and shown, or as the pop-up.
+    fn sidebar_available(&self) -> bool {
+        self.show_sidebar || self.compact
+    }
+
     pub(super) fn toggle_focus(&mut self) {
         self.focus = match self.focus {
-            Focus::Diff if self.show_sidebar => Focus::Sidebar,
+            Focus::Diff if self.sidebar_available() => Focus::Sidebar,
             _ => Focus::Diff,
         }
     }
 
     pub(super) fn focus_sidebar(&mut self) {
-        if self.show_sidebar {
+        if self.sidebar_available() {
             self.focus = Focus::Sidebar;
         }
     }
 
+    /// `s`: shows or hides the docked sidebar; on a narrow screen, opens or
+    /// closes the pop-up instead.
     pub(super) fn toggle_sidebar(&mut self) {
-        self.show_sidebar = !self.show_sidebar;
-        self.focus = Focus::Diff;
+        if self.compact {
+            self.toggle_focus();
+        } else {
+            self.show_sidebar = !self.show_sidebar;
+            self.focus = Focus::Diff;
+        }
     }
 
     pub(super) fn half_page(&self) -> isize {
@@ -276,6 +298,31 @@ mod tests {
         app.update(Action::ToggleSidebar);
         assert_eq!(app.focus, Focus::Diff);
         app.update(Action::ToggleFocus);
+        assert_eq!(app.focus, Focus::Diff);
+    }
+
+    #[test]
+    fn narrow_screens_use_the_sidebar_as_a_pop_up() {
+        let mut app = sample_app();
+        app.update(Action::ToggleSidebar);
+        app.set_compact(true);
+        // Even with the docked sidebar hidden, Tab opens the pop-up.
+        app.update(Action::ToggleFocus);
+        assert_eq!(app.focus, Focus::Sidebar);
+        app.update(Action::Down(1));
+        assert_eq!(app.page, 1);
+        // Esc and q close it; q doesn't quit.
+        app.update(Action::Cancel);
+        assert_eq!(app.focus, Focus::Diff);
+        app.update(Action::ToggleSidebar);
+        assert_eq!(app.focus, Focus::Sidebar);
+        app.update(Action::Quit);
+        assert_eq!(app.focus, Focus::Diff);
+        assert!(!app.should_quit);
+
+        // Back to a wide screen with the docked sidebar hidden: nothing to focus.
+        app.update(Action::ToggleFocus);
+        app.set_compact(false);
         assert_eq!(app.focus, Focus::Diff);
     }
 

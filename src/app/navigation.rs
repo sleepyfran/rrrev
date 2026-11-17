@@ -3,9 +3,11 @@
 
 use super::{Action, App, Row, View};
 
-/// In the sidebar, vertical motions move between files instead of rows.
-pub(super) fn sidebar_action(action: Action) -> Action {
+/// In the sidebar, vertical motions move between files instead of rows. In
+/// the pop-up sidebar, `q` closes it rather than quitting.
+pub(super) fn sidebar_action(action: Action, popup: bool) -> Action {
     match action {
+        Action::Quit if popup => Action::FocusDiff,
         Action::Down(n) => Action::NextFile(n),
         Action::Up(n) => Action::PrevFile(n),
         Action::Top => Action::PrevFile(usize::MAX),

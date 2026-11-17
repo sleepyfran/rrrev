@@ -48,7 +48,10 @@ pub struct App {
     pub gutter_width: usize,
     pub focus: Focus,
     pub mode: Mode,
+    /// Whether the user wants the docked sidebar shown.
     pub show_sidebar: bool,
+    /// Too narrow to dock the sidebar; see `set_compact`.
+    pub compact: bool,
     /// One-off feedback for the status line, cleared by the next action.
     pub message: Option<String>,
     pub effect: Option<Effect>,
@@ -91,6 +94,7 @@ impl App {
             focus: Focus::Diff,
             mode: Mode::Normal,
             show_sidebar: true,
+            compact: false,
             message: None,
             effect: None,
             organizing: None,
@@ -107,9 +111,11 @@ impl App {
         // A review that has a plan picks up in it.
         if let Some(saved) = app.review.plan() {
             app.plan = plan::resolve(saved, &app.diff);
-        }
-        if !app.plan.is_empty() {
-            app.view = View::Plan;
+            if app.plan.is_empty() {
+                app.message = Some("Saved plan is for another diff: :organize to replan".to_string());
+            } else {
+                app.view = View::Plan;
+            }
         }
         app.open_page(0, 0);
         app
@@ -128,7 +134,7 @@ impl App {
         }
         let action = match self.focus {
             Focus::Diff => action,
-            Focus::Sidebar => navigation::sidebar_action(action),
+            Focus::Sidebar => navigation::sidebar_action(action, self.compact),
         };
         match action {
             Action::Down(n) => self.move_by(n as isize),
@@ -179,7 +185,9 @@ impl App {
                 }
             }
             Action::Cancel => {
-                if self.mode == Mode::Normal {
+                if self.focus == Focus::Sidebar {
+                    self.focus = Focus::Diff;
+                } else if self.mode == Mode::Normal {
                     self.clear_search_highlight();
                 }
                 self.mode = Mode::Normal;
