@@ -13,6 +13,7 @@ use ratatui::{
 use app::App;
 use diff::DiffSource;
 use diff::git::{DiffSpec, GitSource};
+use keymap::KeyHandler;
 
 /// Keyboard-driven code review in the terminal.
 #[derive(Parser)]
@@ -40,11 +41,12 @@ fn main() -> Result<()> {
 }
 
 fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
+    let mut keys = KeyHandler::default();
     while !app.should_quit {
-        terminal.draw(|frame| ui::render(frame, app))?;
+        terminal.draw(|frame| ui::render(frame, app, &keys.pending()))?;
         if let Event::Key(key) = event::read()?
             && key.kind == KeyEventKind::Press
-            && let Some(action) = keymap::action_for(key)
+            && let Some(action) = keys.handle(key)
         {
             app.update(action);
         }

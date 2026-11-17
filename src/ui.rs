@@ -3,30 +3,112 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Block, Borders, Paragraph},
 };
 
-use crate::app::{App, Row};
-use crate::diff::LineKind;
+use crate::app::{App, Focus, Row};
+use crate::diff::{FileStatus, LineKind};
 
-pub fn render(frame: &mut Frame, app: &mut App) {
-    let [title, body, status] = Layout::vertical([
+/// `pending` holds the keys of an unfinished command, e.g. `3]`.
+pub fn render(frame: &mut Frame, app: &mut App, pending: &str) {
+    let [title, main, status] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(0),
         Constraint::Length(1),
     ])
     .areas(frame.area());
 
+    let body = if app.show_sidebar {
+        let width = (main.width * 3 / 10).clamp(24, 48).min(main.width / 2);
+        let [sidebar, body] =
+            Layout::horizontal([Constraint::Length(width), Constraint::Min(0)]).areas(main);
+        render_sidebar(frame, sidebar, app);
+        body
+    } else {
+        main
+    };
+
     app.set_viewport_height(body.height as usize);
     render_title(frame, title, app);
     render_body(frame, body, app);
-    render_status(frame, status, app);
+    render_status(frame, status, app, pending);
 }
 
 fn render_title(frame: &mut Frame, area: Rect, app: &App) {
     let files = app.diff.files.len();
     let text = format!(" rrrev ─ {} ─ {files} file{}", app.title, if files == 1 { "" } else { "s" });
     frame.render_widget(Paragraph::new(text).reversed(), area);
+}
+
+fn status_style(status: FileStatus) -> Style {
+    let color = match status {
+        FileStatus::Added => Color::Green,
+        FileStatus::Deleted => Color::Red,
+        FileStatus::Modified => Color::Yellow,
+        FileStatus::Renamed | FileStatus::Copied => Color::Blue,
+        FileStatus::Other => Color::Magenta,
+    };
+    Style::new().fg(color).bold()
+}
+
+fn render_sidebar(frame: &mut Frame, area: Rect, app: &App) {
+    let focused = app.focus == Focus::Sidebar;
+    let border_style = if focused { Style::new().fg(Color::Cyan) } else { Style::new().dim() };
+    let block = Block::new()
+        .borders(Borders::RIGHT)
+        .border_style(border_style)
+        .title(Span::styled(" Files ", if focused { Style::new().bold() } else { Style::new().dim() }));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let height = inner.height as usize;
+    let selected = app.current_file();
+    // Keep the selected file visible without storing a separate sidebar scroll.
+    let first = selected.map_or(0, |s| (s + 1).saturating_sub(height));
+
+    for (offset, (idx, file)) in app.diff.files.iter().enumerate().skip(first).take(height).enumerate() {
+        let (added, removed) = file.stats();
+        let stats = format!(" +{added} -{removed}");
+        let fold = if app.collapsed[idx] { "▸" } else { " " };
+        // Status letter, space, fold marker, space.
+        let path_width = (inner.width as usize).saturating_sub(4 + stats.chars().count());
+        let path = truncate_left(file.path(), path_width);
+        let (dir, name) = match path.rfind('/') {
+            Some(i) => path.split_at(i + 1),
+            None => ("", path.as_str()),
+        };
+        let pad = path_width.saturating_sub(path.chars().count());
+
+        let line = Line::from(vec![
+            Span::styled(file.status.label(), status_style(file.status)),
+            Span::raw(format!(" {fold} ")),
+            Span::raw(dir.to_string()).dim(),
+            Span::raw(name.to_string()),
+            Span::raw(" ".repeat(pad)),
+            Span::styled(format!(" +{added}"), Style::new().fg(Color::Green)),
+            Span::styled(format!(" -{removed}"), Style::new().fg(Color::Red)),
+        ]);
+        let mut paragraph = Paragraph::new(line);
+        if Some(idx) == selected {
+            let bg = if focused { Color::DarkGray } else { Color::Reset };
+            paragraph = paragraph.style(Style::new().bg(bg).add_modifier(Modifier::BOLD));
+        }
+        let row_area = Rect { y: inner.y + offset as u16, height: 1, ..inner };
+        frame.render_widget(paragraph, row_area);
+    }
+}
+
+/// Keeps the end of a path, which is the part that tells files apart.
+fn truncate_left(path: &str, width: usize) -> String {
+    let len = path.chars().count();
+    if len <= width {
+        return path.to_string();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let tail: String = path.chars().skip(len - (width - 1)).collect();
+    format!("…{tail}")
 }
 
 fn render_body(frame: &mut Frame, area: Rect, app: &App) {
@@ -38,7 +120,7 @@ fn render_body(frame: &mut Frame, area: Rect, app: &App) {
     for (offset, (idx, row)) in visible.enumerate() {
         let row_area = Rect { y: area.y + offset as u16, height: 1, ..area };
         let mut paragraph = Paragraph::new(row_line(app, *row));
-        if idx == app.cursor {
+        if idx == app.cursor && app.focus == Focus::Diff {
             paragraph = paragraph.style(Style::new().bg(Color::DarkGray));
         }
         frame.render_widget(paragraph, row_area);
@@ -49,13 +131,18 @@ fn row_line(app: &App, row: Row) -> Line<'static> {
     match row {
         Row::File { file } => {
             let f = &app.diff.files[file];
+            let collapsed = app.collapsed[file];
             let mut spans = vec![
-                Span::styled(format!(" {} ", f.status.label()), Style::new().reversed().bold()),
+                Span::raw(if collapsed { "▸" } else { "▾" }),
+                Span::styled(format!(" {} ", f.status.label()), status_style(f.status).reversed()),
                 Span::raw(" "),
                 Span::styled(f.display_path(), Style::new().bold().add_modifier(Modifier::UNDERLINED)),
             ];
             if f.is_binary {
                 spans.push(Span::raw(" (binary)").dim());
+            } else if collapsed {
+                let reason = if f.looks_generated() { "generated, " } else { "" };
+                spans.push(Span::raw(format!(" ({reason}{} lines folded)", f.line_count())).dim());
             }
             Line::from(spans)
         }
@@ -82,8 +169,12 @@ fn row_line(app: &App, row: Row) -> Line<'static> {
     }
 }
 
-fn render_status(frame: &mut Frame, area: Rect, app: &App) {
-    let mut parts = vec![" NORMAL ".to_string()];
+fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
+    let mode = match app.focus {
+        Focus::Diff => " NORMAL ",
+        Focus::Sidebar => " FILES ",
+    };
+    let mut parts = vec![mode.to_string()];
     if let Some(row) = app.current_row() {
         let file = &app.diff.files[row.file()];
         let mut location = file.display_path();
@@ -99,13 +190,30 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App) {
             parts.push(format!("hunk {}/{}", hunk + 1, file.hunks.len()));
         }
     }
-    let hints = " j/k move  C-d/C-u half page  G bottom  q quit ";
     let left = parts.join("  ");
-    let pad = (area.width as usize).saturating_sub(left.chars().count() + hints.len());
+    let hints = " ]c hunk  ]f file  za fold  Tab files  s sidebar  q quit ";
+    let mut right = format!("{pending:>6} {hints}");
+    // Hints are the first thing to go in a narrow pane; pending keys stay.
+    if left.chars().count() + right.chars().count() > area.width as usize {
+        right = format!("{pending:>6} ");
+    }
+    let pad = (area.width as usize).saturating_sub(left.chars().count() + right.chars().count());
     let line = Line::from(vec![
         Span::raw(left).bold(),
         Span::raw(" ".repeat(pad)),
-        Span::raw(hints).dim(),
+        Span::raw(right).dim(),
     ]);
     frame.render_widget(Paragraph::new(line).reversed(), area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncates_paths_from_the_left() {
+        assert_eq!(truncate_left("src/main.rs", 20), "src/main.rs");
+        assert_eq!(truncate_left("src/diff/git.rs", 8), "…/git.rs");
+        assert_eq!(truncate_left("abc", 0), "");
+    }
 }

@@ -49,7 +49,46 @@ pub struct FileDiff {
     pub hunks: Vec<Hunk>,
 }
 
+/// File names that are machine-written and rarely worth reading line by line.
+const GENERATED_FILES: &[&str] = &[
+    "Cargo.lock",
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "bun.lock",
+    "poetry.lock",
+    "uv.lock",
+    "Gemfile.lock",
+    "composer.lock",
+    "go.sum",
+    "flake.lock",
+];
+
 impl FileDiff {
+    /// The path the file has after the change, or before it for deletions.
+    pub fn path(&self) -> &str {
+        self.new_path.as_deref().or(self.old_path.as_deref()).unwrap_or("")
+    }
+
+    pub fn looks_generated(&self) -> bool {
+        let name = self.path().rsplit('/').next().unwrap_or("");
+        GENERATED_FILES.contains(&name) || name.ends_with(".min.js") || name.ends_with(".min.css")
+    }
+
+    /// Number of added and removed lines.
+    pub fn stats(&self) -> (usize, usize) {
+        let lines = self.hunks.iter().flat_map(|h| &h.lines);
+        lines.fold((0, 0), |(added, removed), line| match line.kind {
+            LineKind::Added => (added + 1, removed),
+            LineKind::Removed => (added, removed + 1),
+            _ => (added, removed),
+        })
+    }
+
+    pub fn line_count(&self) -> usize {
+        self.hunks.iter().map(|h| h.lines.len()).sum()
+    }
+
     pub fn display_path(&self) -> String {
         match (&self.old_path, &self.new_path) {
             (Some(old), Some(new)) if old != new => format!("{old} → {new}"),
