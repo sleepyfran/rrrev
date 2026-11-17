@@ -9,6 +9,7 @@ use ratatui::{
 use crate::app::{App, CommentTarget, Focus, Mode, Progress, Row, View, find_matches};
 use crate::diff::{FileStatus, LineKind};
 use crate::help;
+use crate::highlight::{Highlighter, Segment};
 use crate::text::wrap_words;
 
 /// Below this many columns the sidebar won't dock, as it would leave too
@@ -16,7 +17,7 @@ use crate::text::wrap_words;
 const COMPACT_BELOW: u16 = 100;
 
 /// `pending` holds the keys of an unfinished command, e.g. `3]`.
-pub fn render(frame: &mut Frame, app: &mut App, pending: &str) {
+pub fn render(frame: &mut Frame, app: &mut App, highlighter: &mut Highlighter, pending: &str) {
     let [title, main, status] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(0),
@@ -41,7 +42,7 @@ pub fn render(frame: &mut Frame, app: &mut App, pending: &str) {
     let rows_area = Rect { height: body.height - comment_box.map_or(0, |b| b.height), ..body };
     app.set_viewport(rows_area.width as usize, rows_area.height as usize);
     render_title(frame, title, app);
-    render_body(frame, rows_area, app);
+    render_body(frame, rows_area, app, highlighter);
     if let Some(area) = comment_box {
         render_comment_box(frame, area, app);
     }
@@ -110,20 +111,31 @@ fn render_help(frame: &mut Frame, area: Rect, app: &mut App) {
     frame.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), inner);
 }
 
-/// `text` as spans in `style`, with matches of the highlighted search picked out.
-fn highlighted(text: String, style: Style, app: &App) -> Vec<Span<'static>> {
-    let Some(query) = app.highlighted_search() else { return vec![Span::styled(text, style)] };
+/// `segments` as spans, with matches of the highlighted search picked out.
+/// A match can span several segments.
+fn highlighted(segments: Vec<Segment>, app: &App) -> Vec<Span<'static>> {
+    let Some(query) = app.highlighted_search() else {
+        return segments.into_iter().map(|(style, text)| Span::styled(text, style)).collect();
+    };
+    let text: String = segments.iter().map(|(_, t)| t.as_str()).collect();
+    let matches = find_matches(&text, query);
     let mut spans = Vec::new();
-    let mut last = 0;
-    for range in find_matches(&text, query) {
-        if range.start > last {
-            spans.push(Span::styled(text[last..range.start].to_string(), style));
+    let mut start = 0;
+    for (style, segment) in segments {
+        let end = start + segment.len();
+        let mut last = start;
+        for range in matches.iter().filter(|m| m.start < end && m.end > start) {
+            let (from, to) = (range.start.max(start), range.end.min(end));
+            if from > last {
+                spans.push(Span::styled(text[last..from].to_string(), style));
+            }
+            spans.push(Span::styled(text[from..to].to_string(), style.bg(Color::Yellow).fg(Color::Black)));
+            last = to;
         }
-        spans.push(Span::styled(text[range.clone()].to_string(), style.bg(Color::Yellow).fg(Color::Black)));
-        last = range.end;
-    }
-    if last < text.len() || spans.is_empty() {
-        spans.push(Span::styled(text[last..].to_string(), style));
+        if last < end {
+            spans.push(Span::styled(text[last..end].to_string(), style));
+        }
+        start = end;
     }
     spans
 }
@@ -320,7 +332,7 @@ fn truncate_left(path: &str, width: usize) -> String {
     format!("…{tail}")
 }
 
-fn render_body(frame: &mut Frame, area: Rect, app: &App) {
+fn render_body(frame: &mut Frame, area: Rect, app: &App, highlighter: &mut Highlighter) {
     if app.rows.is_empty() {
         frame.render_widget(Paragraph::new(" No changes to review.").dim(), area);
         return;
@@ -329,7 +341,7 @@ fn render_body(frame: &mut Frame, area: Rect, app: &App) {
     let visible = app.rows.iter().enumerate().skip(app.scroll).take(area.height as usize);
     for (offset, (idx, row)) in visible.enumerate() {
         let row_area = Rect { y: area.y + offset as u16, height: 1, ..area };
-        let mut paragraph = Paragraph::new(row_line(app, *row));
+        let mut paragraph = Paragraph::new(row_line(app, *row, highlighter));
         let selected = match (*row, selection) {
             (Row::Line { hunk, line, .. }, Some((_, h, start, end))) => hunk == h && (start..=end).contains(&line),
             _ => false,
@@ -349,7 +361,7 @@ fn is_commented(app: &App, file: usize, hunk: usize, line: usize) -> bool {
     app.review.comments().iter().any(|c| c.hunk == *id && (c.start..=c.end).contains(&line))
 }
 
-fn row_line(app: &App, row: Row) -> Line<'static> {
+fn row_line(app: &App, row: Row, highlighter: &mut Highlighter) -> Line<'static> {
     match row {
         Row::Group { group, line } => {
             let header = app.group_header(group);
@@ -389,9 +401,9 @@ fn row_line(app: &App, row: Row) -> Line<'static> {
         }
         // Reviewed hunks fade out so what's left to read stands out.
         Row::Line { file, hunk, line } if app.is_reviewed(file, hunk) => {
-            diff_line(app, file, hunk, line).patch_style(Style::new().dim())
+            diff_line(app, highlighter, file, hunk, line).patch_style(Style::new().dim())
         }
-        Row::Line { file, hunk, line } => diff_line(app, file, hunk, line),
+        Row::Line { file, hunk, line } => diff_line(app, highlighter, file, hunk, line),
         Row::Comment { id, line, .. } => comment_line(app, id, line),
     }
 }
@@ -410,12 +422,12 @@ fn comment_line(app: &App, id: u64, line: usize) -> Line<'static> {
         });
         spans.push(Span::raw(format!("(outdated{lines}) ")).italic());
     }
-    spans.extend(highlighted(text, Style::new().fg(Color::Yellow), app));
+    spans.extend(highlighted(vec![(Style::new().fg(Color::Yellow), text)], app));
     let line = Line::from(spans);
     if outdated { line.patch_style(Style::new().dim()) } else { line }
 }
 
-fn diff_line(app: &App, file: usize, hunk: usize, line: usize) -> Line<'static> {
+fn diff_line(app: &App, highlighter: &mut Highlighter, file: usize, hunk: usize, line: usize) -> Line<'static> {
     let l = app.line(file, hunk, line);
     let w = app.gutter_width;
     let no = |n: Option<u32>| n.map_or_else(|| " ".repeat(w), |n| format!("{n:>w$}"));
@@ -425,7 +437,7 @@ fn diff_line(app: &App, file: usize, hunk: usize, line: usize) -> Line<'static> 
         Span::raw(" ")
     };
     // The change shows only in the gutter: a coloured bar, and the changed
-    // side's line number in the same colour. The code keeps its own colours.
+    // side's line number in the same colour. The code keeps its syntax colours.
     let change = match l.kind {
         LineKind::Added => Some(Color::Green),
         LineKind::Removed => Some(Color::Red),
@@ -452,7 +464,12 @@ fn diff_line(app: &App, file: usize, hunk: usize, line: usize) -> Line<'static> 
         bar,
         Span::raw(" "),
     ];
-    spans.extend(highlighted(l.content.replace('\t', "    "), text_style, app));
+    let segments = match highlighter.line(&app.diff, file, hunk, line) {
+        [] => vec![(text_style, l.content.clone())],
+        segments => segments.to_vec(),
+    };
+    let segments = segments.into_iter().map(|(style, text)| (style, text.replace('\t', "    "))).collect();
+    spans.extend(highlighted(segments, app));
     Line::from(spans)
 }
 

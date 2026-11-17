@@ -9,7 +9,7 @@
 
 ## Polish
 
-- [ ] Syntax highlighting for diff lines (`syntect`).
+- [x] Syntax highlighting for diff lines (`syntect`).
 - [ ] Side-by-side diff view, falling back to unified in narrow panes.
 - [ ] Keybindings configurable from a TOML file.
 - [ ] Files sidebar as a collapsible directory tree instead of a flat list.

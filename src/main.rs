@@ -2,6 +2,7 @@ mod app;
 mod diff;
 mod export;
 mod help;
+mod highlight;
 mod input;
 mod keymap;
 mod organizer;
@@ -33,6 +34,7 @@ use app::{App, Effect};
 use diff::DiffSource;
 use diff::git::{DiffSpec, GitSource};
 use export::{CommentSink, FileSink, Format};
+use highlight::{Background, Highlighter};
 use keymap::KeyHandler;
 use organizer::claude::ClaudeCli;
 use organizer::{Cancel, Organizer, Plan};
@@ -73,8 +75,9 @@ fn main() -> Result<()> {
 
     let mut app = App::new(source.describe(), diff, review);
     let organizer: Arc<dyn Organizer> = Arc::new(ClaudeCli::from_env());
+    let highlighter = Highlighter::new(Background::detect());
     let mut terminal = ratatui::init();
-    let result = run(&mut terminal, &mut app, &state_file, organizer);
+    let result = run(&mut terminal, &mut app, &state_file, organizer, highlighter);
     ratatui::restore();
     result
 }
@@ -93,12 +96,18 @@ struct Running {
     thread: thread::JoinHandle<()>,
 }
 
-fn run(terminal: &mut DefaultTerminal, app: &mut App, state_file: &Path, organizer: Arc<dyn Organizer>) -> Result<()> {
+fn run(
+    terminal: &mut DefaultTerminal,
+    app: &mut App,
+    state_file: &Path,
+    organizer: Arc<dyn Organizer>,
+    mut highlighter: Highlighter,
+) -> Result<()> {
     let mut keys = KeyHandler::default();
     let (plans_tx, plans): (Sender<PlanResult>, Receiver<PlanResult>) = mpsc::channel();
     let mut running: Option<Running> = None;
     while !app.should_quit {
-        terminal.draw(|frame| ui::render(frame, app, &keys.pending()))?;
+        terminal.draw(|frame| ui::render(frame, app, &mut highlighter, &keys.pending()))?;
 
         while let Ok((job, result)) = plans.try_recv() {
             if running.as_ref().is_some_and(|r| r.job == job) {
