@@ -28,6 +28,12 @@ pub fn wrap_words(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
+/// Screen lines `len` columns of text take, hard-wrapped every `room`
+/// columns; a `room` of 0 means no wrapping.
+pub fn wrapped_height(len: usize, room: usize) -> usize {
+    if room == 0 { 1 } else { len.div_ceil(room).max(1) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

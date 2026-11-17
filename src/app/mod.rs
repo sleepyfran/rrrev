@@ -152,11 +152,10 @@ impl App {
             Action::NextComment(n) => self.jump_comment(n, true),
             Action::PrevComment(n) => self.jump_comment(n, false),
             Action::ScrollCursorTop => self.scroll = self.cursor,
-            Action::ScrollCursorCenter => {
-                self.scroll = self.cursor.saturating_sub(self.viewport_height / 2)
-            }
+            Action::ScrollCursorCenter => self.scroll_with_above(self.viewport_height / 2),
             Action::ScrollCursorBottom => {
-                self.scroll = (self.cursor + 1).saturating_sub(self.viewport_height)
+                let cursor = self.current_row().map_or(1, |row| self.row_height(row));
+                self.scroll_with_above(self.viewport_height.saturating_sub(cursor))
             }
             Action::ToggleFold => self.toggle_fold(),
             Action::OpenFold => self.set_fold(false),

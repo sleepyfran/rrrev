@@ -338,10 +338,15 @@ fn render_body(frame: &mut Frame, area: Rect, app: &App, highlighter: &mut Highl
         return;
     }
     let selection = app.selection();
-    let visible = app.rows.iter().enumerate().skip(app.scroll).take(area.height as usize);
-    for (offset, (idx, row)) in visible.enumerate() {
-        let row_area = Rect { y: area.y + offset as u16, height: 1, ..area };
-        let mut paragraph = Paragraph::new(row_line(app, *row, highlighter));
+    let mut y = area.y;
+    for (idx, row) in app.rows.iter().enumerate().skip(app.scroll) {
+        if y >= area.bottom() {
+            break;
+        }
+        let lines = row_lines(app, *row, highlighter);
+        let row_area = Rect { y, height: (lines.len() as u16).min(area.bottom() - y), ..area };
+        y += row_area.height;
+        let mut paragraph = Paragraph::new(lines);
         let selected = match (*row, selection) {
             (Row::Line { hunk, line, .. }, Some((_, h, start, end))) => hunk == h && (start..=end).contains(&line),
             _ => false,
@@ -361,7 +366,23 @@ fn is_commented(app: &App, file: usize, hunk: usize, line: usize) -> bool {
     app.review.comments().iter().any(|c| c.hunk == *id && (c.start..=c.end).contains(&line))
 }
 
-fn row_line(app: &App, row: Row, highlighter: &mut Highlighter) -> Line<'static> {
+/// A row as drawn: one line, or several for a diff line or comment that
+/// wraps (as many as `App::row_height` counts).
+fn row_lines(app: &App, row: Row, highlighter: &mut Highlighter) -> Vec<Line<'static>> {
+    match row {
+        // Reviewed hunks fade out so what's left to read stands out.
+        Row::Line { file, hunk, line } if app.is_reviewed(file, hunk) => diff_line(app, highlighter, file, hunk, line)
+            .into_iter()
+            .map(|l| l.patch_style(Style::new().dim()))
+            .collect(),
+        Row::Line { file, hunk, line } => diff_line(app, highlighter, file, hunk, line),
+        Row::Comment { id, line, .. } => comment_line(app, id, line),
+        row => vec![row_line(app, row)],
+    }
+}
+
+/// A row that always fits on one line, cut off at the pane's edge.
+fn row_line(app: &App, row: Row) -> Line<'static> {
     match row {
         Row::Group { group, line } => {
             let header = app.group_header(group);
@@ -399,35 +420,73 @@ fn row_line(app: &App, row: Row, highlighter: &mut Highlighter) -> Line<'static>
                 Line::from(Span::styled(format!("  {header}"), Style::new().fg(Color::Cyan)))
             }
         }
-        // Reviewed hunks fade out so what's left to read stands out.
-        Row::Line { file, hunk, line } if app.is_reviewed(file, hunk) => {
-            diff_line(app, highlighter, file, hunk, line).patch_style(Style::new().dim())
-        }
-        Row::Line { file, hunk, line } => diff_line(app, highlighter, file, hunk, line),
-        Row::Comment { id, line, .. } => comment_line(app, id, line),
+        Row::Line { .. } | Row::Comment { .. } => unreachable!("drawn by row_lines"),
     }
 }
 
-fn comment_line(app: &App, id: u64, line: usize) -> Line<'static> {
-    let Some(comment) = app.review.comment(id) else { return Line::default() };
+/// Puts `gutter` before the first line of `text`, wrapped to the room left
+/// after it, and `hang` (as wide) before the rest.
+fn hanging(app: &App, gutter: Vec<Span<'static>>, hang: Vec<Span<'static>>, text: Vec<Span<'static>>) -> Vec<Line<'static>> {
+    let column = gutter.iter().map(|s| s.content.chars().count()).sum();
+    wrap_spans(text, app.text_room(column))
+        .into_iter()
+        .enumerate()
+        .map(|(i, chunk)| {
+            let mut spans = if i == 0 { gutter.clone() } else { hang.clone() };
+            spans.extend(chunk);
+            Line::from(spans)
+        })
+        .collect()
+}
+
+/// Hard-wraps styled text every `room` chars, splitting spans where they
+/// cross a break. A `room` of 0 means no wrapping.
+fn wrap_spans(spans: Vec<Span<'static>>, room: usize) -> Vec<Vec<Span<'static>>> {
+    let mut lines = vec![Vec::new()];
+    if room == 0 {
+        lines[0] = spans;
+        return lines;
+    }
+    let mut used = 0;
+    for span in spans {
+        let mut rest: &str = &span.content;
+        while !rest.is_empty() {
+            if used == room {
+                lines.push(Vec::new());
+                used = 0;
+            }
+            let take = rest.char_indices().nth(room - used).map_or(rest.len(), |(i, _)| i);
+            let (head, tail) = rest.split_at(take);
+            used += head.chars().count();
+            lines.last_mut().expect("lines is never empty").push(Span::styled(head.to_string(), span.style));
+            rest = tail;
+        }
+    }
+    lines
+}
+
+fn comment_line(app: &App, id: u64, line: usize) -> Vec<Line<'static>> {
+    let Some(comment) = app.review.comment(id) else { return vec![Line::default()] };
     let text = comment.text.lines().nth(line).unwrap_or("").to_string();
-    // Line up with the code: `marker old new ` is two numbers plus three columns.
-    let indent = " ".repeat(2 * app.gutter_width + 3);
+    // The `┃` lines up with the change bar, so the text starts past the code's column.
+    let indent = Span::raw(" ".repeat(app.code_column() - 2));
     let lead = if line == 0 { "┃ ✎ " } else { "┃   " };
-    let mut spans = vec![Span::raw(indent), Span::styled(lead, Style::new().fg(Color::Yellow))];
-    let outdated = app.is_outdated(comment);
-    if outdated && line == 0 {
-        let lines = comment.new_lines.or(comment.old_lines).map_or(String::new(), |(a, b)| {
-            if a == b { format!(" L{a}") } else { format!(" L{a}-{b}") }
-        });
-        spans.push(Span::raw(format!("(outdated{lines}) ")).italic());
+    let gutter = vec![indent.clone(), Span::styled(lead, Style::new().fg(Color::Yellow))];
+    let hang = vec![indent, Span::styled("┃   ", Style::new().fg(Color::Yellow))];
+    let mut spans = Vec::new();
+    if line == 0 {
+        spans.push(Span::raw(app.outdated_label(comment)).italic());
     }
     spans.extend(highlighted(vec![(Style::new().fg(Color::Yellow), text)], app));
-    let line = Line::from(spans);
-    if outdated { line.patch_style(Style::new().dim()) } else { line }
+    let lines = hanging(app, gutter, hang, spans);
+    if app.is_outdated(comment) {
+        lines.into_iter().map(|l| l.patch_style(Style::new().dim())).collect()
+    } else {
+        lines
+    }
 }
 
-fn diff_line(app: &App, highlighter: &mut Highlighter, file: usize, hunk: usize, line: usize) -> Line<'static> {
+fn diff_line(app: &App, highlighter: &mut Highlighter, file: usize, hunk: usize, line: usize) -> Vec<Line<'static>> {
     let l = app.line(file, hunk, line);
     let w = app.gutter_width;
     let no = |n: Option<u32>| n.map_or_else(|| " ".repeat(w), |n| format!("{n:>w$}"));
@@ -455,22 +514,23 @@ fn diff_line(app: &App, highlighter: &mut Highlighter, file: usize, hunk: usize,
         LineKind::NoNewline => Style::new().dim().italic(),
         _ => Style::new(),
     };
-    let mut spans = vec![
-        marker,
+    let gutter = vec![
+        marker.clone(),
         Span::styled(no(l.old_no), number_style(l.kind == LineKind::Removed)),
         Span::raw(" "),
         Span::styled(no(l.new_no), number_style(l.kind == LineKind::Added)),
         Span::raw(" "),
-        bar,
+        bar.clone(),
         Span::raw(" "),
     ];
+    // Wrapped code continues under itself, with the marker and bar running down.
+    let hang = vec![marker, Span::raw(" ".repeat(2 * w + 2)), bar, Span::raw(" ")];
     let segments = match highlighter.line(&app.diff, file, hunk, line) {
         [] => vec![(text_style, l.content.clone())],
         segments => segments.to_vec(),
     };
     let segments = segments.into_iter().map(|(style, text)| (style, text.replace('\t', "    "))).collect();
-    spans.extend(highlighted(segments, app));
-    Line::from(spans)
+    hanging(app, gutter, hang, highlighted(segments, app))
 }
 
 const MAX_COMMENT_BOX_LINES: u16 = 8;
@@ -636,6 +696,19 @@ mod tests {
         assert_eq!(truncate_right("Core types", 20), "Core types");
         assert_eq!(truncate_right("Core types", 5), "Core…");
         assert_eq!(truncate_right("Core", 0), "");
+    }
+
+    #[test]
+    fn wraps_spans_at_the_room_given() {
+        let text = |lines: Vec<Vec<Span>>| -> Vec<String> {
+            lines.iter().map(|l| l.iter().map(|s| s.content.as_ref()).collect()).collect()
+        };
+        let spans = || vec![Span::raw("abcd"), Span::raw("éfg"), Span::raw("h")];
+        assert_eq!(text(wrap_spans(spans(), 3)), ["abc", "déf", "gh"]);
+        assert_eq!(text(wrap_spans(spans(), 0)), ["abcdéfgh"]);
+        assert_eq!(text(wrap_spans(spans(), 8)), ["abcdéfgh"]);
+        assert_eq!(text(wrap_spans(vec![], 4)), [""]);
+        assert_eq!(wrap_spans(spans(), 3)[1].len(), 2, "split where a span crosses a break");
     }
 
     #[test]

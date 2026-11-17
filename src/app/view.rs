@@ -3,7 +3,7 @@
 
 use super::{App, Focus, Mode, View};
 use crate::review::Comment;
-use crate::text::wrap_words;
+use crate::text::{wrapped_height, wrap_words};
 
 /// One visible row of the current page, pointing back into the model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -250,9 +250,75 @@ impl App {
         }
         if self.cursor < self.scroll {
             self.scroll = self.cursor;
-        } else if self.cursor >= self.scroll + self.viewport_height {
-            self.scroll = self.cursor + 1 - self.viewport_height;
+        } else {
+            // A cursor row taller than the pane shows from its top.
+            let mut shown: usize = self.rows[self.scroll..=self.cursor].iter().map(|r| self.row_height(*r)).sum();
+            while self.scroll < self.cursor && shown > self.viewport_height {
+                shown -= self.row_height(self.rows[self.scroll]);
+                self.scroll += 1;
+            }
         }
+    }
+
+    /// Scrolls so that at most `above` screen lines of rows show above the
+    /// cursor (`zz`, `zb`).
+    pub(super) fn scroll_with_above(&mut self, above: usize) {
+        let mut used = 0;
+        self.scroll = self.cursor;
+        while self.scroll > 0 {
+            let height = self.row_height(self.rows[self.scroll - 1]);
+            if used + height > above {
+                break;
+            }
+            used += height;
+            self.scroll -= 1;
+        }
+    }
+
+    /// Column where code starts on a diff line: comment marker, both line
+    /// numbers and the change bar, each followed by a space but the marker.
+    pub fn code_column(&self) -> usize {
+        2 * self.gutter_width + 5
+    }
+
+    /// Column where a comment's text starts, after its `┃ ✎ ` lead.
+    pub fn comment_column(&self) -> usize {
+        self.code_column() + 2
+    }
+
+    /// `(outdated L12-14) `, leading the first line of a comment whose code
+    /// has changed; empty otherwise.
+    pub fn outdated_label(&self, comment: &Comment) -> String {
+        if !self.is_outdated(comment) {
+            return String::new();
+        }
+        let lines = comment.new_lines.or(comment.old_lines).map_or(String::new(), |(a, b)| {
+            if a == b { format!(" L{a}") } else { format!(" L{a}-{b}") }
+        });
+        format!("(outdated{lines}) ")
+    }
+
+    /// Screen lines a row takes: diff lines and comments wrap to the pane,
+    /// hanging under their text; other rows take one.
+    pub fn row_height(&self, row: Row) -> usize {
+        let (column, text) = match row {
+            Row::Line { file, hunk, line } => {
+                (self.code_column(), self.line(file, hunk, line).content.replace('\t', "    ").chars().count())
+            }
+            Row::Comment { id, line, .. } => {
+                let Some(comment) = self.review.comment(id) else { return 1 };
+                let label = if line == 0 { self.outdated_label(comment).chars().count() } else { 0 };
+                (self.comment_column(), label + comment.text.lines().nth(line).unwrap_or("").chars().count())
+            }
+            Row::Group { .. } | Row::File { .. } | Row::Hunk { .. } => return 1,
+        };
+        wrapped_height(text, self.text_room(column))
+    }
+
+    /// Columns left for text starting at `column`; 0 (don't wrap) until the
+    /// UI reports a width, or when there's no room at all.
+    pub fn text_room(&self, column: usize) -> usize {
+        self.viewport_width.saturating_sub(column)
     }
 }
 
@@ -289,6 +355,25 @@ mod tests {
         assert_eq!((app.cursor, app.scroll), (4, 3));
         app.update(Action::Top);
         assert_eq!(app.scroll, 0);
+    }
+
+    #[test]
+    fn long_lines_wrap_and_scroll_by_screen_lines() {
+        let mut app = sample_app();
+        // Code starts at column 7, leaving 4 for each 8-char line: 2 lines each.
+        app.set_viewport(11, 6);
+        assert_eq!(app.row_height(app.rows[0]), 1);
+        assert_eq!(app.row_height(app.rows[2]), 2);
+        app.update(Action::Down(4));
+        // Header, hunk and three wrapped lines need 8: the top two scroll off.
+        assert_eq!(app.scroll, 2);
+        app.update(Action::ScrollCursorCenter);
+        assert_eq!(app.scroll, 3);
+        app.update(Action::ScrollCursorBottom);
+        assert_eq!(app.scroll, 2);
+        // Wide enough: back to a line each.
+        app.set_viewport(80, 6);
+        assert_eq!(app.row_height(app.rows[2]), 1);
     }
 
     #[test]

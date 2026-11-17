@@ -184,7 +184,7 @@ impl App {
         // Forces the page's rows to be rebuilt for the new view.
         self.rows.clear();
         self.open_page(page, row);
-        self.scroll = row.saturating_sub(self.viewport_height / 2);
+        self.scroll_with_above(self.viewport_height / 2);
     }
 }
 
