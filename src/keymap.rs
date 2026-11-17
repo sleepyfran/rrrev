@@ -89,6 +89,10 @@ impl KeyHandler {
             (None, KeyCode::Char('c')) => Action::StartComment,
             (None, KeyCode::Char('C')) => Action::CommentInEditor,
             (None, KeyCode::Char(':')) => Action::EnterCommand,
+            (None, KeyCode::Char('/')) => Action::StartSearch,
+            (None, KeyCode::Char('n')) => Action::SearchNext(n),
+            (None, KeyCode::Char('N')) => Action::SearchPrev(n),
+            (None, KeyCode::Char('?')) => Action::ToggleHelp,
             _ => return None,
         };
         Some(action)
@@ -151,6 +155,10 @@ mod tests {
         assert_eq!(press(&mut h, "zM"), Some(Action::CloseAllFolds));
         assert_eq!(press(&mut h, "2]m"), Some(Action::NextComment(2)));
         assert_eq!(press(&mut h, "dd"), Some(Action::DeleteComment));
+        assert_eq!(press(&mut h, "3n"), Some(Action::SearchNext(3)));
+        assert_eq!(press(&mut h, "N"), Some(Action::SearchPrev(1)));
+        assert_eq!(press(&mut h, "/"), Some(Action::StartSearch));
+        assert_eq!(press(&mut h, "?"), Some(Action::ToggleHelp));
     }
 
     #[test]

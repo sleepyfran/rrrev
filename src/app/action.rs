@@ -36,6 +36,10 @@ pub enum Action {
     CommentInEditor,
     DeleteComment,
     EnterCommand,
+    StartSearch,
+    SearchNext(usize),
+    SearchPrev(usize),
+    ToggleHelp,
     ToggleFocus,
     FocusSidebar,
     FocusDiff,
@@ -51,6 +55,9 @@ pub enum Effect {
     /// Edit the comment being written in `$EDITOR`, then call `finish_editor`.
     OpenEditor { initial: String },
     Export { format: Format, path: Option<PathBuf> },
-    /// Plan the review in the background, then call `finish_organize`.
-    Organize { request: OrganizeRequest },
+    /// Plan the review in the background, then call `finish_organize` with
+    /// the same `job`.
+    Organize { job: u64, request: OrganizeRequest },
+    /// Stop that job; its result, if one still arrives, is ignored.
+    CancelOrganize { job: u64 },
 }

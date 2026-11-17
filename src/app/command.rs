@@ -38,7 +38,7 @@ impl App {
                 self.message = Some("Saved".to_string());
             }
             "export" => self.export_command(&args),
-            "organize" => self.start_organize(),
+            "organize" => self.organize_command(&args),
             _ => match name.parse::<u32>() {
                 Ok(line) => self.go_to_line(line),
                 Err(_) => self.message = Some(format!("error: not a command: {name}")),

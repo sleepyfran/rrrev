@@ -6,8 +6,10 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
-use crate::app::{App, CommentTarget, Focus, Mode, Progress, Row, View};
+use crate::app::{App, CommentTarget, Focus, Mode, Progress, Row, View, find_matches};
 use crate::diff::{FileStatus, LineKind};
+use crate::help;
+use crate::text::wrap_words;
 
 /// `pending` holds the keys of an unfinished command, e.g. `3]`.
 pub fn render(frame: &mut Frame, app: &mut App, pending: &str) {
@@ -42,6 +44,73 @@ pub fn render(frame: &mut Frame, app: &mut App, pending: &str) {
         render_comment_box(frame, area, app);
     }
     render_status(frame, status, app, pending);
+    if app.help_scroll.is_some() {
+        render_help(frame, frame.area(), app);
+    }
+}
+
+/// The `?` overlay: every key and command, grouped, centred over the screen.
+fn render_help(frame: &mut Frame, area: Rect, app: &mut App) {
+    let width = 100.min(area.width.saturating_sub(4));
+    let key_width = help::SECTIONS.iter().flat_map(|s| s.entries).map(|(k, _)| k.chars().count()).max().unwrap_or(0) + 2;
+    // Inside the border, after the key column.
+    let text_width = (width as usize).saturating_sub(2 + 1 + key_width).max(10);
+
+    let mut lines: Vec<Line> = Vec::new();
+    for section in help::SECTIONS {
+        if !lines.is_empty() {
+            lines.push(Line::default());
+        }
+        lines.push(Line::from(Span::styled(format!(" {}", section.title), Style::new().fg(Color::Magenta).bold())));
+        for (keys, what) in section.entries {
+            for (i, text) in wrap_words(what, text_width).into_iter().enumerate() {
+                let keys = if i == 0 { *keys } else { "" };
+                lines.push(Line::from(vec![
+                    Span::styled(format!(" {keys:<key_width$}"), Style::new().fg(Color::Cyan)),
+                    Span::raw(text),
+                ]));
+            }
+        }
+    }
+
+    let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(2));
+    let rect = Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + (area.height - height) / 2,
+        width,
+        height,
+    };
+    let block = Block::bordered()
+        .border_style(Style::new().fg(Color::Magenta))
+        .title(Span::styled(" Keys ", Style::new().bold()))
+        .title_bottom(Line::from(" j/k scroll · Esc close ").dim());
+    let inner = block.inner(rect);
+    // Only now is it known how far the help can scroll.
+    let max_scroll = lines.len().saturating_sub(inner.height as usize);
+    let scroll = app.help_scroll.map_or(0, |s| s.min(max_scroll));
+    app.help_scroll = Some(scroll);
+
+    frame.render_widget(Clear, rect);
+    frame.render_widget(block, rect);
+    frame.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), inner);
+}
+
+/// `text` as spans in `style`, with matches of the highlighted search picked out.
+fn highlighted(text: String, style: Style, app: &App) -> Vec<Span<'static>> {
+    let Some(query) = app.highlighted_search() else { return vec![Span::styled(text, style)] };
+    let mut spans = Vec::new();
+    let mut last = 0;
+    for range in find_matches(&text, query) {
+        if range.start > last {
+            spans.push(Span::styled(text[last..range.start].to_string(), style));
+        }
+        spans.push(Span::styled(text[range.clone()].to_string(), style.bg(Color::Yellow).fg(Color::Black)));
+        last = range.end;
+    }
+    if last < text.len() || spans.is_empty() {
+        spans.push(Span::styled(text[last..].to_string(), style));
+    }
+    spans
 }
 
 fn render_title(frame: &mut Frame, area: Rect, app: &App) {
@@ -54,10 +123,10 @@ fn render_title(frame: &mut Frame, area: Rect, app: &App) {
         1 => "1 comment · ".to_string(),
         n => format!("{n} comments · "),
     };
-    let organizing = match app.organizing_since {
-        Some(since) => {
+    let organizing = match app.organizing {
+        Some(job) => {
             const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-            let elapsed = since.elapsed();
+            let elapsed = job.started.elapsed();
             let frame = SPINNER[(elapsed.as_millis() / 100) as usize % SPINNER.len()];
             format!("{frame} organizing… {}s · ", elapsed.as_secs())
         }
@@ -304,7 +373,7 @@ fn comment_line(app: &App, id: u64, line: usize) -> Line<'static> {
         });
         spans.push(Span::raw(format!("(outdated{lines}) ")).italic());
     }
-    spans.push(Span::styled(text, Style::new().fg(Color::Yellow)));
+    spans.extend(highlighted(text, Style::new().fg(Color::Yellow), app));
     let line = Line::from(spans);
     if outdated { line.patch_style(Style::new().dim()) } else { line }
 }
@@ -325,11 +394,9 @@ fn diff_line(app: &App, file: usize, hunk: usize, line: usize) -> Line<'static> 
         LineKind::Context => (" ", Style::new()),
         LineKind::NoNewline => (" ", Style::new().dim().italic()),
     };
-    Line::from(vec![
-        marker,
-        Span::styled(gutter, Style::new().dim()),
-        Span::styled(format!("{sign} {}", l.content.replace('\t', "    ")), style),
-    ])
+    let mut spans = vec![marker, Span::styled(gutter, Style::new().dim()), Span::styled(format!("{sign} "), style)];
+    spans.extend(highlighted(l.content.replace('\t', "    "), style, app));
+    Line::from(spans)
 }
 
 const MAX_COMMENT_BOX_LINES: u16 = 8;
@@ -402,10 +469,15 @@ fn wrap_input(text: &str, cursor: usize, width: usize) -> (Vec<String>, (usize, 
 }
 
 fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
-    if let Mode::Command { input } = &app.mode {
-        let text = format!(":{}", input.text());
+    let prompt = match &app.mode {
+        Mode::Command { input } => Some((':', input)),
+        Mode::Search { input } => Some(('/', input)),
+        _ => None,
+    };
+    if let Some((prefix, input)) = prompt {
+        let text = format!("{prefix}{}", input.text());
         frame.render_widget(Paragraph::new(text), area);
-        let x = 1 + input.text().chars().take(input.cursor()).count() as u16;
+        let x = 1 + input.cursor() as u16;
         frame.set_cursor_position((area.x + x.min(area.width.saturating_sub(1)), area.y));
         return;
     }
@@ -458,7 +530,7 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
                 Mode::Visual { .. } => " c comment on selection  Esc cancel ",
                 // The comment box lists its own keys.
                 Mode::Comment { .. } => " ",
-                _ => " r review  c comment  ]u unreviewed  ]c hunk  ]f page  p plan  : command  q quit ",
+                _ => " ? help  r review  c comment  ]u unreviewed  ]f page  p plan  / search  q quit ",
             };
             let hints = if fits(&left, hints) { hints } else { " " };
             (hints.to_string(), Style::new().dim())

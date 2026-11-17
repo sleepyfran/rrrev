@@ -123,6 +123,10 @@ impl ReviewState {
         self.dirty = true;
     }
 
+    pub fn clear_plan(&mut self) {
+        self.dirty |= self.plan.take().is_some();
+    }
+
     /// Forces the next save, for an explicit `:w`.
     pub fn mark_dirty(&mut self) {
         self.dirty = true;

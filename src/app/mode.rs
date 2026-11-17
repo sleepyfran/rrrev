@@ -20,6 +20,7 @@ pub enum Mode {
     Visual { anchor: usize },
     Comment { target: CommentTarget, input: TextInput },
     Command { input: TextInput },
+    Search { input: TextInput },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

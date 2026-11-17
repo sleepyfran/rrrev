@@ -9,6 +9,7 @@ mod marks;
 mod mode;
 mod navigation;
 mod plan;
+mod search;
 mod view;
 
 #[cfg(test)]
@@ -17,9 +18,9 @@ mod test_support;
 pub use action::{Action, Effect};
 pub use marks::Progress;
 pub use mode::{CommentTarget, Focus, Mode, View};
+pub use plan::Job;
+pub use search::find_matches;
 pub use view::Row;
-
-use std::time::Instant;
 
 use crate::diff::{Diff, DiffLine, Hunk};
 use crate::input::InputAction;
@@ -51,8 +52,16 @@ pub struct App {
     /// One-off feedback for the status line, cleared by the next action.
     pub message: Option<String>,
     pub effect: Option<Effect>,
-    /// When the organizer was started, while it runs.
-    pub organizing_since: Option<Instant>,
+    /// The organizer run in progress, if any.
+    pub organizing: Option<Job>,
+    /// Id for the next organizer run.
+    next_job: u64,
+    /// The last `/` query, kept for `n` / `N`.
+    pub search: Option<String>,
+    /// Whether matches of `search` are highlighted; `Esc` turns it off.
+    pub highlight_search: bool,
+    /// First line shown of the `?` overlay, while it's open.
+    pub help_scroll: Option<usize>,
     pub should_quit: bool,
 }
 
@@ -84,7 +93,11 @@ impl App {
             show_sidebar: true,
             message: None,
             effect: None,
-            organizing_since: None,
+            organizing: None,
+            next_job: 0,
+            search: None,
+            highlight_search: false,
+            help_scroll: None,
             should_quit: false,
         };
         // Generated files and files already reviewed start out of the way.
@@ -104,11 +117,15 @@ impl App {
 
     /// True while keys should go to a text field rather than the keymap.
     pub fn is_typing(&self) -> bool {
-        matches!(self.mode, Mode::Comment { .. } | Mode::Command { .. })
+        matches!(self.mode, Mode::Comment { .. } | Mode::Command { .. } | Mode::Search { .. })
     }
 
     pub fn update(&mut self, action: Action) {
         self.message = None;
+        if self.help_scroll.is_some() {
+            self.update_help(action);
+            return;
+        }
         let action = match self.focus {
             Focus::Diff => action,
             Focus::Sidebar => navigation::sidebar_action(action),
@@ -148,6 +165,10 @@ impl App {
             Action::CommentInEditor => self.start_comment(true),
             Action::DeleteComment => self.delete_comment_under_cursor(),
             Action::EnterCommand => self.enter_command(),
+            Action::StartSearch => self.start_search(),
+            Action::SearchNext(n) => self.search_next(n, true),
+            Action::SearchPrev(n) => self.search_next(n, false),
+            Action::ToggleHelp => self.help_scroll = Some(0),
             Action::ToggleFocus => self.toggle_focus(),
             Action::FocusSidebar => self.focus_sidebar(),
             Action::FocusDiff => self.focus = Focus::Diff,
@@ -157,20 +178,44 @@ impl App {
                     self.toggle_fold();
                 }
             }
-            Action::Cancel => self.mode = Mode::Normal,
+            Action::Cancel => {
+                if self.mode == Mode::Normal {
+                    self.clear_search_highlight();
+                }
+                self.mode = Mode::Normal;
+            }
             Action::Quit => self.should_quit = true,
         }
         self.scroll_into_view();
     }
 
-    /// Handles a key typed into the comment box or the `:` line.
+    /// Handles a key typed into the comment box, the `:` line or the `/` line.
     pub fn update_input(&mut self, action: InputAction) {
         self.message = None;
         match self.mode {
             Mode::Command { .. } => self.command_input(action),
             Mode::Comment { .. } => self.comment_input(action),
+            Mode::Search { .. } => self.search_input(action),
             Mode::Normal | Mode::Visual { .. } => {}
         }
+    }
+
+    /// While `?` is open, motions scroll it and anything that closes things
+    /// closes it; everything else waits. How far it can scroll depends on how
+    /// the help wraps, so the UI caps the scroll when it draws.
+    fn update_help(&mut self, action: Action) {
+        let Some(scroll) = self.help_scroll else { return };
+        let half = self.half_page().unsigned_abs();
+        self.help_scroll = match action {
+            Action::Down(n) => Some(scroll.saturating_add(n)),
+            Action::Up(n) => Some(scroll.saturating_sub(n)),
+            Action::HalfPageDown => Some(scroll.saturating_add(half)),
+            Action::HalfPageUp => Some(scroll.saturating_sub(half)),
+            Action::Top => Some(0),
+            Action::Bottom => Some(usize::MAX),
+            Action::ToggleHelp | Action::Cancel | Action::Quit => None,
+            _ => Some(scroll),
+        };
     }
 
     pub fn current_row(&self) -> Option<Row> {
@@ -199,6 +244,23 @@ impl App {
 mod tests {
     use super::test_support::*;
     use super::*;
+
+    #[test]
+    fn help_scrolls_and_closes_without_acting() {
+        let mut app = sample_app();
+        app.update(Action::ToggleHelp);
+        assert_eq!(app.help_scroll, Some(0));
+        app.update(Action::Down(3));
+        app.update(Action::NextFile(1));
+        assert_eq!(app.help_scroll, Some(3));
+        assert_eq!(app.page, 0);
+        app.update(Action::Bottom);
+        assert_eq!(app.help_scroll, Some(usize::MAX));
+        // `q` closes the help rather than quitting.
+        app.update(Action::Quit);
+        assert_eq!(app.help_scroll, None);
+        assert!(!app.should_quit);
+    }
 
     #[test]
     fn empty_diff_is_harmless() {

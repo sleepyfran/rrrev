@@ -3,6 +3,7 @@
 
 use super::{App, Focus, Mode, View};
 use crate::review::Comment;
+use crate::text::wrap_words;
 
 /// One visible row of the current page, pointing back into the model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -236,34 +237,6 @@ impl App {
 /// Columns a group header line gives to its `▌ ` bar, plus one spare.
 const GROUP_HEADER_INDENT: usize = 3;
 
-/// Greedy word wrap to `width` columns; a word longer than a line is split.
-fn wrap_words(text: &str, width: usize) -> Vec<String> {
-    let mut lines: Vec<String> = Vec::new();
-    let mut current = String::new();
-    for word in text.split_whitespace() {
-        let mut word: Vec<char> = word.chars().collect();
-        while !word.is_empty() {
-            let used = current.chars().count();
-            let gap = usize::from(used > 0);
-            if used + gap + word.len() <= width {
-                if gap == 1 {
-                    current.push(' ');
-                }
-                current.extend(word.drain(..));
-            } else if used > 0 {
-                lines.push(std::mem::take(&mut current));
-            } else {
-                current.extend(word.drain(..width));
-                lines.push(std::mem::take(&mut current));
-            }
-        }
-    }
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    lines
-}
-
 /// A row per line of the comment's text.
 fn comment_rows(file: usize, comment: &Comment) -> impl Iterator<Item = Row> + use<> {
     let (id, count) = (comment.id, comment.text.lines().count().max(1));
@@ -321,14 +294,6 @@ mod tests {
         assert_eq!(app.rows, [Row::File { file: 1 }]);
         app.update(Action::OpenAllFolds);
         assert_eq!(app.rows.len(), 6);
-    }
-
-    #[test]
-    fn wraps_words_to_the_width() {
-        assert_eq!(wrap_words("Adds the organizer module", 12), ["Adds the", "organizer", "module"]);
-        assert_eq!(wrap_words("tiny", 80), ["tiny"]);
-        assert_eq!(wrap_words("  ", 10), Vec::<String>::new());
-        assert_eq!(wrap_words("abcdefghij xy", 4), ["abcd", "efgh", "ij", "xy"]);
     }
 
     #[test]

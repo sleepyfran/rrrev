@@ -8,6 +8,15 @@ use super::{App, Effect, Row, View};
 use crate::diff::{Diff, HunkId};
 use crate::organizer::{OrganizeRequest, Plan};
 
+/// An organizer run in progress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Job {
+    /// Matches the run's result to it, so a cancelled run's late answer is
+    /// told apart from the current one's.
+    pub id: u64,
+    pub started: Instant,
+}
+
 /// A plan group resolved against the current diff.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanPage {
@@ -57,25 +66,65 @@ pub(super) fn resolve(plan: &Plan, diff: &Diff) -> Vec<PlanPage> {
 
 impl App {
     pub fn is_organizing(&self) -> bool {
-        self.organizing_since.is_some()
+        self.organizing.is_some()
     }
 
-    /// `:organize`: asks the organizer for a plan in the background.
-    pub(super) fn start_organize(&mut self) {
-        if self.is_organizing() {
-            self.message = Some("Already organizing…".to_string());
-        } else if self.diff.files.iter().all(|f| f.hunks.is_empty()) {
-            self.message = Some("Nothing to organize".to_string());
-        } else {
-            let request = OrganizeRequest::from_diff(&self.title, &self.diff);
-            self.effect = Some(Effect::Organize { request });
-            self.organizing_since = Some(Instant::now());
+    /// `:organize [cancel|clear]`.
+    pub(super) fn organize_command(&mut self, args: &[&str]) {
+        match args {
+            [] => self.start_organize(),
+            ["cancel"] => self.cancel_organize(),
+            ["clear"] => self.clear_plan(),
+            _ => self.message = Some("error: usage: :organize [cancel|clear]".to_string()),
         }
     }
 
-    /// Takes the organizer's answer, saves the plan and shows it.
-    pub fn finish_organize(&mut self, result: anyhow::Result<Plan>) {
-        self.organizing_since = None;
+    /// Asks the organizer for a plan in the background.
+    fn start_organize(&mut self) {
+        if self.is_organizing() {
+            self.message = Some("Already organizing… (:organize cancel to stop)".to_string());
+        } else if self.diff.files.iter().all(|f| f.hunks.is_empty()) {
+            self.message = Some("Nothing to organize".to_string());
+        } else {
+            self.next_job += 1;
+            let job = Job { id: self.next_job, started: Instant::now() };
+            let request = OrganizeRequest::from_diff(&self.title, &self.diff);
+            self.effect = Some(Effect::Organize { job: job.id, request });
+            self.organizing = Some(job);
+        }
+    }
+
+    fn cancel_organize(&mut self) {
+        match self.organizing.take() {
+            Some(job) => {
+                self.effect = Some(Effect::CancelOrganize { job: job.id });
+                self.message = Some("Organizing cancelled".to_string());
+            }
+            None => self.message = Some("Not organizing".to_string()),
+        }
+    }
+
+    /// Drops the plan, saved copy included, and goes back to the files.
+    fn clear_plan(&mut self) {
+        if self.plan.is_empty() && self.review.plan().is_none() {
+            self.message = Some("No plan to clear".to_string());
+            return;
+        }
+        if self.view == View::Plan {
+            self.set_view(View::Files);
+        }
+        self.plan.clear();
+        self.review.clear_plan();
+        self.message = Some("Plan cleared".to_string());
+    }
+
+    /// Takes the organizer's answer for `job`, saves the plan and shows it.
+    /// Answers for runs that were cancelled or replaced are ignored.
+    pub fn finish_organize(&mut self, job: u64, result: anyhow::Result<Plan>) {
+        if self.organizing.is_none_or(|current| current.id != job) {
+            return;
+        }
+        self.organizing = None;
         let plan = match result {
             Ok(plan) => plan,
             Err(e) => {
@@ -151,10 +200,10 @@ mod tests {
     fn organized_app() -> App {
         let mut app = sample_app();
         command(&mut app, "organize");
-        assert!(matches!(app.effect.take(), Some(Effect::Organize { .. })));
+        let Some(Effect::Organize { job, .. }) = app.effect.take() else { panic!("no organize effect") };
         assert!(app.is_organizing());
         let plan = sample_plan(&app);
-        app.finish_organize(Ok(plan));
+        app.finish_organize(job, Ok(plan));
         app
     }
 
@@ -277,12 +326,55 @@ mod tests {
     }
 
     #[test]
+    fn cancelling_ignores_the_late_answer() {
+        let mut app = sample_app();
+        command(&mut app, "organize");
+        let Some(Effect::Organize { job: first, .. }) = app.effect.take() else { panic!() };
+        command(&mut app, "organize cancel");
+        assert_eq!(app.effect.take(), Some(Effect::CancelOrganize { job: first }));
+        assert!(!app.is_organizing());
+
+        // A new run starts; the cancelled one's answer arriving now changes nothing.
+        command(&mut app, "organize");
+        let Some(Effect::Organize { job: second, .. }) = app.effect.take() else { panic!() };
+        assert_ne!(first, second);
+        let plan = sample_plan(&app);
+        app.finish_organize(first, Ok(plan.clone()));
+        assert!(app.is_organizing());
+        assert!(app.plan.is_empty());
+        app.finish_organize(second, Ok(plan));
+        assert_eq!(app.plan.len(), 3);
+
+        command(&mut app, "organize cancel");
+        assert_eq!(app.message.as_deref(), Some("Not organizing"));
+        command(&mut app, "organize now");
+        assert!(app.message.as_deref().unwrap().starts_with("error: usage"));
+    }
+
+    #[test]
+    fn clearing_the_plan_goes_back_to_the_files() {
+        let mut app = organized_app();
+        app.update(Action::NextFile(1));
+        app.update(Action::Down(4));
+        let row = app.current_row();
+        command(&mut app, "organize clear");
+        assert_eq!(app.message.as_deref(), Some("Plan cleared"));
+        assert_eq!(app.view, View::Files);
+        assert_eq!(app.current_row(), row);
+        assert!(app.plan.is_empty());
+        assert!(app.review.plan().is_none());
+        command(&mut app, "organize clear");
+        assert_eq!(app.message.as_deref(), Some("No plan to clear"));
+    }
+
+    #[test]
     fn failures_and_double_starts_are_reported() {
         let mut app = sample_app();
         command(&mut app, "organize");
+        let Some(Effect::Organize { job, .. }) = app.effect.take() else { panic!() };
         command(&mut app, "organize");
-        assert_eq!(app.message.as_deref(), Some("Already organizing…"));
-        app.finish_organize(Err(anyhow::anyhow!("no network")));
+        assert_eq!(app.message.as_deref(), Some("Already organizing… (:organize cancel to stop)"));
+        app.finish_organize(job, Err(anyhow::anyhow!("no network")));
         assert_eq!(app.message.as_deref(), Some("error: organizing failed: no network"));
         assert_eq!(app.view, View::Files);
         assert!(!app.is_organizing());

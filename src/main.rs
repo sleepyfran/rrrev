@@ -1,10 +1,12 @@
 mod app;
 mod diff;
 mod export;
+mod help;
 mod input;
 mod keymap;
 mod organizer;
 mod review;
+mod text;
 mod ui;
 
 use std::fs;
@@ -33,7 +35,7 @@ use diff::git::{DiffSpec, GitSource};
 use export::{CommentSink, FileSink, Format};
 use keymap::KeyHandler;
 use organizer::claude::ClaudeCli;
-use organizer::{Organizer, Plan};
+use organizer::{Cancel, Organizer, Plan};
 use review::ReviewState;
 
 /// Keyboard-driven code review in the terminal.
@@ -81,14 +83,28 @@ fn main() -> Result<()> {
 /// pick up background results.
 const TICK: Duration = Duration::from_millis(100);
 
+/// What a background organizer run sends back: its job id and its answer.
+type PlanResult = (u64, Result<Plan>);
+
+/// An organizer run on its background thread.
+struct Running {
+    job: u64,
+    cancel: Cancel,
+    thread: thread::JoinHandle<()>,
+}
+
 fn run(terminal: &mut DefaultTerminal, app: &mut App, state_file: &Path, organizer: Arc<dyn Organizer>) -> Result<()> {
     let mut keys = KeyHandler::default();
-    let (plans_tx, plans): (Sender<Result<Plan>>, Receiver<Result<Plan>>) = mpsc::channel();
+    let (plans_tx, plans): (Sender<PlanResult>, Receiver<PlanResult>) = mpsc::channel();
+    let mut running: Option<Running> = None;
     while !app.should_quit {
         terminal.draw(|frame| ui::render(frame, app, &keys.pending()))?;
 
-        if let Ok(result) = plans.try_recv() {
-            app.finish_organize(result);
+        while let Ok((job, result)) = plans.try_recv() {
+            if running.as_ref().is_some_and(|r| r.job == job) {
+                running = None;
+            }
+            app.finish_organize(job, result);
         }
         if event::poll(TICK)?
             && let Event::Key(key) = event::read()?
@@ -119,10 +135,20 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App, state_file: &Path, organiz
                     Err(e) => format!("error: {e:#}"),
                 });
             }
-            Some(Effect::Organize { request }) => {
-                let (organizer, done) = (Arc::clone(&organizer), plans_tx.clone());
-                // Quitting mid-run drops the receiver; the send then fails harmlessly.
-                thread::spawn(move || done.send(organizer.organize(&request)));
+            Some(Effect::Organize { job, request }) => {
+                let (organizer, done, cancel) = (Arc::clone(&organizer), plans_tx.clone(), Cancel::default());
+                let token = cancel.clone();
+                let thread = thread::spawn(move || {
+                    let _ = done.send((job, organizer.organize(&request, &token)));
+                });
+                running = Some(Running { job, cancel, thread });
+            }
+            Some(Effect::CancelOrganize { job }) => {
+                // The thread kills the process and exits shortly; the app
+                // ignores whatever it sends back.
+                if let Some(run) = running.take_if(|r| r.job == job) {
+                    run.cancel.cancel();
+                }
             }
             None => {}
         }
@@ -133,6 +159,11 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App, state_file: &Path, organiz
         {
             app.message = Some(format!("error: could not save review state: {e:#}"));
         }
+    }
+    // Don't leave the organizer's process running after we're gone.
+    if let Some(run) = running {
+        run.cancel.cancel();
+        let _ = run.thread.join();
     }
     Ok(())
 }

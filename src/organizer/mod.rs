@@ -4,6 +4,8 @@
 pub mod claude;
 
 use std::collections::HashSet;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -11,9 +13,24 @@ use serde::{Deserialize, Serialize};
 use crate::diff::{Diff, HunkId, LineKind};
 
 /// Something that can plan a review. The `claude` CLI is the only one today.
-/// Runs on a background thread, so it may block.
+/// Runs on a background thread, so it may block, but should give up soon
+/// after `cancel` fires.
 pub trait Organizer: Send + Sync {
-    fn organize(&self, request: &OrganizeRequest) -> Result<Plan>;
+    fn organize(&self, request: &OrganizeRequest, cancel: &Cancel) -> Result<Plan>;
+}
+
+/// Asks a running organizer to stop. Clones share the same flag.
+#[derive(Debug, Clone, Default)]
+pub struct Cancel(Arc<AtomicBool>);
+
+impl Cancel {
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

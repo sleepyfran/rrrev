@@ -111,7 +111,7 @@ impl App {
     /// Every `(page, row)` a cross-page jump can land on, in page order:
     /// rows matching `row_stop`, and headers of folded files where
     /// `folded_stop` says something is hidden.
-    fn stops(&self, row_stop: impl Fn(&Row) -> bool, folded_stop: impl Fn(usize) -> bool) -> Vec<(usize, usize)> {
+    pub(super) fn stops(&self, row_stop: impl Fn(&Row) -> bool, folded_stop: impl Fn(usize) -> bool) -> Vec<(usize, usize)> {
         let mut stops = Vec::new();
         for page in 0..self.page_count() {
             for (idx, row) in self.page_rows(page).into_iter().enumerate() {
@@ -126,7 +126,7 @@ impl App {
 
     /// Jumps `n` stops forward or back, switching pages if needed. Returns
     /// false when there's no stop in that direction.
-    fn jump_to_stop(&mut self, stops: &[(usize, usize)], n: usize, forward: bool) -> bool {
+    pub(super) fn jump_to_stop(&mut self, stops: &[(usize, usize)], n: usize, forward: bool) -> bool {
         let here = (self.page, self.cursor);
         let target = if forward {
             stops.iter().filter(|&&s| s > here).take(n).last()

@@ -1,10 +1,12 @@
-use std::io::Write;
+use std::io::{Read, Write};
 use std::process::{Command, Stdio};
+use std::thread;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
-use super::{OrganizeRequest, Organizer, Plan};
+use super::{Cancel, OrganizeRequest, Organizer, Plan};
 
 const SYSTEM_PROMPT: &str = "\
 You plan code reviews. You get a diff split into hunks, each introduced by a \
@@ -40,7 +42,7 @@ impl ClaudeCli {
 }
 
 impl Organizer for ClaudeCli {
-    fn organize(&self, request: &OrganizeRequest) -> Result<Plan> {
+    fn organize(&self, request: &OrganizeRequest, cancel: &Cancel) -> Result<Plan> {
         let mut command = Command::new(&self.program);
         command.args([
             "-p",
@@ -64,27 +66,53 @@ impl Organizer for ClaudeCli {
             .spawn()
             .with_context(|| format!("cannot run `{}`", self.program))?;
 
-        // Write from another thread so a large prompt can't deadlock against
-        // the child filling its output pipe.
+        // Each pipe gets its own thread so neither side can block the other
+        // on a full buffer, and this one is free to watch for `cancel`.
         let mut stdin = child.stdin.take().expect("stdin is piped");
         let prompt = request.to_prompt();
-        let writer = std::thread::spawn(move || stdin.write_all(prompt.as_bytes()));
-        let output = child.wait_with_output()?;
-        writer.join().expect("stdin writer panicked")?;
+        let writer = thread::spawn(move || stdin.write_all(prompt.as_bytes()));
+        let stdout = read_in_background(child.stdout.take().expect("stdout is piped"));
+        let stderr = read_in_background(child.stderr.take().expect("stderr is piped"));
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
+        let status = loop {
+            if let Some(status) = child.try_wait()? {
+                break status;
+            }
+            if cancel.is_cancelled() {
+                let _ = child.kill();
+                let _ = child.wait();
+                bail!("cancelled");
+            }
+            thread::sleep(POLL);
+        };
+        let stdout = stdout.join().expect("stdout reader panicked")?;
+        let stderr = stderr.join().expect("stderr reader panicked")?;
+        let written = writer.join().expect("stdin writer panicked");
+
         let parsed = parse_response(&stdout);
-        if output.status.success() {
+        if status.success() {
+            written?;
             return parsed;
         }
         // Failures usually still print a JSON result saying why; otherwise
         // the reason is on stderr.
         let reason = match parsed {
             Err(e) if !stdout.trim().is_empty() => format!("{e:#}"),
-            _ => String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            _ => stderr.trim().to_string(),
         };
-        bail!("`{}` failed ({}): {reason}", self.program, output.status)
+        bail!("`{}` failed ({status}): {reason}", self.program)
     }
+}
+
+/// How often a running organizer checks whether it was cancelled.
+const POLL: Duration = Duration::from_millis(50);
+
+fn read_in_background(mut pipe: impl Read + Send + 'static) -> thread::JoinHandle<std::io::Result<String>> {
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        pipe.read_to_end(&mut bytes)?;
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    })
 }
 
 /// Reads the `--output-format json` envelope.
@@ -158,9 +186,34 @@ mod tests {
 
         let cli = ClaudeCli { program: script.display().to_string(), model: Some("sonnet".into()) };
         let request = OrganizeRequest::from_diff("test", &Diff::default());
-        assert_eq!(cli.organize(&request).unwrap().groups[0].title, "Core");
+        assert_eq!(cli.organize(&request, &Cancel::default()).unwrap().groups[0].title, "Core");
 
         let missing = ClaudeCli { program: dir.path().join("nope").display().to_string(), model: None };
-        assert!(missing.organize(&request).unwrap_err().to_string().starts_with("cannot run"));
+        let error = missing.organize(&request, &Cancel::default()).unwrap_err();
+        assert!(error.to_string().starts_with("cannot run"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancelling_kills_the_cli() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::Instant;
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("slow-claude");
+        std::fs::write(&script, "#!/bin/sh\nexec sleep 30\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let cli = ClaudeCli { program: script.display().to_string(), model: None };
+        let cancel = Cancel::default();
+        let canceller = cancel.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(200));
+            canceller.cancel();
+        });
+        let started = Instant::now();
+        let request = OrganizeRequest::from_diff("test", &Diff::default());
+        let error = cli.organize(&request, &cancel).unwrap_err();
+        assert_eq!(error.to_string(), "cancelled");
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 }
