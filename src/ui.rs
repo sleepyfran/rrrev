@@ -168,7 +168,7 @@ fn row_line(app: &App, row: Row) -> Line<'static> {
                 spans.push(Span::raw(" (binary)").dim());
             } else if collapsed {
                 let reason = if f.looks_generated() { "generated, " } else { "" };
-                spans.push(Span::raw(format!(" ({reason}{} lines folded)", f.line_count())).dim());
+                spans.push(Span::raw(format!(" ({reason}{} lines folded · za to unfold)", f.line_count())).dim());
             }
             Line::from(spans)
         }
@@ -229,24 +229,35 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
             parts.push(format!("hunk {}/{}", hunk + 1, file.hunks.len()));
         }
     }
-    let left = parts.join("  ");
-    // A message takes the hints' place; hints are also the first thing to go
-    // in a narrow pane, while pending keys always stay.
-    let (hints, hint_style) = match &app.message {
-        Some(msg) if msg.starts_with("error:") => (format!(" {msg} "), Style::new().fg(Color::Red).bold()),
-        Some(msg) => (format!(" {msg} "), Style::new().bold()),
-        None => (" r review  ]u unreviewed  ]c hunk  za fold  Tab files  q quit ".to_string(), Style::new().dim()),
-    };
+    let mut left = parts.join("  ");
     let pending = format!("{pending:>6}");
-    let fits = left.chars().count() + pending.len() + hints.chars().count() <= area.width as usize;
-    let hints = if fits { hints } else { " ".to_string() };
-    let used = left.chars().count() + pending.chars().count() + hints.chars().count();
-    let pad = (area.width as usize).saturating_sub(used);
+    let width = area.width as usize;
+    let fits = |left: &str, right: &str| {
+        left.chars().count() + pending.len() + right.chars().count() <= width
+    };
+    // Space goes to pending keys first, then a message, then the location
+    // (also visible in the sidebar), and hints last.
+    let (right, right_style) = match &app.message {
+        Some(msg) => {
+            let right = format!(" {msg} ");
+            if !fits(&left, &right) {
+                left = mode.to_string();
+            }
+            let style = if msg.starts_with("error:") { Style::new().fg(Color::Red) } else { Style::new() };
+            (right, style.bold())
+        }
+        None => {
+            let hints = " r review  ]u unreviewed  ]c hunk  ]f file  za fold  Tab files  q quit ";
+            let hints = if fits(&left, hints) { hints } else { " " };
+            (hints.to_string(), Style::new().dim())
+        }
+    };
+    let used = left.chars().count() + pending.len() + right.chars().count();
     let line = Line::from(vec![
         Span::raw(left).bold(),
-        Span::raw(" ".repeat(pad)),
+        Span::raw(" ".repeat(width.saturating_sub(used))),
         Span::raw(pending).dim(),
-        Span::styled(hints, hint_style),
+        Span::styled(right, right_style),
     ]);
     frame.render_widget(Paragraph::new(line).reversed(), area);
 }

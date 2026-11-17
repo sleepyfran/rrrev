@@ -1,7 +1,7 @@
 use crate::diff::{Diff, DiffLine, Hunk};
 use crate::review::ReviewState;
 
-/// One visible row of the flattened diff, pointing back into the model.
+/// One visible row of the current file, pointing back into the model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Row {
     File { file: usize },
@@ -21,10 +21,6 @@ impl Row {
             Row::File { .. } => None,
             Row::Hunk { hunk, .. } | Row::Line { hunk, .. } => Some(hunk),
         }
-    }
-
-    fn is_file(&self) -> bool {
-        matches!(self, Row::File { .. })
     }
 
     fn is_hunk(&self) -> bool {
@@ -87,6 +83,9 @@ pub struct App {
     pub title: String,
     pub diff: Diff,
     pub review: ReviewState,
+    /// The file shown in the diff pane; only one is shown at a time.
+    pub file: usize,
+    /// Rows of the current file.
     pub rows: Vec<Row>,
     /// Per file: whether its hunks are folded away.
     pub collapsed: Vec<bool>,
@@ -116,6 +115,7 @@ impl App {
             title,
             diff,
             review,
+            file: 0,
             rows: Vec::new(),
             collapsed: Vec::new(),
             cursor: 0,
@@ -131,7 +131,7 @@ impl App {
         app.collapsed = (0..app.diff.files.len())
             .map(|f| app.diff.files[f].looks_generated() || app.file_progress(f).is_complete())
             .collect();
-        app.rows = flatten(&app.diff, &app.collapsed);
+        app.open_file(0, 0);
         app
     }
 
@@ -142,6 +142,7 @@ impl App {
             Focus::Sidebar => sidebar_action(action),
         };
         let half_page = (self.viewport_height / 2).max(1) as isize;
+        let last_file = self.diff.files.len().saturating_sub(1);
         match action {
             Action::Down(n) => self.move_by(n as isize),
             Action::Up(n) => self.move_by(-(n as isize)),
@@ -149,16 +150,31 @@ impl App {
             Action::HalfPageUp => self.move_by(-half_page),
             Action::Top => self.cursor = 0,
             Action::Bottom => self.cursor = self.rows.len().saturating_sub(1),
-            Action::NextHunk(n) => self.jump_to(self.find_forward(n, Row::is_hunk)),
-            Action::PrevHunk(n) => self.jump_to(self.find_back(n, Row::is_hunk)),
-            Action::NextFile(n) => self.jump_to(self.find_forward(n, Row::is_file)),
-            Action::PrevFile(n) => self.jump_to(self.find_back(n, Row::is_file)),
+            Action::NextHunk(n) => {
+                let rows = self.rows.iter().enumerate().skip(self.cursor + 1);
+                let target = rows.filter(|(_, row)| row.is_hunk()).take(n).last();
+                self.jump_in_file(target.map(|(idx, _)| idx), "Last hunk in this file");
+            }
+            Action::PrevHunk(n) => {
+                let rows = self.rows[..self.cursor].iter().enumerate().rev();
+                let target = rows.filter(|(_, row)| row.is_hunk()).take(n).last();
+                self.jump_in_file(target.map(|(idx, _)| idx), "First hunk in this file");
+            }
+            Action::NextFile(_) if self.file >= last_file => {
+                self.message = Some("Last file".to_string())
+            }
+            Action::PrevFile(_) if self.file == 0 => self.message = Some("First file".to_string()),
+            Action::NextFile(n) => self.open_file(self.file.saturating_add(n).min(last_file), 0),
+            Action::PrevFile(n) => self.open_file(self.file.saturating_sub(n), 0),
             Action::NextUnreviewed(n) => {
-                let target = self.find_forward(n, |row| self.is_unreviewed_stop(row));
+                let here = (self.file, self.cursor);
+                let target = self.unreviewed_stops().into_iter().filter(|&s| s > here).take(n).last();
                 self.jump_to_unreviewed(target);
             }
             Action::PrevUnreviewed(n) => {
-                let target = self.find_back(n, |row| self.is_unreviewed_stop(row));
+                let here = (self.file, self.cursor);
+                let stops = self.unreviewed_stops().into_iter().rev();
+                let target = stops.filter(|&s| s < here).take(n).last();
                 self.jump_to_unreviewed(target);
             }
             Action::ScrollCursorTop => self.scroll = self.cursor,
@@ -235,8 +251,9 @@ impl App {
         self.rows.get(self.cursor).copied()
     }
 
+    /// `None` only when the diff has no files.
     pub fn current_file(&self) -> Option<usize> {
-        self.current_row().map(Row::file)
+        (self.file < self.diff.files.len()).then_some(self.file)
     }
 
     pub fn hunk(&self, file: usize, hunk: usize) -> &Hunk {
@@ -266,14 +283,38 @@ impl App {
         )
     }
 
-    /// Where `]u`/`[u` stop: unreviewed hunks, and folded files that still
-    /// hide some, since their hunks aren't rows to land on.
-    fn is_unreviewed_stop(&self, row: &Row) -> bool {
-        match *row {
-            Row::Hunk { file, hunk } => !self.is_reviewed(file, hunk),
-            Row::File { file } => self.collapsed[file] && !self.file_progress(file).is_complete(),
-            Row::Line { .. } => false,
+    /// Every place `]u`/`[u` can stop, as `(file, row)` in diff order:
+    /// unreviewed hunks, and the headers of folded files that still hide some.
+    fn unreviewed_stops(&self) -> Vec<(usize, usize)> {
+        let mut stops = Vec::new();
+        for file in 0..self.diff.files.len() {
+            if self.collapsed[file] {
+                if !self.file_progress(file).is_complete() {
+                    stops.push((file, 0));
+                }
+                continue;
+            }
+            for (row, r) in flatten_file(&self.diff, file, false).into_iter().enumerate() {
+                if let Row::Hunk { file, hunk } = r
+                    && !self.is_reviewed(file, hunk)
+                {
+                    stops.push((file, row));
+                }
+            }
         }
+        stops
+    }
+
+    fn open_file(&mut self, file: usize, cursor: usize) {
+        if file >= self.diff.files.len() {
+            return;
+        }
+        if file != self.file || self.rows.is_empty() {
+            self.file = file;
+            self.rows = flatten_file(&self.diff, file, self.collapsed[file]);
+            self.scroll = 0;
+        }
+        self.cursor = cursor.min(self.rows.len() - 1);
     }
 
     fn move_by(&mut self, delta: isize) {
@@ -281,45 +322,38 @@ impl App {
         self.cursor = self.cursor.saturating_add_signed(delta).min(last);
     }
 
-    /// The `n`th matching row after the cursor, or the last one if there are fewer.
-    fn find_forward(&self, n: usize, is_target: impl Fn(&Row) -> bool) -> Option<usize> {
-        let rows = self.rows.iter().enumerate().skip(self.cursor + 1);
-        rows.filter(|(_, row)| is_target(row)).take(n).last().map(|(idx, _)| idx)
-    }
-
-    fn find_back(&self, n: usize, is_target: impl Fn(&Row) -> bool) -> Option<usize> {
-        let rows = self.rows[..self.cursor].iter().enumerate().rev();
-        rows.filter(|(_, row)| is_target(row)).take(n).last().map(|(idx, _)| idx)
-    }
-
-    /// Moves to `target` and puts it at the top of the viewport.
-    fn jump_to(&mut self, target: Option<usize>) {
-        if let Some(idx) = target {
-            self.cursor = idx;
-            self.scroll = idx;
+    /// Moves to `target` within the current file and puts it at the top of
+    /// the viewport, or explains why there's nowhere to go.
+    fn jump_in_file(&mut self, target: Option<usize>, at_edge: &str) {
+        match target {
+            Some(idx) => {
+                self.cursor = idx;
+                self.scroll = idx;
+            }
+            None => self.message = Some(format!("{at_edge} (]f / [f for other files)")),
         }
     }
 
-    fn jump_to_unreviewed(&mut self, target: Option<usize>) {
-        if target.is_none() {
-            self.message = Some(if self.progress().is_complete() {
-                "Everything reviewed ✓".to_string()
-            } else {
-                "No more unreviewed hunks in this direction".to_string()
-            });
+    fn jump_to_unreviewed(&mut self, target: Option<(usize, usize)>) {
+        match target {
+            Some((file, row)) => {
+                self.open_file(file, row);
+                self.scroll = row;
+            }
+            None if self.progress().is_complete() => {
+                self.message = Some("Everything reviewed ✓".to_string())
+            }
+            None => self.message = Some("No more unreviewed hunks in this direction".to_string()),
         }
-        self.jump_to(target);
     }
 
-    /// Re-flattens after a fold change, keeping the cursor on the same row, or
-    /// on its file's header if that row was folded away.
+    /// Re-flattens the current file after a fold change, keeping the cursor on
+    /// the same row, or on the file header if that row was folded away.
     fn rebuild_rows(&mut self) {
+        let Some(file) = self.current_file() else { return };
         let current = self.current_row();
-        self.rows = flatten(&self.diff, &self.collapsed);
-        let position = |row: Row| self.rows.iter().position(|r| *r == row);
-        self.cursor = current
-            .and_then(|row| position(row).or_else(|| position(Row::File { file: row.file() })))
-            .unwrap_or(0);
+        self.rows = flatten_file(&self.diff, file, self.collapsed[file]);
+        self.cursor = current.and_then(|row| self.rows.iter().position(|r| *r == row)).unwrap_or(0);
     }
 
     fn scroll_into_view(&mut self) {
@@ -339,23 +373,21 @@ fn sidebar_action(action: Action) -> Action {
     match action {
         Action::Down(n) => Action::NextFile(n),
         Action::Up(n) => Action::PrevFile(n),
+        Action::Top => Action::PrevFile(usize::MAX),
         Action::Bottom => Action::NextFile(usize::MAX),
         Action::Select => Action::FocusDiff,
         other => other,
     }
 }
 
-fn flatten(diff: &Diff, collapsed: &[bool]) -> Vec<Row> {
-    let mut rows = Vec::new();
-    for (file, f) in diff.files.iter().enumerate() {
-        rows.push(Row::File { file });
-        if collapsed[file] {
-            continue;
-        }
-        for (hunk, h) in f.hunks.iter().enumerate() {
-            rows.push(Row::Hunk { file, hunk });
-            rows.extend((0..h.lines.len()).map(|line| Row::Line { file, hunk, line }));
-        }
+fn flatten_file(diff: &Diff, file: usize, collapsed: bool) -> Vec<Row> {
+    let mut rows = vec![Row::File { file }];
+    if collapsed {
+        return rows;
+    }
+    for (hunk, h) in diff.files[file].hunks.iter().enumerate() {
+        rows.push(Row::Hunk { file, hunk });
+        rows.extend((0..h.lines.len()).map(|line| Row::Line { file, hunk, line }));
     }
     rows
 }
@@ -397,29 +429,35 @@ mod tests {
         App::new(String::new(), Diff::new(files), ReviewState::default())
     }
 
-    /// Rows: 0 file a, 1 hunk, 2-4 lines, 5 hunk, 6-7 lines,
-    ///       8 file b, 9 hunk, 10-13 lines.
+    /// a.rs rows: 0 header, 1 hunk, 2-4 lines, 5 hunk, 6-7 lines.
+    /// b.rs rows: 0 header, 1 hunk, 2-5 lines.
     fn sample_app() -> App {
         app_with(vec![file("a.rs", &[3, 2]), file("b.rs", &[4])])
     }
 
-    #[test]
-    fn flattens_files_hunks_and_lines() {
-        let app = sample_app();
-        assert_eq!(app.rows.len(), 14);
-        assert_eq!(app.rows[2], Row::Line { file: 0, hunk: 0, line: 0 });
-        assert_eq!(app.rows[8], Row::File { file: 1 });
+    fn position(app: &App) -> (usize, usize) {
+        (app.file, app.cursor)
     }
 
     #[test]
-    fn cursor_clamps_to_bounds() {
+    fn shows_only_the_current_file() {
+        let app = sample_app();
+        assert_eq!(app.rows.len(), 8);
+        assert!(app.rows.iter().all(|r| r.file() == 0));
+        assert_eq!(app.rows[2], Row::Line { file: 0, hunk: 0, line: 0 });
+    }
+
+    #[test]
+    fn line_motions_stay_in_the_file() {
         let mut app = sample_app();
         app.update(Action::Up(5));
-        assert_eq!(app.cursor, 0);
+        assert_eq!(position(&app), (0, 0));
         app.update(Action::Down(100));
-        assert_eq!(app.cursor, 13);
+        assert_eq!(position(&app), (0, 7));
+        app.update(Action::Bottom);
+        assert_eq!(position(&app), (0, 7));
         app.update(Action::Top);
-        assert_eq!(app.cursor, 0);
+        assert_eq!(position(&app), (0, 0));
     }
 
     #[test]
@@ -435,32 +473,41 @@ mod tests {
     }
 
     #[test]
-    fn hunk_jumps_cross_files_and_stop_at_the_ends() {
+    fn hunk_jumps_stay_in_the_file() {
         let mut app = sample_app();
         app.set_viewport_height(4);
         app.update(Action::NextHunk(1));
         assert_eq!((app.cursor, app.scroll), (1, 1));
-        app.update(Action::NextHunk(2));
-        assert_eq!(app.cursor, 9);
+        app.update(Action::NextHunk(5));
+        assert_eq!(position(&app), (0, 5));
         app.update(Action::NextHunk(1));
-        assert_eq!(app.cursor, 9);
+        assert_eq!(position(&app), (0, 5));
+        assert!(app.message.as_deref().unwrap().starts_with("Last hunk"));
 
         // From inside a hunk, going back lands on that hunk's header first.
-        app.update(Action::Down(2));
+        app.update(Action::Down(1));
         app.update(Action::PrevHunk(1));
-        assert_eq!(app.cursor, 9);
+        assert_eq!(position(&app), (0, 5));
         app.update(Action::PrevHunk(10));
-        assert_eq!(app.cursor, 1);
+        assert_eq!(position(&app), (0, 1));
     }
 
     #[test]
-    fn file_jumps() {
+    fn file_jumps_switch_the_view() {
         let mut app = sample_app();
-        app.update(Action::NextFile(1));
-        assert_eq!(app.cursor, 8);
         app.update(Action::Down(3));
+        app.update(Action::NextFile(1));
+        assert_eq!(position(&app), (1, 0));
+        assert_eq!(app.rows.len(), 6);
+        app.update(Action::Down(3));
+        // At the last file there's nowhere to go: stay put, don't jump to the top.
+        app.update(Action::NextFile(10));
+        assert_eq!(position(&app), (1, 3));
+        assert_eq!(app.message.as_deref(), Some("Last file"));
         app.update(Action::PrevFile(1));
-        assert_eq!(app.cursor, 8);
+        assert_eq!(position(&app), (0, 0));
+        app.update(Action::PrevFile(1));
+        assert_eq!(app.message.as_deref(), Some("First file"));
     }
 
     #[test]
@@ -469,11 +516,11 @@ mod tests {
         app.update(Action::ToggleFocus);
         assert_eq!(app.focus, Focus::Sidebar);
         app.update(Action::Down(1));
-        assert_eq!(app.cursor, 8);
+        assert_eq!(app.file, 1);
         app.update(Action::Top);
-        assert_eq!(app.cursor, 0);
+        assert_eq!(app.file, 0);
         app.update(Action::Bottom);
-        assert_eq!(app.cursor, 8);
+        assert_eq!(app.file, 1);
         app.update(Action::Select);
         assert_eq!(app.focus, Focus::Diff);
     }
@@ -493,31 +540,23 @@ mod tests {
         let mut app = sample_app();
         app.update(Action::Down(3));
         app.update(Action::CloseFold);
-        assert_eq!(app.rows.len(), 1 + 6);
+        assert_eq!(app.rows, [Row::File { file: 0 }]);
         assert_eq!(app.cursor, 0);
-        app.update(Action::NextFile(1));
-        assert_eq!(app.cursor, 1);
+        app.update(Action::OpenFold);
+        assert_eq!(app.rows.len(), 8);
 
         app.update(Action::CloseAllFolds);
-        assert_eq!(app.rows, [Row::File { file: 0 }, Row::File { file: 1 }]);
-        assert_eq!(app.cursor, 1);
+        app.update(Action::NextFile(1));
+        assert_eq!(app.rows, [Row::File { file: 1 }]);
         app.update(Action::OpenAllFolds);
-        assert_eq!(app.cursor, 8);
-    }
-
-    #[test]
-    fn hunk_jumps_skip_folded_files() {
-        let mut app = sample_app();
-        app.update(Action::CloseFold);
-        app.update(Action::NextHunk(1));
-        assert_eq!(app.current_row(), Some(Row::Hunk { file: 1, hunk: 0 }));
+        assert_eq!(app.rows.len(), 6);
     }
 
     #[test]
     fn generated_files_start_folded() {
         let app = app_with(vec![file("Cargo.lock", &[3]), file("src/main.rs", &[1])]);
         assert_eq!(app.collapsed, [true, false]);
-        assert_eq!(app.rows.len(), 1 + 3);
+        assert_eq!(app.rows, [Row::File { file: 0 }]);
     }
 
     #[test]
@@ -552,18 +591,19 @@ mod tests {
     }
 
     #[test]
-    fn unreviewed_jumps_skip_reviewed_hunks() {
+    fn unreviewed_jumps_cross_files() {
         let mut app = sample_app();
         app.update(Action::NextUnreviewed(1));
-        assert_eq!(app.cursor, 1);
+        assert_eq!(position(&app), (0, 1));
         app.update(Action::ToggleReviewed);
         app.update(Action::Top);
         app.update(Action::NextUnreviewed(1));
-        assert_eq!(app.cursor, 5);
+        assert_eq!(position(&app), (0, 5));
         app.update(Action::NextUnreviewed(1));
-        assert_eq!(app.cursor, 9);
+        assert_eq!(position(&app), (1, 1));
+        assert!(app.rows.iter().all(|r| r.file() == 1));
         app.update(Action::PrevUnreviewed(5));
-        assert_eq!(app.cursor, 5);
+        assert_eq!(position(&app), (0, 5));
     }
 
     #[test]
@@ -572,6 +612,7 @@ mod tests {
         app.update(Action::NextUnreviewed(1));
         app.update(Action::ToggleReviewed);
         app.update(Action::NextUnreviewed(1));
+        assert_eq!(position(&app), (1, 0));
         assert_eq!(app.current_row(), Some(Row::File { file: 1 }));
 
         app.update(Action::ToggleFileReviewed);
@@ -586,5 +627,15 @@ mod tests {
         app.update(Action::ToggleFileReviewed);
         let app = App::new(String::new(), Diff::new(files()), app.review);
         assert_eq!(app.collapsed, [true, false]);
+    }
+
+    #[test]
+    fn empty_diff_is_harmless() {
+        let mut app = app_with(Vec::new());
+        assert!(app.rows.is_empty());
+        for action in [Action::Down(1), Action::NextFile(1), Action::NextUnreviewed(1), Action::ToggleFileReviewed] {
+            app.update(action);
+        }
+        assert_eq!(app.current_file(), None);
     }
 }
