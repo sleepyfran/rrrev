@@ -6,6 +6,7 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Clear, Paragraph},
 };
 
+use crate::anim::{Animator, Popup};
 use crate::app::{App, CommentTarget, Focus, Mode, Progress, Row, View, find_matches};
 use crate::diff::{FileStatus, LineKind};
 use crate::help;
@@ -17,7 +18,8 @@ use crate::text::wrap_words;
 const COMPACT_BELOW: u16 = 100;
 
 /// `pending` holds the keys of an unfinished command, e.g. `3]`.
-pub fn render(frame: &mut Frame, app: &mut App, highlighter: &mut Highlighter, pending: &str) {
+pub fn render(frame: &mut Frame, app: &mut App, highlighter: &mut Highlighter, anim: &mut Animator, pending: &str) {
+    anim.begin(app);
     let [title, main, status] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(0),
@@ -30,7 +32,8 @@ pub fn render(frame: &mut Frame, app: &mut App, highlighter: &mut Highlighter, p
         let width = (main.width * 3 / 10).clamp(24, 48).min(main.width / 2);
         let [sidebar, body] =
             Layout::horizontal([Constraint::Length(width), Constraint::Min(0)]).areas(main);
-        render_sidebar(frame, sidebar, app, false);
+        let (_, entries) = render_sidebar(frame, sidebar, app, false);
+        anim.glint_sidebar(frame.buffer_mut(), app, &entries);
         body
     } else {
         main
@@ -42,21 +45,35 @@ pub fn render(frame: &mut Frame, app: &mut App, highlighter: &mut Highlighter, p
     let rows_area = Rect { height: body.height - comment_box.map_or(0, |b| b.height), ..body };
     app.set_viewport(rows_area.width as usize, rows_area.height as usize);
     render_title(frame, title, app);
-    render_body(frame, rows_area, app, highlighter);
-    if let Some(area) = comment_box {
-        render_comment_box(frame, area, app);
+    anim.glint_title(frame.buffer_mut(), title);
+    let scroll = anim.scroll(app);
+    let rows = render_body(frame, rows_area, app, highlighter, scroll);
+    anim.glint_rows(frame.buffer_mut(), &rows);
+    anim.slide(frame.buffer_mut(), rows_area);
+    let cursor = comment_box.map(|area| render_comment_box(frame, area, app));
+    if let Some(unroll) = anim.popup(frame.buffer_mut(), Popup::Comment, comment_box, None)
+        && let Some((x, y)) = cursor
+    {
+        // Keep the cursor on its row while the box rises, or on the box's top.
+        let y = unroll.row(y).or(unroll.row(comment_box.map_or(y, |b| b.y))).unwrap_or(y);
+        frame.set_cursor_position((x, y));
     }
     render_status(frame, status, app, pending);
+
     let sidebar_popup = app.compact && app.focus == Focus::Sidebar;
     if sidebar_popup || app.help_scroll.is_some() {
         dim_backdrop(frame);
     }
-    if sidebar_popup {
-        render_sidebar(frame, main, app, true);
-    }
-    if app.help_scroll.is_some() {
-        render_help(frame, frame.area(), app);
-    }
+    // What the pop-ups cover, to show around them as they unroll.
+    let under = frame.buffer_mut().clone();
+    let sidebar = sidebar_popup.then(|| {
+        let (rect, entries) = render_sidebar(frame, main, app, true);
+        anim.glint_sidebar(frame.buffer_mut(), app, &entries);
+        rect
+    });
+    anim.popup(frame.buffer_mut(), Popup::Sidebar, sidebar, Some(&under));
+    let help = app.help_scroll.is_some().then(|| render_help(frame, frame.area(), app));
+    anim.popup(frame.buffer_mut(), Popup::Help, help, Some(&under));
 }
 
 /// Greys out everything drawn so far, so a pop-up drawn on top stands out.
@@ -70,7 +87,8 @@ fn dim_backdrop(frame: &mut Frame) {
 }
 
 /// The `?` overlay: every key and command, grouped, centred over the screen.
-fn render_help(frame: &mut Frame, area: Rect, app: &mut App) {
+/// Returns where it was drawn.
+fn render_help(frame: &mut Frame, area: Rect, app: &mut App) -> Rect {
     let width = 100.min(area.width.saturating_sub(4));
     let key_width = help::SECTIONS.iter().flat_map(|s| s.entries).map(|(k, _)| k.chars().count()).max().unwrap_or(0) + 2;
     // Inside the border, after the key column.
@@ -109,6 +127,7 @@ fn render_help(frame: &mut Frame, area: Rect, app: &mut App) {
     frame.render_widget(Clear, rect);
     frame.render_widget(block, rect);
     frame.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), inner);
+    rect
 }
 
 /// `segments` as spans, with matches of the highlighted search picked out.
@@ -204,8 +223,9 @@ fn centered(area: Rect, width: u16, height: u16) -> Rect {
 }
 
 /// The file list or the plan, docked at the left of `area` or as a pop-up
-/// centred over it.
-fn render_sidebar(frame: &mut Frame, area: Rect, app: &App, popup: bool) {
+/// centred over it. Returns where it was drawn, and where each entry shown
+/// (by file or group index) went.
+fn render_sidebar(frame: &mut Frame, area: Rect, app: &App, popup: bool) -> (Rect, Vec<(usize, Rect)>) {
     match app.view {
         View::Files => render_files_sidebar(frame, area, app, popup),
         View::Plan => render_plan_sidebar(frame, area, app, popup),
@@ -213,8 +233,8 @@ fn render_sidebar(frame: &mut Frame, area: Rect, app: &App, popup: bool) {
 }
 
 /// Draws the sidebar's frame, sized for `entries` when it's a pop-up, and
-/// returns the area inside it.
-fn sidebar_frame(frame: &mut Frame, area: Rect, app: &App, title: &str, entries: usize, popup: bool) -> Rect {
+/// returns the frame's area and the area inside it.
+fn sidebar_frame(frame: &mut Frame, area: Rect, app: &App, title: &str, entries: usize, popup: bool) -> (Rect, Rect) {
     let focused = app.focus == Focus::Sidebar;
     let border_style = if focused { Style::new().fg(Color::Cyan) } else { Style::new().dim() };
     let title = Span::styled(format!(" {title} "), if focused { Style::new().bold() } else { Style::new().dim() });
@@ -230,11 +250,11 @@ fn sidebar_frame(frame: &mut Frame, area: Rect, app: &App, title: &str, entries:
     };
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    inner
+    (area, inner)
 }
 
-/// Renders one sidebar entry, highlighted when selected.
-fn sidebar_row(frame: &mut Frame, inner: Rect, offset: usize, line: Line, selected: bool, focused: bool) {
+/// Renders one sidebar entry, highlighted when selected, and returns where.
+fn sidebar_row(frame: &mut Frame, inner: Rect, offset: usize, line: Line, selected: bool, focused: bool) -> Rect {
     let mut paragraph = Paragraph::new(line);
     if selected {
         let bg = if focused { Color::DarkGray } else { Color::Reset };
@@ -242,6 +262,7 @@ fn sidebar_row(frame: &mut Frame, inner: Rect, offset: usize, line: Line, select
     }
     let row_area = Rect { y: inner.y + offset as u16, height: 1, ..inner };
     frame.render_widget(paragraph, row_area);
+    row_area
 }
 
 /// The first entry to show so `selected` is visible, without storing a
@@ -250,11 +271,12 @@ fn sidebar_start(selected: Option<usize>, height: usize) -> usize {
     selected.map_or(0, |s| (s + 1).saturating_sub(height))
 }
 
-fn render_plan_sidebar(frame: &mut Frame, area: Rect, app: &App, popup: bool) {
-    let inner = sidebar_frame(frame, area, app, "Plan", app.plan.len(), popup);
+fn render_plan_sidebar(frame: &mut Frame, area: Rect, app: &App, popup: bool) -> (Rect, Vec<(usize, Rect)>) {
+    let (outer, inner) = sidebar_frame(frame, area, app, "Plan", app.plan.len(), popup);
     let focused = app.focus == Focus::Sidebar;
     let height = inner.height as usize;
     let first = sidebar_start(Some(app.page), height);
+    let mut entries = Vec::new();
     for (offset, (idx, group)) in app.plan.iter().enumerate().skip(first).take(height).enumerate() {
         let progress = app.group_progress(idx);
         let count = format!(" {}/{}", progress.reviewed, progress.total);
@@ -272,8 +294,9 @@ fn render_plan_sidebar(frame: &mut Frame, area: Rect, app: &App, popup: bool) {
             Span::raw(" ".repeat(pad)),
             Span::raw(count).dim(),
         ]);
-        sidebar_row(frame, inner, offset, line, idx == app.page, focused);
+        entries.push((idx, sidebar_row(frame, inner, offset, line, idx == app.page, focused)));
     }
+    (outer, entries)
 }
 
 fn truncate_right(text: &str, width: usize) -> String {
@@ -284,13 +307,14 @@ fn truncate_right(text: &str, width: usize) -> String {
     if width == 0 { head } else { format!("{head}…") }
 }
 
-fn render_files_sidebar(frame: &mut Frame, area: Rect, app: &App, popup: bool) {
-    let inner = sidebar_frame(frame, area, app, "Files", app.diff.files.len(), popup);
+fn render_files_sidebar(frame: &mut Frame, area: Rect, app: &App, popup: bool) -> (Rect, Vec<(usize, Rect)>) {
+    let (outer, inner) = sidebar_frame(frame, area, app, "Files", app.diff.files.len(), popup);
     let focused = app.focus == Focus::Sidebar;
     let height = inner.height as usize;
     let selected = app.current_file();
     let first = sidebar_start(selected, height);
 
+    let mut entries = Vec::new();
     for (offset, (idx, file)) in app.diff.files.iter().enumerate().skip(first).take(height).enumerate() {
         let (added, removed) = file.stats();
         let stats = format!(" +{added} -{removed}");
@@ -315,8 +339,9 @@ fn render_files_sidebar(frame: &mut Frame, area: Rect, app: &App, popup: bool) {
             Span::styled(format!(" +{added}"), Style::new().fg(Color::Green)),
             Span::styled(format!(" -{removed}"), Style::new().fg(Color::Red)),
         ]);
-        sidebar_row(frame, inner, offset, line, Some(idx) == selected, focused);
+        entries.push((idx, sidebar_row(frame, inner, offset, line, Some(idx) == selected, focused)));
     }
+    (outer, entries)
 }
 
 /// Keeps the end of a path, which is the part that tells files apart.
@@ -332,14 +357,16 @@ fn truncate_left(path: &str, width: usize) -> String {
     format!("…{tail}")
 }
 
-fn render_body(frame: &mut Frame, area: Rect, app: &App, highlighter: &mut Highlighter) {
+/// Draws the rows from `scroll` on, and returns where each one went.
+fn render_body(frame: &mut Frame, area: Rect, app: &App, highlighter: &mut Highlighter, scroll: usize) -> Vec<(Row, Rect)> {
+    let mut drawn = Vec::new();
     if app.rows.is_empty() {
         frame.render_widget(Paragraph::new(" No changes to review.").dim(), area);
-        return;
+        return drawn;
     }
     let selection = app.selection();
     let mut y = area.y;
-    for (idx, row) in app.rows.iter().enumerate().skip(app.scroll) {
+    for (idx, row) in app.rows.iter().enumerate().skip(scroll) {
         if y >= area.bottom() {
             break;
         }
@@ -357,7 +384,9 @@ fn render_body(frame: &mut Frame, area: Rect, app: &App, highlighter: &mut Highl
             paragraph = paragraph.style(Style::new().bg(Color::DarkGray));
         }
         frame.render_widget(paragraph, row_area);
+        drawn.push((*row, row_area));
     }
+    drawn
 }
 
 /// Whether a comment on a live hunk covers this line.
@@ -543,8 +572,9 @@ fn comment_box_area(app: &App, body: Rect) -> Option<Rect> {
     Some(Rect { y: body.bottom() - height, height, ..body })
 }
 
-fn render_comment_box(frame: &mut Frame, area: Rect, app: &App) {
-    let Mode::Comment { target, input } = &app.mode else { return };
+/// Returns where the text cursor goes.
+fn render_comment_box(frame: &mut Frame, area: Rect, app: &App) -> (u16, u16) {
+    let Mode::Comment { target, input } = &app.mode else { return (area.x, area.y) };
     let title = match *target {
         CommentTarget::New { file, hunk, start, end } => {
             let h = app.hunk(file, hunk);
@@ -571,7 +601,9 @@ fn render_comment_box(frame: &mut Frame, area: Rect, app: &App) {
     let skip = (y + 1).saturating_sub(inner.height as usize);
     let visible: Vec<Line> = lines.into_iter().skip(skip).map(Line::from).collect();
     frame.render_widget(Paragraph::new(visible), inner);
-    frame.set_cursor_position((inner.x + x as u16, inner.y + (y - skip) as u16));
+    let cursor = (inner.x + x as u16, inner.y + (y - skip) as u16);
+    frame.set_cursor_position(cursor);
+    cursor
 }
 
 /// Breaks input text into rows of at most `width` chars, hard-wrapping long

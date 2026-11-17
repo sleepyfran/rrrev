@@ -1,3 +1,4 @@
+mod anim;
 mod app;
 mod diff;
 mod export;
@@ -30,6 +31,7 @@ use ratatui::{
     },
 };
 
+use anim::Animator;
 use app::{App, Effect};
 use diff::DiffSource;
 use diff::git::{DiffSpec, GitSource};
@@ -106,8 +108,9 @@ fn run(
     let mut keys = KeyHandler::default();
     let (plans_tx, plans): (Sender<PlanResult>, Receiver<PlanResult>) = mpsc::channel();
     let mut running: Option<Running> = None;
+    let mut anim = Animator::from_env();
     while !app.should_quit {
-        terminal.draw(|frame| ui::render(frame, app, &mut highlighter, &keys.pending()))?;
+        terminal.draw(|frame| ui::render(frame, app, &mut highlighter, &mut anim, &keys.pending()))?;
 
         while let Ok((job, result)) = plans.try_recv() {
             if running.as_ref().is_some_and(|r| r.job == job) {
@@ -115,7 +118,7 @@ fn run(
             }
             app.finish_organize(job, result);
         }
-        if event::poll(TICK)?
+        if event::poll(if anim.is_animating() { anim::FRAME } else { TICK })?
             && let Event::Key(key) = event::read()?
             && key.kind == KeyEventKind::Press
         {
