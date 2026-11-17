@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::diff::HunkId;
+use crate::organizer::Plan;
 
 const VERSION: u32 = 1;
 
@@ -20,6 +21,9 @@ pub struct ReviewState {
     comments: Vec<Comment>,
     #[serde(default)]
     next_comment_id: u64,
+    /// The organizer's latest plan, as it returned it.
+    #[serde(default)]
+    plan: Option<Plan>,
     /// Set when there are changes that haven't been saved yet.
     #[serde(skip)]
     dirty: bool,
@@ -108,6 +112,15 @@ impl ReviewState {
         let before = self.comments.len();
         self.comments.retain(|c| c.id != id);
         self.dirty |= self.comments.len() != before;
+    }
+
+    pub fn plan(&self) -> Option<&Plan> {
+        self.plan.as_ref()
+    }
+
+    pub fn set_plan(&mut self, plan: Plan) {
+        self.plan = Some(plan);
+        self.dirty = true;
     }
 
     /// Forces the next save, for an explicit `:w`.
@@ -224,6 +237,7 @@ mod tests {
         fs::write(&path, r#"{ "version": 1, "reviewed": ["abc"] }"#).unwrap();
         let state = ReviewState::load(&path).unwrap();
         assert!(state.comments().is_empty());
+        assert!(state.plan().is_none());
     }
 
     #[test]

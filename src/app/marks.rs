@@ -1,6 +1,6 @@
 //! Marking hunks as reviewed, and how far along the review is.
 
-use super::{App, Row};
+use super::{App, Row, View};
 
 /// Reviewed and total hunk counts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,11 +21,12 @@ impl App {
     }
 
     pub fn file_progress(&self, file: usize) -> Progress {
-        let hunks = &self.diff.files[file].hunks;
-        Progress {
-            reviewed: hunks.iter().filter(|h| self.review.is_reviewed(&h.id)).count(),
-            total: hunks.len(),
-        }
+        let hunks: Vec<_> = (0..self.diff.files[file].hunks.len()).map(|h| (file, h)).collect();
+        self.hunks_progress(&hunks)
+    }
+
+    pub fn group_progress(&self, group: usize) -> Progress {
+        self.hunks_progress(&self.plan[group].hunks)
     }
 
     pub fn progress(&self) -> Progress {
@@ -35,27 +36,49 @@ impl App {
         )
     }
 
-    /// `r`: the hunk under the cursor, or the whole file on its header.
+    /// `r`: the hunk under the cursor. On a header, everything under it on
+    /// this page: the whole group, or the file's hunks.
     pub(super) fn toggle_reviewed(&mut self) {
         match self.current_row() {
             Some(Row::Hunk { file, hunk } | Row::Line { file, hunk, .. }) => {
                 let reviewed = self.is_reviewed(file, hunk);
-                self.review.set_reviewed(&self.diff.files[file].hunks[hunk].id, !reviewed);
+                self.review.set_reviewed(&self.hunk(file, hunk).id.clone(), !reviewed);
             }
-            Some(Row::File { .. }) => self.toggle_file_reviewed(),
+            Some(Row::Group { .. }) => self.toggle_page_reviewed(),
+            Some(Row::File { file }) => {
+                let hunks: Vec<_> = self.page_hunks(self.page).into_iter().filter(|&(f, _)| f == file).collect();
+                self.toggle_hunks_reviewed(&hunks);
+            }
             Some(Row::Comment { .. }) | None => {}
         }
     }
 
-    /// `R`: marks the rest of a partly reviewed file and folds it; only a
-    /// fully reviewed file gets unmarked (and unfolded).
-    pub(super) fn toggle_file_reviewed(&mut self) {
-        let Some(file) = self.current_file() else { return };
-        let reviewed = !self.file_progress(file).is_complete();
-        for hunk in &self.diff.files[file].hunks {
-            self.review.set_reviewed(&hunk.id, reviewed);
+    /// `R`: everything on the current page.
+    pub(super) fn toggle_page_reviewed(&mut self) {
+        if self.page < self.page_count() {
+            let hunks = self.page_hunks(self.page);
+            self.toggle_hunks_reviewed(&hunks);
         }
-        self.collapsed[file] = reviewed;
+    }
+
+    fn hunks_progress(&self, hunks: &[(usize, usize)]) -> Progress {
+        Progress {
+            reviewed: hunks.iter().filter(|&&(f, h)| self.is_reviewed(f, h)).count(),
+            total: hunks.len(),
+        }
+    }
+
+    /// Marks the rest of a partly reviewed set; only a fully reviewed set
+    /// gets unmarked. In the files view the file also folds when done, and
+    /// unfolds when unmarked.
+    fn toggle_hunks_reviewed(&mut self, hunks: &[(usize, usize)]) {
+        let reviewed = !self.hunks_progress(hunks).is_complete();
+        for &(file, hunk) in hunks {
+            self.review.set_reviewed(&self.hunk(file, hunk).id.clone(), reviewed);
+        }
+        if self.view == View::Files {
+            self.collapsed[self.page] = reviewed;
+        }
         self.rebuild_rows();
     }
 }
@@ -86,7 +109,7 @@ mod tests {
         let mut app = sample_app();
         app.update(Action::Down(3));
         app.update(Action::ToggleReviewed);
-        app.update(Action::ToggleFileReviewed);
+        app.update(Action::TogglePageReviewed);
         assert!(app.file_progress(0).is_complete());
         assert!(app.collapsed[0]);
         assert_eq!(app.cursor, 0);
@@ -101,7 +124,7 @@ mod tests {
     fn reviewed_files_start_folded() {
         let files = || vec![file("a.rs", &[1]), file("b.rs", &[1])];
         let mut app = app_with(files());
-        app.update(Action::ToggleFileReviewed);
+        app.update(Action::TogglePageReviewed);
         let app = App::new(String::new(), Diff::new(files()), app.review);
         assert_eq!(app.collapsed, [true, false]);
     }

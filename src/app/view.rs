@@ -1,11 +1,15 @@
-//! What the diff pane shows: the current file's rows, folds, focus and scrolling.
+//! What the diff pane shows: one page at a time (a file, or a group of the
+//! review plan), folds, focus and scrolling.
 
-use super::{App, Focus, Mode};
+use super::{App, Focus, Mode, View};
 use crate::review::Comment;
 
-/// One visible row of the current file, pointing back into the model.
+/// One visible row of the current page, pointing back into the model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Row {
+    /// One line of a plan group's header (title, then rationale, wrapped to
+    /// the pane); these rows open its page.
+    Group { group: usize, line: usize },
     File { file: usize },
     Hunk { file: usize, hunk: usize },
     Line { file: usize, hunk: usize, line: usize },
@@ -14,18 +18,19 @@ pub enum Row {
 }
 
 impl Row {
-    pub fn file(self) -> usize {
+    pub fn file(self) -> Option<usize> {
         match self {
+            Row::Group { .. } => None,
             Row::File { file }
             | Row::Hunk { file, .. }
             | Row::Line { file, .. }
-            | Row::Comment { file, .. } => file,
+            | Row::Comment { file, .. } => Some(file),
         }
     }
 
     pub fn hunk(self) -> Option<usize> {
         match self {
-            Row::File { .. } | Row::Comment { .. } => None,
+            Row::Group { .. } | Row::File { .. } | Row::Comment { .. } => None,
             Row::Hunk { hunk, .. } | Row::Line { hunk, .. } => Some(hunk),
         }
     }
@@ -36,45 +41,108 @@ impl Row {
 }
 
 impl App {
-    pub fn set_viewport_height(&mut self, height: usize) {
+    /// The diff pane's size, reported by the UI each frame. Group headers wrap
+    /// to the width, so a new width rebuilds them.
+    pub fn set_viewport(&mut self, width: usize, height: usize) {
         self.viewport_height = height;
+        if width != self.viewport_width {
+            self.viewport_width = width;
+            if self.view == View::Plan {
+                self.rebuild_rows();
+            }
+        }
         self.scroll_into_view();
     }
 
-    /// Rows of `file` as shown: hunks unless folded, comments under the
-    /// lines they end on, and comments whose hunk is gone right under the header.
-    pub(super) fn file_rows(&self, file: usize) -> Vec<Row> {
-        let comment_rows = |c: &Comment| {
-            let (id, count) = (c.id, c.text.lines().count().max(1));
-            (0..count).map(move |line| Row::Comment { file, id, line })
+    /// A group's header as shown, line by line: its title, then its rationale,
+    /// word-wrapped to the pane. `true` marks title lines.
+    pub fn group_header(&self, group: usize) -> Vec<(bool, String)> {
+        let page = &self.plan[group];
+        // Room left after the `▌ ` bar; unwrapped until the UI reports a width.
+        let width = match self.viewport_width {
+            0 => usize::MAX,
+            w => w.saturating_sub(GROUP_HEADER_INDENT).max(1),
         };
-        let f = &self.diff.files[file];
-        let comments = self.review.comments();
-        let mut rows = vec![Row::File { file }];
-        let outdated = comments.iter().filter(|c| c.path == f.path() && self.is_outdated(c));
-        rows.extend(outdated.flat_map(comment_rows));
-        if self.collapsed[file] {
-            return rows;
+        let title = format!("{}/{} {}", group + 1, self.plan.len(), page.title);
+        let title = wrap_words(&title, width).into_iter().map(|line| (true, line));
+        let rationale = wrap_words(&page.rationale, width).into_iter().map(|line| (false, line));
+        title.chain(rationale).collect()
+    }
+
+    pub(super) fn page_count(&self) -> usize {
+        match self.view {
+            View::Files => self.diff.files.len(),
+            View::Plan => self.plan.len(),
         }
-        for (hunk, h) in f.hunks.iter().enumerate() {
-            rows.push(Row::Hunk { file, hunk });
-            let last = h.lines.len().saturating_sub(1);
-            for line in 0..h.lines.len() {
-                rows.push(Row::Line { file, hunk, line });
-                let here = comments.iter().filter(|c| c.hunk == h.id && c.end.min(last) == line);
-                rows.extend(here.flat_map(comment_rows));
+    }
+
+    /// The `(file, hunk)`s a page shows, in order.
+    pub(super) fn page_hunks(&self, page: usize) -> Vec<(usize, usize)> {
+        match self.view {
+            View::Files => (0..self.diff.files[page].hunks.len()).map(|h| (page, h)).collect(),
+            View::Plan => self.plan[page].hunks.clone(),
+        }
+    }
+
+    pub(super) fn page_rows(&self, page: usize) -> Vec<Row> {
+        match self.view {
+            View::Files => self.file_rows(page),
+            View::Plan => self.group_rows(page),
+        }
+    }
+
+    /// A file: its hunks unless folded, plus comments whose hunk is gone,
+    /// right under the header.
+    fn file_rows(&self, file: usize) -> Vec<Row> {
+        let f = &self.diff.files[file];
+        let mut rows = vec![Row::File { file }];
+        let outdated = self.review.comments().iter().filter(|c| c.path == f.path() && self.is_outdated(c));
+        rows.extend(outdated.flat_map(|c| comment_rows(file, c)));
+        if !self.collapsed[file] {
+            for hunk in 0..f.hunks.len() {
+                self.push_hunk_rows(&mut rows, file, hunk);
             }
         }
         rows
     }
 
-    pub(super) fn open_file(&mut self, file: usize, cursor: usize) {
-        if file >= self.diff.files.len() {
+    /// A plan group: its title, then its hunks with a file header wherever
+    /// the file changes. Folded files show only that header.
+    fn group_rows(&self, group: usize) -> Vec<Row> {
+        let header = self.group_header(group).len();
+        let mut rows: Vec<Row> = (0..header).map(|line| Row::Group { group, line }).collect();
+        let mut previous = None;
+        for &(file, hunk) in &self.plan[group].hunks {
+            if previous != Some(file) {
+                rows.push(Row::File { file });
+                previous = Some(file);
+            }
+            if !self.collapsed[file] {
+                self.push_hunk_rows(&mut rows, file, hunk);
+            }
+        }
+        rows
+    }
+
+    /// A hunk's header and lines, with each comment under the line it ends on.
+    fn push_hunk_rows(&self, rows: &mut Vec<Row>, file: usize, hunk: usize) {
+        let h = &self.diff.files[file].hunks[hunk];
+        let last = h.lines.len().saturating_sub(1);
+        rows.push(Row::Hunk { file, hunk });
+        for line in 0..h.lines.len() {
+            rows.push(Row::Line { file, hunk, line });
+            let here = self.review.comments().iter().filter(|c| c.hunk == h.id && c.end.min(last) == line);
+            rows.extend(here.flat_map(|c| comment_rows(file, c)));
+        }
+    }
+
+    pub(super) fn open_page(&mut self, page: usize, cursor: usize) {
+        if page >= self.page_count() {
             return;
         }
-        if file != self.file || self.rows.is_empty() {
-            self.file = file;
-            self.rows = self.file_rows(file);
+        if page != self.page || self.rows.is_empty() {
+            self.page = page;
+            self.rows = self.page_rows(page);
             self.scroll = 0;
             if let Mode::Visual { .. } = self.mode {
                 self.mode = Mode::Normal;
@@ -83,22 +151,39 @@ impl App {
         self.cursor = cursor.min(self.rows.len() - 1);
     }
 
-    /// Re-flattens the current file after a change, keeping the cursor on the
-    /// same row, or on the file header if that row is gone.
+    /// Re-flattens the current page after a change, keeping the cursor on the
+    /// same row, or near where it was if that row is gone.
     pub(super) fn rebuild_rows(&mut self) {
-        let Some(file) = self.current_file() else { return };
+        if self.page >= self.page_count() {
+            return;
+        }
         let current = self.current_row();
-        self.rows = self.file_rows(file);
+        self.rows = self.page_rows(self.page);
         let kept = current.and_then(|row| self.rows.iter().position(|r| *r == row));
-        // A deleted comment hands the cursor to the row after it; a fold, to the header.
-        let fallback = if self.collapsed[file] { 0 } else { self.cursor.min(self.rows.len() - 1) };
-        self.cursor = kept.unwrap_or(fallback);
+        // A deleted comment hands the cursor to the row after it; a folded
+        // hunk, to its file's header; a header line lost to rewrapping, to
+        // the header.
+        let fallback = || {
+            if let Some(Row::Group { group, .. }) = current {
+                let header = self.rows.iter().rposition(|r| matches!(*r, Row::Group { group: g, .. } if g == group));
+                if let Some(idx) = header {
+                    return idx;
+                }
+            }
+            let header = current.and_then(Row::file).map(|file| Row::File { file });
+            let header = header.and_then(|h| self.rows.iter().position(|r| *r == h));
+            let folded = current.and_then(Row::file).is_some_and(|f| self.collapsed[f]);
+            match header {
+                Some(idx) if folded => idx,
+                _ => self.cursor.min(self.rows.len() - 1),
+            }
+        };
+        self.cursor = kept.unwrap_or_else(fallback);
     }
 
     pub(super) fn toggle_fold(&mut self) {
         if let Some(file) = self.current_file() {
-            self.collapsed[file] = !self.collapsed[file];
-            self.rebuild_rows();
+            self.set_fold(!self.collapsed[file]);
         }
     }
 
@@ -148,6 +233,43 @@ impl App {
     }
 }
 
+/// Columns a group header line gives to its `▌ ` bar, plus one spare.
+const GROUP_HEADER_INDENT: usize = 3;
+
+/// Greedy word wrap to `width` columns; a word longer than a line is split.
+fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        let mut word: Vec<char> = word.chars().collect();
+        while !word.is_empty() {
+            let used = current.chars().count();
+            let gap = usize::from(used > 0);
+            if used + gap + word.len() <= width {
+                if gap == 1 {
+                    current.push(' ');
+                }
+                current.extend(word.drain(..));
+            } else if used > 0 {
+                lines.push(std::mem::take(&mut current));
+            } else {
+                current.extend(word.drain(..width));
+                lines.push(std::mem::take(&mut current));
+            }
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+/// A row per line of the comment's text.
+fn comment_rows(file: usize, comment: &Comment) -> impl Iterator<Item = Row> + use<> {
+    let (id, count) = (comment.id, comment.text.lines().count().max(1));
+    (0..count).map(move |line| Row::Comment { file, id, line })
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::test_support::*;
@@ -158,14 +280,14 @@ mod tests {
     fn shows_only_the_current_file() {
         let app = sample_app();
         assert_eq!(app.rows.len(), 8);
-        assert!(app.rows.iter().all(|r| r.file() == 0));
+        assert!(app.rows.iter().all(|r| r.file() == Some(0)));
         assert_eq!(app.rows[2], Row::Line { file: 0, hunk: 0, line: 0 });
     }
 
     #[test]
     fn scroll_follows_cursor() {
         let mut app = sample_app();
-        app.set_viewport_height(4);
+        app.set_viewport(80, 4);
         app.update(Action::Down(6));
         assert_eq!(app.scroll, 3);
         app.update(Action::HalfPageUp);
@@ -199,6 +321,14 @@ mod tests {
         assert_eq!(app.rows, [Row::File { file: 1 }]);
         app.update(Action::OpenAllFolds);
         assert_eq!(app.rows.len(), 6);
+    }
+
+    #[test]
+    fn wraps_words_to_the_width() {
+        assert_eq!(wrap_words("Adds the organizer module", 12), ["Adds the", "organizer", "module"]);
+        assert_eq!(wrap_words("tiny", 80), ["tiny"]);
+        assert_eq!(wrap_words("  ", 10), Vec::<String>::new());
+        assert_eq!(wrap_words("abcdefghij xy", 4), ["abcd", "efgh", "ij", "xy"]);
     }
 
     #[test]

@@ -6,6 +6,13 @@ pub enum Focus {
     Sidebar,
 }
 
+/// How the diff is paged: a file at a time, or a plan group at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum View {
+    Files,
+    Plan,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Mode {
     Normal,

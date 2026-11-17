@@ -1,7 +1,7 @@
 //! Cursor motions and jumps. Line and hunk motions stay inside the current
 //! file; file, unreviewed and comment jumps switch files as needed.
 
-use super::{Action, App, Row};
+use super::{Action, App, Row, View};
 
 /// In the sidebar, vertical motions move between files instead of rows.
 pub(super) fn sidebar_action(action: Action) -> Action {
@@ -34,21 +34,29 @@ impl App {
         self.jump_in_file(target.map(|(idx, _)| idx), "First hunk in this file");
     }
 
-    /// At the last file, stays put rather than jumping back to the top.
-    pub(super) fn next_file(&mut self, n: usize) {
-        let last = self.diff.files.len().saturating_sub(1);
-        if self.file >= last {
-            self.message = Some("Last file".to_string());
+    /// `]f`: the next file, or plan group. At the last one, stays put
+    /// rather than jumping back to the top.
+    pub(super) fn next_page(&mut self, n: usize) {
+        let last = self.page_count().saturating_sub(1);
+        if self.page >= last {
+            self.message = Some(format!("Last {}", self.page_noun()));
         } else {
-            self.open_file(self.file.saturating_add(n).min(last), 0);
+            self.open_page(self.page.saturating_add(n).min(last), 0);
         }
     }
 
-    pub(super) fn prev_file(&mut self, n: usize) {
-        if self.file == 0 {
-            self.message = Some("First file".to_string());
+    pub(super) fn prev_page(&mut self, n: usize) {
+        if self.page == 0 {
+            self.message = Some(format!("First {}", self.page_noun()));
         } else {
-            self.open_file(self.file.saturating_sub(n), 0);
+            self.open_page(self.page.saturating_sub(n), 0);
+        }
+    }
+
+    fn page_noun(&self) -> &'static str {
+        match self.view {
+            View::Files => "file",
+            View::Plan => "group",
         }
     }
 
@@ -100,32 +108,33 @@ impl App {
         }
     }
 
-    /// Every `(file, row)` a cross-file jump can land on, in diff order:
+    /// Every `(page, row)` a cross-page jump can land on, in page order:
     /// rows matching `row_stop`, and headers of folded files where
     /// `folded_stop` says something is hidden.
     fn stops(&self, row_stop: impl Fn(&Row) -> bool, folded_stop: impl Fn(usize) -> bool) -> Vec<(usize, usize)> {
         let mut stops = Vec::new();
-        for file in 0..self.diff.files.len() {
-            if self.collapsed[file] && folded_stop(file) {
-                stops.push((file, 0));
+        for page in 0..self.page_count() {
+            for (idx, row) in self.page_rows(page).into_iter().enumerate() {
+                let hides_one = matches!(row, Row::File { file } if self.collapsed[file] && folded_stop(file));
+                if hides_one || row_stop(&row) {
+                    stops.push((page, idx));
+                }
             }
-            let rows = self.file_rows(file).into_iter().enumerate();
-            stops.extend(rows.filter(|(_, row)| row_stop(row)).map(|(idx, _)| (file, idx)));
         }
         stops
     }
 
-    /// Jumps `n` stops forward or back, switching files if needed. Returns
+    /// Jumps `n` stops forward or back, switching pages if needed. Returns
     /// false when there's no stop in that direction.
     fn jump_to_stop(&mut self, stops: &[(usize, usize)], n: usize, forward: bool) -> bool {
-        let here = (self.file, self.cursor);
+        let here = (self.page, self.cursor);
         let target = if forward {
             stops.iter().filter(|&&s| s > here).take(n).last()
         } else {
             stops.iter().rev().filter(|&&s| s < here).take(n).last()
         };
-        let Some(&(file, row)) = target else { return false };
-        self.open_file(file, row);
+        let Some(&(page, row)) = target else { return false };
+        self.open_page(page, row);
         self.scroll = row;
         true
     }
@@ -153,7 +162,7 @@ mod tests {
     #[test]
     fn hunk_jumps_stay_in_the_file() {
         let mut app = sample_app();
-        app.set_viewport_height(4);
+        app.set_viewport(80, 4);
         app.update(Action::NextHunk(1));
         assert_eq!((app.cursor, app.scroll), (1, 1));
         app.update(Action::NextHunk(5));
@@ -192,11 +201,11 @@ mod tests {
         app.update(Action::ToggleFocus);
         assert_eq!(app.focus, Focus::Sidebar);
         app.update(Action::Down(1));
-        assert_eq!(app.file, 1);
+        assert_eq!(app.page, 1);
         app.update(Action::Top);
-        assert_eq!(app.file, 0);
+        assert_eq!(app.page, 0);
         app.update(Action::Bottom);
-        assert_eq!(app.file, 1);
+        assert_eq!(app.page, 1);
         app.update(Action::Select);
         assert_eq!(app.focus, Focus::Diff);
     }
@@ -212,7 +221,7 @@ mod tests {
         assert_eq!(position(&app), (0, 5));
         app.update(Action::NextUnreviewed(1));
         assert_eq!(position(&app), (1, 1));
-        assert!(app.rows.iter().all(|r| r.file() == 1));
+        assert!(app.rows.iter().all(|r| r.file() == Some(1)));
         app.update(Action::PrevUnreviewed(5));
         assert_eq!(position(&app), (0, 5));
     }
@@ -226,7 +235,7 @@ mod tests {
         assert_eq!(position(&app), (1, 0));
         assert_eq!(app.current_row(), Some(Row::File { file: 1 }));
 
-        app.update(Action::ToggleFileReviewed);
+        app.update(Action::TogglePageReviewed);
         app.update(Action::NextUnreviewed(1));
         assert_eq!(app.message.as_deref(), Some("Everything reviewed ✓"));
     }

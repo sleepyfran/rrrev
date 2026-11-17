@@ -43,9 +43,9 @@ pub fn sample_app() -> App {
     app_with(vec![file("a.rs", &[3, 2]), file("b.rs", &[4])])
 }
 
-/// `(file, cursor row)`.
+/// `(page, cursor row)`.
 pub fn position(app: &App) -> (usize, usize) {
-    (app.file, app.cursor)
+    (app.page, app.cursor)
 }
 
 pub fn type_text(app: &mut App, text: &str) {

@@ -8,14 +8,18 @@ mod comments;
 mod marks;
 mod mode;
 mod navigation;
+mod plan;
 mod view;
 
 #[cfg(test)]
 mod test_support;
 
 pub use action::{Action, Effect};
-pub use mode::{CommentTarget, Focus, Mode};
+pub use marks::Progress;
+pub use mode::{CommentTarget, Focus, Mode, View};
 pub use view::Row;
+
+use std::time::Instant;
 
 use crate::diff::{Diff, DiffLine, Hunk};
 use crate::input::InputAction;
@@ -25,9 +29,12 @@ pub struct App {
     pub title: String,
     pub diff: Diff,
     pub review: ReviewState,
-    /// The file shown in the diff pane; only one is shown at a time.
-    pub file: usize,
-    /// Rows of the current file.
+    pub view: View,
+    /// The plan placed on this diff; empty until there is one.
+    pub plan: Vec<plan::PlanPage>,
+    /// What the diff pane shows: a file index, or a plan group index.
+    pub page: usize,
+    /// Rows of the current page.
     pub rows: Vec<Row>,
     /// Per file: whether its hunks are folded away.
     pub collapsed: Vec<bool>,
@@ -35,6 +42,7 @@ pub struct App {
     /// Index of the first visible row.
     pub scroll: usize,
     pub viewport_height: usize,
+    pub viewport_width: usize,
     /// Width of each line-number column, sized to the largest number in the diff.
     pub gutter_width: usize,
     pub focus: Focus,
@@ -43,6 +51,8 @@ pub struct App {
     /// One-off feedback for the status line, cleared by the next action.
     pub message: Option<String>,
     pub effect: Option<Effect>,
+    /// When the organizer was started, while it runs.
+    pub organizing_since: Option<Instant>,
     pub should_quit: bool,
 }
 
@@ -59,25 +69,36 @@ impl App {
             title,
             diff,
             review,
-            file: 0,
+            view: View::Files,
+            plan: Vec::new(),
+            page: 0,
             rows: Vec::new(),
             collapsed: Vec::new(),
             cursor: 0,
             scroll: 0,
             viewport_height: 0,
+            viewport_width: 0,
             gutter_width: max_line_no.to_string().len(),
             focus: Focus::Diff,
             mode: Mode::Normal,
             show_sidebar: true,
             message: None,
             effect: None,
+            organizing_since: None,
             should_quit: false,
         };
         // Generated files and files already reviewed start out of the way.
         app.collapsed = (0..app.diff.files.len())
             .map(|f| app.diff.files[f].looks_generated() || app.file_progress(f).is_complete())
             .collect();
-        app.open_file(0, 0);
+        // A review that has a plan picks up in it.
+        if let Some(saved) = app.review.plan() {
+            app.plan = plan::resolve(saved, &app.diff);
+        }
+        if !app.plan.is_empty() {
+            app.view = View::Plan;
+        }
+        app.open_page(0, 0);
         app
     }
 
@@ -101,8 +122,8 @@ impl App {
             Action::Bottom => self.cursor = self.rows.len().saturating_sub(1),
             Action::NextHunk(n) => self.next_hunk(n),
             Action::PrevHunk(n) => self.prev_hunk(n),
-            Action::NextFile(n) => self.next_file(n),
-            Action::PrevFile(n) => self.prev_file(n),
+            Action::NextFile(n) => self.next_page(n),
+            Action::PrevFile(n) => self.prev_page(n),
             Action::NextUnreviewed(n) => self.jump_unreviewed(n, true),
             Action::PrevUnreviewed(n) => self.jump_unreviewed(n, false),
             Action::NextComment(n) => self.jump_comment(n, true),
@@ -120,7 +141,8 @@ impl App {
             Action::OpenAllFolds => self.set_all_folds(false),
             Action::CloseAllFolds => self.set_all_folds(true),
             Action::ToggleReviewed => self.toggle_reviewed(),
-            Action::ToggleFileReviewed => self.toggle_file_reviewed(),
+            Action::TogglePageReviewed => self.toggle_page_reviewed(),
+            Action::ToggleView => self.toggle_view(),
             Action::StartVisual => self.toggle_visual(),
             Action::StartComment => self.start_comment(false),
             Action::CommentInEditor => self.start_comment(true),
@@ -155,9 +177,13 @@ impl App {
         self.rows.get(self.cursor).copied()
     }
 
-    /// `None` only when the diff has no files.
+    /// The file under the cursor: the page itself in the files view, the
+    /// cursor row's file in the plan view (none on a group header).
     pub fn current_file(&self) -> Option<usize> {
-        (self.file < self.diff.files.len()).then_some(self.file)
+        match self.view {
+            View::Files => (self.page < self.diff.files.len()).then_some(self.page),
+            View::Plan => self.current_row().and_then(Row::file),
+        }
     }
 
     pub fn hunk(&self, file: usize, hunk: usize) -> &Hunk {
@@ -182,7 +208,8 @@ mod tests {
             Action::Down(1),
             Action::NextFile(1),
             Action::NextUnreviewed(1),
-            Action::ToggleFileReviewed,
+            Action::TogglePageReviewed,
+            Action::ToggleView,
             Action::StartComment,
             Action::NextComment(1),
         ] {

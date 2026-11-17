@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
-use crate::app::{App, CommentTarget, Focus, Mode, Row};
+use crate::app::{App, CommentTarget, Focus, Mode, Progress, Row, View};
 use crate::diff::{FileStatus, LineKind};
 
 /// `pending` holds the keys of an unfinished command, e.g. `3]`.
@@ -22,7 +22,10 @@ pub fn render(frame: &mut Frame, app: &mut App, pending: &str) {
         let width = (main.width * 3 / 10).clamp(24, 48).min(main.width / 2);
         let [sidebar, body] =
             Layout::horizontal([Constraint::Length(width), Constraint::Min(0)]).areas(main);
-        render_sidebar(frame, sidebar, app);
+        match app.view {
+            View::Files => render_files_sidebar(frame, sidebar, app),
+            View::Plan => render_plan_sidebar(frame, sidebar, app),
+        }
         body
     } else {
         main
@@ -32,7 +35,7 @@ pub fn render(frame: &mut Frame, app: &mut App, pending: &str) {
     // and the commented line stays in sight.
     let comment_box = comment_box_area(app, body);
     let rows_area = Rect { height: body.height - comment_box.map_or(0, |b| b.height), ..body };
-    app.set_viewport_height(rows_area.height as usize);
+    app.set_viewport(rows_area.width as usize, rows_area.height as usize);
     render_title(frame, title, app);
     render_body(frame, rows_area, app);
     if let Some(area) = comment_box {
@@ -51,7 +54,22 @@ fn render_title(frame: &mut Frame, area: Rect, app: &App) {
         1 => "1 comment · ".to_string(),
         n => format!("{n} comments · "),
     };
-    let right = format!("{comments}{}/{} hunks reviewed{done} ", progress.reviewed, progress.total);
+    let organizing = match app.organizing_since {
+        Some(since) => {
+            const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+            let elapsed = since.elapsed();
+            let frame = SPINNER[(elapsed.as_millis() / 100) as usize % SPINNER.len()];
+            format!("{frame} organizing… {}s · ", elapsed.as_secs())
+        }
+        None => String::new(),
+    };
+    let right = format!("{organizing}{comments}{}/{} hunks reviewed{done} ", progress.reviewed, progress.total);
+    // In a narrow pane the status on the right matters more than the title.
+    let left = if left.chars().count() + right.chars().count() > area.width as usize {
+        " rrrev ".to_string()
+    } else {
+        left
+    };
     let pad = (area.width as usize).saturating_sub(left.chars().count() + right.chars().count());
     let right_style = if progress.is_complete() { Style::new().fg(Color::Green) } else { Style::new() };
     let line = Line::from(vec![
@@ -62,9 +80,8 @@ fn render_title(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(line).reversed(), area);
 }
 
-/// `✓` for a fully reviewed file, `◐` for a partly reviewed one.
-fn review_mark(app: &App, file: usize) -> Span<'static> {
-    let progress = app.file_progress(file);
+/// `✓` when fully reviewed, `◐` when partly.
+fn progress_mark(progress: Progress) -> Span<'static> {
     if progress.is_complete() {
         Span::styled("✓", Style::new().fg(Color::Green))
     } else if progress.reviewed > 0 {
@@ -85,20 +102,76 @@ fn status_style(status: FileStatus) -> Style {
     Style::new().fg(color).bold()
 }
 
-fn render_sidebar(frame: &mut Frame, area: Rect, app: &App) {
+/// Draws the sidebar's frame and returns the area inside it.
+fn sidebar_frame(frame: &mut Frame, area: Rect, app: &App, title: &str) -> Rect {
     let focused = app.focus == Focus::Sidebar;
     let border_style = if focused { Style::new().fg(Color::Cyan) } else { Style::new().dim() };
     let block = Block::new()
         .borders(Borders::RIGHT)
         .border_style(border_style)
-        .title(Span::styled(" Files ", if focused { Style::new().bold() } else { Style::new().dim() }));
+        .title(Span::styled(format!(" {title} "), if focused { Style::new().bold() } else { Style::new().dim() }));
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    inner
+}
 
+/// Renders one sidebar entry, highlighted when selected.
+fn sidebar_row(frame: &mut Frame, inner: Rect, offset: usize, line: Line, selected: bool, focused: bool) {
+    let mut paragraph = Paragraph::new(line);
+    if selected {
+        let bg = if focused { Color::DarkGray } else { Color::Reset };
+        paragraph = paragraph.style(Style::new().bg(bg).add_modifier(Modifier::BOLD));
+    }
+    let row_area = Rect { y: inner.y + offset as u16, height: 1, ..inner };
+    frame.render_widget(paragraph, row_area);
+}
+
+/// The first entry to show so `selected` is visible, without storing a
+/// separate sidebar scroll.
+fn sidebar_start(selected: Option<usize>, height: usize) -> usize {
+    selected.map_or(0, |s| (s + 1).saturating_sub(height))
+}
+
+fn render_plan_sidebar(frame: &mut Frame, area: Rect, app: &App) {
+    let inner = sidebar_frame(frame, area, app, "Plan");
+    let focused = app.focus == Focus::Sidebar;
+    let height = inner.height as usize;
+    let first = sidebar_start(Some(app.page), height);
+    for (offset, (idx, group)) in app.plan.iter().enumerate().skip(first).take(height).enumerate() {
+        let progress = app.group_progress(idx);
+        let count = format!(" {}/{}", progress.reviewed, progress.total);
+        // Number, space, review mark, space.
+        let number = format!("{:>2}", idx + 1);
+        let title_width = (inner.width as usize).saturating_sub(number.len() + 3 + count.len());
+        let title = truncate_right(&group.title, title_width);
+        let pad = title_width.saturating_sub(title.chars().count());
+        let line = Line::from(vec![
+            Span::raw(number).dim(),
+            Span::raw(" "),
+            progress_mark(progress),
+            Span::raw(" "),
+            Span::raw(title),
+            Span::raw(" ".repeat(pad)),
+            Span::raw(count).dim(),
+        ]);
+        sidebar_row(frame, inner, offset, line, idx == app.page, focused);
+    }
+}
+
+fn truncate_right(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        return text.to_string();
+    }
+    let head: String = text.chars().take(width.saturating_sub(1)).collect();
+    if width == 0 { head } else { format!("{head}…") }
+}
+
+fn render_files_sidebar(frame: &mut Frame, area: Rect, app: &App) {
+    let inner = sidebar_frame(frame, area, app, "Files");
+    let focused = app.focus == Focus::Sidebar;
     let height = inner.height as usize;
     let selected = app.current_file();
-    // Keep the selected file visible without storing a separate sidebar scroll.
-    let first = selected.map_or(0, |s| (s + 1).saturating_sub(height));
+    let first = sidebar_start(selected, height);
 
     for (offset, (idx, file)) in app.diff.files.iter().enumerate().skip(first).take(height).enumerate() {
         let (added, removed) = file.stats();
@@ -116,7 +189,7 @@ fn render_sidebar(frame: &mut Frame, area: Rect, app: &App) {
         let line = Line::from(vec![
             Span::styled(file.status.label(), status_style(file.status)),
             Span::raw(" "),
-            review_mark(app, idx),
+            progress_mark(app.file_progress(idx)),
             Span::raw(format!("{fold} ")),
             Span::raw(dir.to_string()).dim(),
             Span::raw(name.to_string()),
@@ -124,13 +197,7 @@ fn render_sidebar(frame: &mut Frame, area: Rect, app: &App) {
             Span::styled(format!(" +{added}"), Style::new().fg(Color::Green)),
             Span::styled(format!(" -{removed}"), Style::new().fg(Color::Red)),
         ]);
-        let mut paragraph = Paragraph::new(line);
-        if Some(idx) == selected {
-            let bg = if focused { Color::DarkGray } else { Color::Reset };
-            paragraph = paragraph.style(Style::new().bg(bg).add_modifier(Modifier::BOLD));
-        }
-        let row_area = Rect { y: inner.y + offset as u16, height: 1, ..inner };
-        frame.render_widget(paragraph, row_area);
+        sidebar_row(frame, inner, offset, line, Some(idx) == selected, focused);
     }
 }
 
@@ -178,6 +245,12 @@ fn is_commented(app: &App, file: usize, hunk: usize, line: usize) -> bool {
 
 fn row_line(app: &App, row: Row) -> Line<'static> {
     match row {
+        Row::Group { group, line } => {
+            let header = app.group_header(group);
+            let Some((is_title, text)) = header.get(line).cloned() else { return Line::default() };
+            let style = if is_title { Style::new().fg(Color::Magenta).bold() } else { Style::new().italic() };
+            Line::from(vec![Span::styled("▌ ", Style::new().fg(Color::Magenta)), Span::styled(text, style)])
+        }
         Row::File { file } => {
             let f = &app.diff.files[file];
             let collapsed = app.collapsed[file];
@@ -187,7 +260,7 @@ fn row_line(app: &App, row: Row) -> Line<'static> {
                 Span::raw(" "),
                 Span::styled(f.display_path(), Style::new().bold().add_modifier(Modifier::UNDERLINED)),
                 Span::raw(" "),
-                review_mark(app, file),
+                progress_mark(app.file_progress(file)),
             ];
             if f.is_binary {
                 spans.push(Span::raw(" (binary)").dim());
@@ -344,8 +417,10 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
     };
     let mut parts = vec![mode.to_string()];
     if let Some(row) = app.current_row() {
-        let file = &app.diff.files[row.file()];
-        let mut location = file.display_path();
+        let mut location = match row.file() {
+            Some(file) => app.diff.files[file].display_path(),
+            None => app.plan.get(app.page).map_or(String::new(), |p| p.title.clone()),
+        };
         if let Row::Line { file, hunk, line } = row {
             let l = app.line(file, hunk, line);
             if let Some(n) = l.new_no.or(l.old_no) {
@@ -353,9 +428,12 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
             }
         }
         parts.push(location);
-        parts.push(format!("file {}/{}", row.file() + 1, app.diff.files.len()));
-        if let Some(hunk) = row.hunk() {
-            parts.push(format!("hunk {}/{}", hunk + 1, file.hunks.len()));
+        parts.push(match app.view {
+            View::Files => format!("file {}/{}", app.page + 1, app.diff.files.len()),
+            View::Plan => format!("group {}/{}", app.page + 1, app.plan.len()),
+        });
+        if let (Some(file), Some(hunk)) = (row.file(), row.hunk()) {
+            parts.push(format!("hunk {}/{}", hunk + 1, app.diff.files[file].hunks.len()));
         }
     }
     let mut left = parts.join("  ");
@@ -380,7 +458,7 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
                 Mode::Visual { .. } => " c comment on selection  Esc cancel ",
                 // The comment box lists its own keys.
                 Mode::Comment { .. } => " ",
-                _ => " r review  c comment  ]u unreviewed  ]c hunk  ]f file  : command  q quit ",
+                _ => " r review  c comment  ]u unreviewed  ]c hunk  ]f page  p plan  : command  q quit ",
             };
             let hints = if fits(&left, hints) { hints } else { " " };
             (hints.to_string(), Style::new().dim())
@@ -405,6 +483,13 @@ mod tests {
         assert_eq!(truncate_left("src/main.rs", 20), "src/main.rs");
         assert_eq!(truncate_left("src/diff/git.rs", 8), "…/git.rs");
         assert_eq!(truncate_left("abc", 0), "");
+    }
+
+    #[test]
+    fn truncates_titles_from_the_right() {
+        assert_eq!(truncate_right("Core types", 20), "Core types");
+        assert_eq!(truncate_right("Core types", 5), "Core…");
+        assert_eq!(truncate_right("Core", 0), "");
     }
 
     #[test]

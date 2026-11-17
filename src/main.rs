@@ -3,6 +3,7 @@ mod diff;
 mod export;
 mod input;
 mod keymap;
+mod organizer;
 mod review;
 mod ui;
 
@@ -10,6 +11,10 @@ use std::fs;
 use std::io::stdout;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread;
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
@@ -27,6 +32,8 @@ use diff::DiffSource;
 use diff::git::{DiffSpec, GitSource};
 use export::{CommentSink, FileSink, Format};
 use keymap::KeyHandler;
+use organizer::claude::ClaudeCli;
+use organizer::{Organizer, Plan};
 use review::ReviewState;
 
 /// Keyboard-driven code review in the terminal.
@@ -63,26 +70,37 @@ fn main() -> Result<()> {
     }
 
     let mut app = App::new(source.describe(), diff, review);
+    let organizer: Arc<dyn Organizer> = Arc::new(ClaudeCli::from_env());
     let mut terminal = ratatui::init();
-    let result = run(&mut terminal, &mut app, &state_file);
+    let result = run(&mut terminal, &mut app, &state_file, organizer);
     ratatui::restore();
     result
 }
 
-fn run(terminal: &mut DefaultTerminal, app: &mut App, state_file: &Path) -> Result<()> {
+/// How often the screen redraws without input, to move the spinner along and
+/// pick up background results.
+const TICK: Duration = Duration::from_millis(100);
+
+fn run(terminal: &mut DefaultTerminal, app: &mut App, state_file: &Path, organizer: Arc<dyn Organizer>) -> Result<()> {
     let mut keys = KeyHandler::default();
+    let (plans_tx, plans): (Sender<Result<Plan>>, Receiver<Result<Plan>>) = mpsc::channel();
     while !app.should_quit {
         terminal.draw(|frame| ui::render(frame, app, &keys.pending()))?;
-        let Event::Key(key) = event::read()? else { continue };
-        if key.kind != KeyEventKind::Press {
-            continue;
+
+        if let Ok(result) = plans.try_recv() {
+            app.finish_organize(result);
         }
-        if app.is_typing() {
-            if let Some(action) = keymap::input_action(key) {
-                app.update_input(action);
+        if event::poll(TICK)?
+            && let Event::Key(key) = event::read()?
+            && key.kind == KeyEventKind::Press
+        {
+            if app.is_typing() {
+                if let Some(action) = keymap::input_action(key) {
+                    app.update_input(action);
+                }
+            } else if let Some(action) = keys.handle(key) {
+                app.update(action);
             }
-        } else if let Some(action) = keys.handle(key) {
-            app.update(action);
         }
 
         match app.effect.take() {
@@ -100,6 +118,11 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App, state_file: &Path) -> Resu
                     Ok(note) => note,
                     Err(e) => format!("error: {e:#}"),
                 });
+            }
+            Some(Effect::Organize { request }) => {
+                let (organizer, done) = (Arc::clone(&organizer), plans_tx.clone());
+                // Quitting mid-run drops the receiver; the send then fails harmlessly.
+                thread::spawn(move || done.send(organizer.organize(&request)));
             }
             None => {}
         }

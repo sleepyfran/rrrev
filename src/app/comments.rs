@@ -117,7 +117,7 @@ impl App {
                 Some(CommentTarget::New { file, hunk, start: 0, end })
             }
             Row::Comment { id, .. } => Some(CommentTarget::Edit { id }),
-            Row::File { .. } => None,
+            Row::Group { .. } | Row::File { .. } => None,
         }
     }
 

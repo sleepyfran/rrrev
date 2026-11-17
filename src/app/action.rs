@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use crate::export::Format;
+use crate::organizer::OrganizeRequest;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
@@ -27,7 +28,9 @@ pub enum Action {
     OpenAllFolds,
     CloseAllFolds,
     ToggleReviewed,
-    ToggleFileReviewed,
+    /// `R`: everything on the current page, a file or a plan group.
+    TogglePageReviewed,
+    ToggleView,
     StartVisual,
     StartComment,
     CommentInEditor,
@@ -48,4 +51,6 @@ pub enum Effect {
     /// Edit the comment being written in `$EDITOR`, then call `finish_editor`.
     OpenEditor { initial: String },
     Export { format: Format, path: Option<PathBuf> },
+    /// Plan the review in the background, then call `finish_organize`.
+    Organize { request: OrganizeRequest },
 }

@@ -49,6 +49,12 @@ impl Diff {
 #[serde(transparent)]
 pub struct HunkId(String);
 
+impl HunkId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// FNV-1a over the path and the changed lines. Context lines are left out so
 /// edits next to a hunk don't reset its review.
 fn content_hash(path: &str, hunk: &Hunk) -> u64 {
