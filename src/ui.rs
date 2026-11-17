@@ -3,10 +3,10 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 
-use crate::app::{App, Focus, Row};
+use crate::app::{App, CommentTarget, Focus, Mode, Row};
 use crate::diff::{FileStatus, LineKind};
 
 /// `pending` holds the keys of an unfinished command, e.g. `3]`.
@@ -28,9 +28,16 @@ pub fn render(frame: &mut Frame, app: &mut App, pending: &str) {
         main
     };
 
-    app.set_viewport_height(body.height as usize);
+    // The comment box covers the bottom of the diff, so rows scroll above it
+    // and the commented line stays in sight.
+    let comment_box = comment_box_area(app, body);
+    let rows_area = Rect { height: body.height - comment_box.map_or(0, |b| b.height), ..body };
+    app.set_viewport_height(rows_area.height as usize);
     render_title(frame, title, app);
-    render_body(frame, body, app);
+    render_body(frame, rows_area, app);
+    if let Some(area) = comment_box {
+        render_comment_box(frame, area, app);
+    }
     render_status(frame, status, app, pending);
 }
 
@@ -39,7 +46,12 @@ fn render_title(frame: &mut Frame, area: Rect, app: &App) {
     let left = format!(" rrrev ─ {} ─ {files} file{}", app.title, if files == 1 { "" } else { "s" });
     let progress = app.progress();
     let done = if progress.is_complete() { " ✓" } else { "" };
-    let right = format!("{}/{} hunks reviewed{done} ", progress.reviewed, progress.total);
+    let comments = match app.review.comments().len() {
+        0 => String::new(),
+        1 => "1 comment · ".to_string(),
+        n => format!("{n} comments · "),
+    };
+    let right = format!("{comments}{}/{} hunks reviewed{done} ", progress.reviewed, progress.total);
     let pad = (area.width as usize).saturating_sub(left.chars().count() + right.chars().count());
     let right_style = if progress.is_complete() { Style::new().fg(Color::Green) } else { Style::new() };
     let line = Line::from(vec![
@@ -140,15 +152,28 @@ fn render_body(frame: &mut Frame, area: Rect, app: &App) {
         frame.render_widget(Paragraph::new(" No changes to review.").dim(), area);
         return;
     }
+    let selection = app.selection();
     let visible = app.rows.iter().enumerate().skip(app.scroll).take(area.height as usize);
     for (offset, (idx, row)) in visible.enumerate() {
         let row_area = Rect { y: area.y + offset as u16, height: 1, ..area };
         let mut paragraph = Paragraph::new(row_line(app, *row));
-        if idx == app.cursor && app.focus == Focus::Diff {
+        let selected = match (*row, selection) {
+            (Row::Line { hunk, line, .. }, Some((_, h, start, end))) => hunk == h && (start..=end).contains(&line),
+            _ => false,
+        };
+        if selected {
+            paragraph = paragraph.style(Style::new().bg(Color::Blue));
+        } else if idx == app.cursor && app.focus == Focus::Diff {
             paragraph = paragraph.style(Style::new().bg(Color::DarkGray));
         }
         frame.render_widget(paragraph, row_area);
     }
+}
+
+/// Whether a comment on a live hunk covers this line.
+fn is_commented(app: &App, file: usize, hunk: usize, line: usize) -> bool {
+    let id = &app.hunk(file, hunk).id;
+    app.review.comments().iter().any(|c| c.hunk == *id && (c.start..=c.end).contains(&line))
 }
 
 fn row_line(app: &App, row: Row) -> Line<'static> {
@@ -188,14 +213,39 @@ fn row_line(app: &App, row: Row) -> Line<'static> {
             diff_line(app, file, hunk, line).patch_style(Style::new().dim())
         }
         Row::Line { file, hunk, line } => diff_line(app, file, hunk, line),
+        Row::Comment { id, line, .. } => comment_line(app, id, line),
     }
+}
+
+fn comment_line(app: &App, id: u64, line: usize) -> Line<'static> {
+    let Some(comment) = app.review.comment(id) else { return Line::default() };
+    let text = comment.text.lines().nth(line).unwrap_or("").to_string();
+    // Line up with the code: `marker old new ` is two numbers plus three columns.
+    let indent = " ".repeat(2 * app.gutter_width + 3);
+    let lead = if line == 0 { "┃ ✎ " } else { "┃   " };
+    let mut spans = vec![Span::raw(indent), Span::styled(lead, Style::new().fg(Color::Yellow))];
+    let outdated = app.is_outdated(comment);
+    if outdated && line == 0 {
+        let lines = comment.new_lines.or(comment.old_lines).map_or(String::new(), |(a, b)| {
+            if a == b { format!(" L{a}") } else { format!(" L{a}-{b}") }
+        });
+        spans.push(Span::raw(format!("(outdated{lines}) ")).italic());
+    }
+    spans.push(Span::styled(text, Style::new().fg(Color::Yellow)));
+    let line = Line::from(spans);
+    if outdated { line.patch_style(Style::new().dim()) } else { line }
 }
 
 fn diff_line(app: &App, file: usize, hunk: usize, line: usize) -> Line<'static> {
     let l = app.line(file, hunk, line);
     let w = app.gutter_width;
     let no = |n: Option<u32>| n.map_or_else(|| " ".repeat(w), |n| format!("{n:>w$}"));
-    let gutter = format!(" {} {} ", no(l.old_no), no(l.new_no));
+    let marker = if is_commented(app, file, hunk, line) {
+        Span::styled("┃", Style::new().fg(Color::Yellow))
+    } else {
+        Span::raw(" ")
+    };
+    let gutter = format!("{} {} ", no(l.old_no), no(l.new_no));
     let (sign, style) = match l.kind {
         LineKind::Added => ("+", Style::new().fg(Color::Green)),
         LineKind::Removed => ("-", Style::new().fg(Color::Red)),
@@ -203,15 +253,94 @@ fn diff_line(app: &App, file: usize, hunk: usize, line: usize) -> Line<'static> 
         LineKind::NoNewline => (" ", Style::new().dim().italic()),
     };
     Line::from(vec![
+        marker,
         Span::styled(gutter, Style::new().dim()),
         Span::styled(format!("{sign} {}", l.content.replace('\t', "    ")), style),
     ])
 }
 
+const MAX_COMMENT_BOX_LINES: u16 = 8;
+
+fn comment_box_area(app: &App, body: Rect) -> Option<Rect> {
+    let Mode::Comment { input, .. } = &app.mode else { return None };
+    let (lines, _) = wrap_input(input.text(), input.cursor(), body.width.saturating_sub(2) as usize);
+    let height = (lines.len() as u16).clamp(1, MAX_COMMENT_BOX_LINES) + 2;
+    let height = height.min(body.height.saturating_sub(1));
+    Some(Rect { y: body.bottom() - height, height, ..body })
+}
+
+fn render_comment_box(frame: &mut Frame, area: Rect, app: &App) {
+    let Mode::Comment { target, input } = &app.mode else { return };
+    let title = match *target {
+        CommentTarget::New { file, hunk, start, end } => {
+            let h = app.hunk(file, hunk);
+            let numbers: Vec<u32> = h.lines[start..=end].iter().filter_map(|l| l.new_no.or(l.old_no)).collect();
+            let range = match (numbers.iter().min(), numbers.iter().max()) {
+                (Some(a), Some(b)) if a != b => format!(":{a}-{b}"),
+                (Some(a), _) => format!(":{a}"),
+                _ => String::new(),
+            };
+            format!(" Comment on {}{range} ", app.diff.files[file].path())
+        }
+        CommentTarget::Edit { .. } => " Edit comment (empty deletes it) ".to_string(),
+    };
+    let block = Block::bordered()
+        .border_style(Style::new().fg(Color::Yellow))
+        .title(Span::styled(title, Style::new().bold()))
+        .title_bottom(Line::from(" Enter save · Alt-Enter newline · C-o $EDITOR · Esc cancel ").dim());
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+
+    let (lines, (x, y)) = wrap_input(input.text(), input.cursor(), inner.width as usize);
+    // Scroll so the cursor's line is visible once the text outgrows the box.
+    let skip = (y + 1).saturating_sub(inner.height as usize);
+    let visible: Vec<Line> = lines.into_iter().skip(skip).map(Line::from).collect();
+    frame.render_widget(Paragraph::new(visible), inner);
+    frame.set_cursor_position((inner.x + x as u16, inner.y + (y - skip) as u16));
+}
+
+/// Breaks input text into rows of at most `width` chars, hard-wrapping long
+/// lines, and finds the cursor's `(column, row)` among them.
+fn wrap_input(text: &str, cursor: usize, width: usize) -> (Vec<String>, (usize, usize)) {
+    let width = width.max(1);
+    let mut rows = vec![String::new()];
+    let mut position = None;
+    let full = |rows: &Vec<String>| rows.last().is_some_and(|r| r.chars().count() == width);
+    for (i, ch) in text.chars().enumerate() {
+        if ch != '\n' && full(&rows) {
+            rows.push(String::new());
+        }
+        if i == cursor {
+            position = Some((rows.last().map_or(0, |r| r.chars().count()), rows.len() - 1));
+        }
+        match ch {
+            '\n' => rows.push(String::new()),
+            ch => rows.last_mut().expect("rows is never empty").push(ch),
+        }
+    }
+    let position = position.unwrap_or_else(|| {
+        if full(&rows) {
+            rows.push(String::new());
+        }
+        (rows.last().map_or(0, |r| r.chars().count()), rows.len() - 1)
+    });
+    (rows, position)
+}
+
 fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
-    let mode = match app.focus {
-        Focus::Diff => " NORMAL ",
-        Focus::Sidebar => " FILES ",
+    if let Mode::Command { input } = &app.mode {
+        let text = format!(":{}", input.text());
+        frame.render_widget(Paragraph::new(text), area);
+        let x = 1 + input.text().chars().take(input.cursor()).count() as u16;
+        frame.set_cursor_position((area.x + x.min(area.width.saturating_sub(1)), area.y));
+        return;
+    }
+    let mode = match (&app.mode, app.focus) {
+        (Mode::Visual { .. }, _) => " VISUAL ",
+        (Mode::Comment { .. }, _) => " COMMENT ",
+        (_, Focus::Sidebar) => " FILES ",
+        _ => " NORMAL ",
     };
     let mut parts = vec![mode.to_string()];
     if let Some(row) = app.current_row() {
@@ -247,7 +376,12 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
             (right, style.bold())
         }
         None => {
-            let hints = " r review  ]u unreviewed  ]c hunk  ]f file  za fold  Tab files  q quit ";
+            let hints = match app.mode {
+                Mode::Visual { .. } => " c comment on selection  Esc cancel ",
+                // The comment box lists its own keys.
+                Mode::Comment { .. } => " ",
+                _ => " r review  c comment  ]u unreviewed  ]c hunk  ]f file  : command  q quit ",
+            };
             let hints = if fits(&left, hints) { hints } else { " " };
             (hints.to_string(), Style::new().dim())
         }
@@ -271,5 +405,17 @@ mod tests {
         assert_eq!(truncate_left("src/main.rs", 20), "src/main.rs");
         assert_eq!(truncate_left("src/diff/git.rs", 8), "…/git.rs");
         assert_eq!(truncate_left("abc", 0), "");
+    }
+
+    #[test]
+    fn wraps_input_and_tracks_the_cursor() {
+        assert_eq!(wrap_input("", 0, 5), (vec![String::new()], (0, 0)));
+        assert_eq!(wrap_input("abc", 3, 5), (vec!["abc".into()], (3, 0)));
+        assert_eq!(wrap_input("abcdefg", 2, 5), (vec!["abcde".into(), "fg".into()], (2, 0)));
+        assert_eq!(wrap_input("abcdefg", 6, 5).1, (1, 1));
+        assert_eq!(wrap_input("ab\ncd", 2, 5), (vec!["ab".into(), "cd".into()], (2, 0)));
+        assert_eq!(wrap_input("ab\n", 3, 5), (vec!["ab".into(), String::new()], (0, 1)));
+        // A full last row puts an end-of-text cursor on a new row.
+        assert_eq!(wrap_input("abcde", 5, 5), (vec!["abcde".into(), String::new()], (0, 1)));
     }
 }

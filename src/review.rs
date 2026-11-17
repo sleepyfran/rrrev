@@ -16,9 +16,31 @@ pub struct ReviewState {
     /// Ids of reviewed hunks. Ids no longer in the diff are kept, so a change
     /// that comes back (after a stash, say) is still marked.
     reviewed: BTreeSet<HunkId>,
+    #[serde(default)]
+    comments: Vec<Comment>,
+    #[serde(default)]
+    next_comment_id: u64,
     /// Set when there are changes that haven't been saved yet.
     #[serde(skip)]
     dirty: bool,
+}
+
+/// A note on a range of lines within one hunk.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Comment {
+    pub id: u64,
+    pub hunk: HunkId,
+    pub path: String,
+    /// Inclusive range of indices into the hunk's lines.
+    pub start: usize,
+    pub end: usize,
+    /// File line numbers covered, on each side, when that side has any lines.
+    pub old_lines: Option<(u32, u32)>,
+    pub new_lines: Option<(u32, u32)>,
+    /// The commented lines as they were, with their `+`/`-`/` ` sign, so the
+    /// comment still makes sense once the hunk has changed.
+    pub code: Vec<String>,
+    pub text: String,
 }
 
 impl ReviewState {
@@ -37,9 +59,10 @@ impl ReviewState {
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir)?;
         }
-        let state = Self { version: VERSION, reviewed: self.reviewed.clone(), dirty: false };
+        let mut json = serde_json::to_value(self)?;
+        json["version"] = VERSION.into();
         let tmp = path.with_extension("json.tmp");
-        fs::write(&tmp, serde_json::to_string_pretty(&state)?)?;
+        fs::write(&tmp, serde_json::to_string_pretty(&json)?)?;
         fs::rename(&tmp, path)?;
         Ok(())
     }
@@ -55,6 +78,41 @@ impl ReviewState {
             self.reviewed.remove(id)
         };
         self.dirty |= changed;
+    }
+
+    pub fn comments(&self) -> &[Comment] {
+        &self.comments
+    }
+
+    pub fn comment(&self, id: u64) -> Option<&Comment> {
+        self.comments.iter().find(|c| c.id == id)
+    }
+
+    /// Stores `comment` under a fresh id, which it returns.
+    pub fn add_comment(&mut self, mut comment: Comment) -> u64 {
+        self.next_comment_id += 1;
+        comment.id = self.next_comment_id;
+        self.comments.push(comment);
+        self.dirty = true;
+        self.next_comment_id
+    }
+
+    pub fn set_comment_text(&mut self, id: u64, text: String) {
+        if let Some(comment) = self.comments.iter_mut().find(|c| c.id == id) {
+            comment.text = text;
+            self.dirty = true;
+        }
+    }
+
+    pub fn delete_comment(&mut self, id: u64) {
+        let before = self.comments.len();
+        self.comments.retain(|c| c.id != id);
+        self.dirty |= self.comments.len() != before;
+    }
+
+    /// Forces the next save, for an explicit `:w`.
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
     }
 
     /// Returns whether there were unsaved changes, and clears the flag.
@@ -123,6 +181,49 @@ mod tests {
         state.take_dirty();
         state.set_reviewed(&id, true);
         assert!(!state.take_dirty());
+    }
+
+    fn comment(text: &str) -> Comment {
+        Comment {
+            id: 0,
+            hunk: some_id(),
+            path: "a.rs".into(),
+            start: 0,
+            end: 0,
+            old_lines: None,
+            new_lines: Some((1, 1)),
+            code: vec!["+x".into()],
+            text: text.into(),
+        }
+    }
+
+    #[test]
+    fn comments_get_fresh_ids_and_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        let mut state = ReviewState::default();
+        let first = state.add_comment(comment("one"));
+        let second = state.add_comment(comment("two"));
+        assert_ne!(first, second);
+        state.delete_comment(first);
+        // Ids aren't reused after a delete.
+        assert!(state.add_comment(comment("three")) > second);
+        state.set_comment_text(second, "edited".into());
+        state.save(&path).unwrap();
+
+        let loaded = ReviewState::load(&path).unwrap();
+        let texts: Vec<_> = loaded.comments().iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(texts, ["edited", "three"]);
+        assert_eq!(loaded.comment(second).unwrap().code, ["+x"]);
+    }
+
+    #[test]
+    fn loads_state_saved_before_comments_existed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        fs::write(&path, r#"{ "version": 1, "reviewed": ["abc"] }"#).unwrap();
+        let state = ReviewState::load(&path).unwrap();
+        assert!(state.comments().is_empty());
     }
 
     #[test]

@@ -1,6 +1,7 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::app::Action;
+use crate::input::InputAction;
 
 /// Turns key presses into actions, handling vim-style counts (`5j`) and
 /// two-key sequences (`gg`, `]c`, `za`). Unknown sequences are dropped, as in vim.
@@ -21,8 +22,10 @@ impl KeyHandler {
     pub fn handle(&mut self, key: KeyEvent) -> Option<Action> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if key.code == KeyCode::Esc {
+            // Esc first drops a half-typed command, then cancels the mode.
+            let had_pending = self.count.is_some() || self.prefix.is_some();
             *self = Self::default();
-            return None;
+            return (!had_pending).then_some(Action::Cancel);
         }
         if let KeyCode::Char(c @ '0'..='9') = key.code
             && !ctrl
@@ -37,7 +40,7 @@ impl KeyHandler {
         let count = self.count.take();
         let n = count.unwrap_or(1);
         let action = match (self.prefix.take(), key.code) {
-            (None, KeyCode::Char(c @ ('g' | 'z' | ']' | '['))) if !ctrl => {
+            (None, KeyCode::Char(c @ ('g' | 'z' | ']' | '[' | 'd'))) if !ctrl => {
                 self.prefix = Some(c);
                 self.count = count;
                 return None;
@@ -49,6 +52,9 @@ impl KeyHandler {
             (Some('['), KeyCode::Char('f')) => Action::PrevFile(n),
             (Some(']'), KeyCode::Char('u')) => Action::NextUnreviewed(n),
             (Some('['), KeyCode::Char('u')) => Action::PrevUnreviewed(n),
+            (Some(']'), KeyCode::Char('m')) => Action::NextComment(n),
+            (Some('['), KeyCode::Char('m')) => Action::PrevComment(n),
+            (Some('d'), KeyCode::Char('d')) => Action::DeleteComment,
             (Some('z'), KeyCode::Char('a')) => Action::ToggleFold,
             (Some('z'), KeyCode::Char('o')) => Action::OpenFold,
             (Some('z'), KeyCode::Char('c')) => Action::CloseFold,
@@ -78,10 +84,41 @@ impl KeyHandler {
             (None, KeyCode::Char('s')) => Action::ToggleSidebar,
             (None, KeyCode::Char('r')) => Action::ToggleReviewed,
             (None, KeyCode::Char('R')) => Action::ToggleFileReviewed,
+            (None, KeyCode::Char('V' | 'v')) => Action::StartVisual,
+            (None, KeyCode::Char('c')) => Action::StartComment,
+            (None, KeyCode::Char('C')) => Action::CommentInEditor,
+            (None, KeyCode::Char(':')) => Action::EnterCommand,
             _ => return None,
         };
         Some(action)
     }
+}
+
+/// Keys for the comment box and the `:` line, readline-style.
+pub fn input_action(key: KeyEvent) -> Option<InputAction> {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    let action = match key.code {
+        KeyCode::Esc => InputAction::Cancel,
+        KeyCode::Char('c') if ctrl => InputAction::Cancel,
+        KeyCode::Enter if alt => InputAction::Newline,
+        KeyCode::Enter => InputAction::Submit,
+        KeyCode::Char('o') if ctrl => InputAction::OpenEditor,
+        KeyCode::Char('a') if ctrl => InputAction::Home,
+        KeyCode::Char('e') if ctrl => InputAction::End,
+        KeyCode::Char('w') if ctrl => InputAction::DeleteWord,
+        KeyCode::Char('u') if ctrl => InputAction::ClearToStart,
+        KeyCode::Char('h') if ctrl => InputAction::Backspace,
+        KeyCode::Char(c) if !ctrl => InputAction::Insert(c),
+        KeyCode::Backspace => InputAction::Backspace,
+        KeyCode::Delete => InputAction::Delete,
+        KeyCode::Left => InputAction::Left,
+        KeyCode::Right => InputAction::Right,
+        KeyCode::Home => InputAction::Home,
+        KeyCode::End => InputAction::End,
+        _ => return None,
+    };
+    Some(action)
 }
 
 #[cfg(test)]
@@ -111,6 +148,8 @@ mod tests {
         assert_eq!(h.pending(), "");
         assert_eq!(press(&mut h, "gg"), Some(Action::Top));
         assert_eq!(press(&mut h, "zM"), Some(Action::CloseAllFolds));
+        assert_eq!(press(&mut h, "2]m"), Some(Action::NextComment(2)));
+        assert_eq!(press(&mut h, "dd"), Some(Action::DeleteComment));
     }
 
     #[test]
@@ -118,10 +157,12 @@ mod tests {
         let mut h = KeyHandler::default();
         assert_eq!(press(&mut h, "gx"), None);
         assert_eq!(press(&mut h, "j"), Some(Action::Down(1)));
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
         press(&mut h, "5g");
-        h.handle(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(h.handle(esc), None);
         assert_eq!(h.pending(), "");
         assert_eq!(press(&mut h, "j"), Some(Action::Down(1)));
+        assert_eq!(h.handle(esc), Some(Action::Cancel));
     }
 
     #[test]
