@@ -69,6 +69,24 @@ pub(super) fn resolve(plan: &Plan, diff: &Diff) -> Vec<PlanPage> {
     pages
 }
 
+/// The diff's own sections, like a stack's layers, as pages: what the review
+/// follows when there's no plan from the organizer.
+pub(super) fn sections(diff: &Diff) -> Vec<PlanPage> {
+    diff.sections
+        .iter()
+        .map(|section| PlanPage {
+            title: section.title.clone(),
+            rationale: section.rationale.clone(),
+            hunks: section
+                .files
+                .clone()
+                .flat_map(|f| (0..diff.files[f].hunks.len()).map(move |h| (f, h)))
+                .collect(),
+        })
+        .filter(|page| !page.hunks.is_empty())
+        .collect()
+}
+
 impl App {
     pub fn is_organizing(&self) -> bool {
         self.organizing.is_some()
@@ -109,18 +127,29 @@ impl App {
         }
     }
 
-    /// Drops the plan, saved copy included, and goes back to the files.
+    /// Drops the plan, saved copy included, and goes back to the diff's
+    /// sections if it has any, or to the files.
     fn clear_plan(&mut self) {
-        if self.plan.is_empty() && self.review.plan().is_none() {
+        let sections = sections(&self.diff);
+        if self.plan == sections && self.review.plan().is_none() {
             self.message = Some("No plan to clear".to_string());
             return;
         }
-        if self.view == View::Plan {
-            self.set_view(View::Files);
-        }
-        self.plan.clear();
         self.review.clear_plan();
-        self.message = Some("Plan cleared".to_string());
+        if sections.is_empty() {
+            if self.view == View::Plan {
+                self.set_view(View::Files);
+            }
+            self.plan.clear();
+            self.message = Some("Plan cleared".to_string());
+        } else {
+            self.plan = sections;
+            if self.view == View::Plan {
+                self.rows.clear();
+                self.open_page(0, 0);
+            }
+            self.message = Some("Plan cleared: back to the stack's layers".to_string());
+        }
     }
 
     /// Takes the organizer's answer for `job`, saves the plan and shows it.
@@ -194,6 +223,7 @@ mod tests {
     use super::*;
     use crate::app::Action;
     use crate::organizer::PlanGroup;
+    use crate::review::ReviewState;
 
     /// A plan for the sample app: b.rs's hunk first, then a.rs's second hunk;
     /// a.rs's first hunk is left out.
@@ -421,6 +451,46 @@ mod tests {
         assert_eq!(app.view, View::Files);
         assert!(app.review.plan().is_none());
         assert_eq!(app.message.as_deref(), Some("error: the organizer didn't place any hunks"));
+    }
+
+    fn stacked_app() -> App {
+        let diff = Diff::sectioned(vec![
+            ("#1 types".into(), "Layer 1 of 2.".into(), vec![file("a.rs", &[3])]),
+            ("#2 logic".into(), "Layer 2 of 2.".into(), vec![file("a.rs", &[2]), file("b.rs", &[1])]),
+        ]);
+        App::new(String::new(), diff, ReviewState::default())
+    }
+
+    #[test]
+    fn a_stack_opens_layer_by_layer() {
+        let app = stacked_app();
+        assert_eq!(app.view, View::Plan);
+        let titles: Vec<_> = app.plan.iter().map(|p| p.title.as_str()).collect();
+        assert_eq!(titles, ["#1 types", "#2 logic"]);
+        assert_eq!(app.plan[1].hunks, [(1, 0), (2, 0)]);
+        // Nothing saved: the layers come from the diff each time.
+        assert!(app.review.plan().is_none());
+    }
+
+    #[test]
+    fn clearing_an_organized_stack_goes_back_to_its_layers() {
+        let mut app = stacked_app();
+        command(&mut app, "organize clear");
+        assert_eq!(app.message.as_deref(), Some("No plan to clear"));
+
+        command(&mut app, "organize");
+        let Some(Effect::Organize { job, .. }) = app.effect.take() else { panic!() };
+        let id = app.diff.files[2].hunks[0].id.clone();
+        let plan = Plan { groups: vec![PlanGroup { title: "AI".into(), rationale: String::new(), hunks: vec![id] }] };
+        app.finish_organize(job, Ok(plan));
+        assert_eq!(app.plan[0].title, "AI");
+
+        command(&mut app, "organize clear");
+        assert_eq!(app.message.as_deref(), Some("Plan cleared: back to the stack's layers"));
+        assert_eq!(app.view, View::Plan);
+        assert_eq!(app.plan, sections(&app.diff));
+        assert_eq!(app.current_row(), Some(Row::Group { group: 0, line: 0 }));
+        assert!(app.review.plan().is_none());
     }
 
     #[test]

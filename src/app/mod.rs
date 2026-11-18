@@ -108,14 +108,19 @@ impl App {
         app.collapsed = (0..app.diff.files.len())
             .map(|f| app.diff.files[f].looks_generated() || app.file_progress(f).is_complete())
             .collect();
-        // A review that has a plan picks up in it.
+        // A review that has a plan picks up in it; a stack without one
+        // follows its layers.
         if let Some(saved) = app.review.plan() {
             app.plan = plan::resolve(saved, &app.diff);
             if app.plan.is_empty() {
                 app.message = Some("Saved plan is for another diff: :organize to replan".to_string());
-            } else {
-                app.view = View::Plan;
             }
+        }
+        if app.plan.is_empty() {
+            app.plan = plan::sections(&app.diff);
+        }
+        if !app.plan.is_empty() {
+            app.view = View::Plan;
         }
         app.open_page(0, 0);
         app

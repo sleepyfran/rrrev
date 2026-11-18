@@ -63,7 +63,7 @@ pub const SECTIONS: &[Section] = &[
         entries: &[
             (":organize", "plan the review with AI, in the background"),
             (":organize cancel", "stop a running plan"),
-            (":organize clear", "drop the plan"),
+            (":organize clear", "drop the plan (a stack goes back to its layers)"),
             (":export [md|json] [path]", "write the comments to a file"),
             (":w / :q", "save / quit"),
             ("?", "this help"),

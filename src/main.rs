@@ -47,12 +47,18 @@ use review::ReviewState;
 #[command(version)]
 struct Cli {
     /// What to review: `<rev>` (vs the working tree), `a..b`, or `a...b` (from
-    /// the merge base). Defaults to HEAD vs the working tree, untracked files included.
+    /// the merge base). Defaults to HEAD vs the working tree, untracked files
+    /// included. A range from a stack's trunk to one of its branches is
+    /// reviewed layer by layer.
     spec: Option<String>,
 
     /// Review staged changes only (HEAD vs index).
     #[arg(long, conflicts_with = "spec")]
     staged: bool,
+
+    /// Review the current branch's stack (`gh stack`), one layer per group.
+    #[arg(long, conflicts_with_all = ["spec", "staged"])]
+    stack: bool,
 
     /// Print this review's comments to stdout as `md` or `json` and exit,
     /// e.g. to pipe them into an agent.
@@ -62,7 +68,7 @@ struct Cli {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let source = GitSource::discover(".", DiffSpec::from_args(cli.spec.as_deref(), cli.staged))?;
+    let source = GitSource::discover(".", DiffSpec::from_args(cli.spec.as_deref(), cli.staged))?.with_stack(cli.stack)?;
     // Load before entering the alternate screen so errors print normally.
     let state_file = source.state_file();
     let review = ReviewState::load(&state_file)?;

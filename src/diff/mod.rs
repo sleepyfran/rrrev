@@ -1,8 +1,10 @@
 //! Source-agnostic diff model, plus the trait every diff source implements.
 
 pub mod git;
+pub mod stack;
 
 use std::collections::HashMap;
+use std::ops::Range;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -21,14 +23,26 @@ pub trait DiffSource {
 #[derive(Debug, Clone, Default)]
 pub struct Diff {
     pub files: Vec<FileDiff>,
+    /// Runs of files reviewed as one group each, like the layers of a stack;
+    /// empty for a plain diff.
+    pub sections: Vec<Section>,
+}
+
+/// Consecutive files of a diff that belong together, e.g. one layer's diff.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Section {
+    pub title: String,
+    pub rationale: String,
+    pub files: Range<usize>,
 }
 
 impl Diff {
     /// Builds a diff, giving every hunk its content-based id.
     pub fn new(mut files: Vec<FileDiff>) -> Self {
+        // Shared across files, since a path shows up once per section.
+        let mut seen: HashMap<u64, usize> = HashMap::new();
         for file in &mut files {
             let path = file.path().to_string();
-            let mut seen: HashMap<u64, usize> = HashMap::new();
             for hunk in &mut file.hunks {
                 let hash = content_hash(&path, hunk);
                 let occurrence = seen.entry(hash).or_default();
@@ -39,7 +53,19 @@ impl Diff {
                 });
             }
         }
-        Diff { files }
+        Diff { files, sections: Vec::new() }
+    }
+
+    /// Builds a diff out of sections, each with its own files, in order.
+    pub fn sectioned(parts: Vec<(String, String, Vec<FileDiff>)>) -> Self {
+        let mut files = Vec::new();
+        let mut sections = Vec::new();
+        for (title, rationale, part) in parts {
+            let start = files.len();
+            files.extend(part);
+            sections.push(Section { title, rationale, files: start..files.len() });
+        }
+        Diff { sections, ..Diff::new(files) }
     }
 }
 
@@ -243,6 +269,18 @@ mod tests {
         assert_ne!(ids(&base), ids(&make("b.rs", LineKind::Added, "x")));
         assert_ne!(ids(&base), ids(&make("a.rs", LineKind::Removed, "x")));
         assert_ne!(ids(&base), ids(&make("a.rs", LineKind::Added, "y")));
+    }
+
+    #[test]
+    fn a_path_repeated_across_sections_keeps_ids_distinct() {
+        let same = || file("a.rs", vec![hunk(1, vec![line(LineKind::Added, 1, "x")])]);
+        let diff = Diff::sectioned(vec![
+            ("one".into(), String::new(), vec![same()]),
+            ("two".into(), String::new(), vec![same(), file("b.rs", Vec::new())]),
+        ]);
+        let ids = ids(&diff);
+        assert_ne!(ids[0], ids[1]);
+        assert_eq!(diff.sections[1].files, 1..3);
     }
 
     #[test]

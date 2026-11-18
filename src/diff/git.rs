@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use git2::{Delta, DiffOptions, Patch, Repository, Tree};
 
+use super::stack::Stack;
 use super::{Diff, DiffLine, DiffSource, FileDiff, FileStatus, Hunk, LineKind};
 
 /// Which two snapshots of the repository to compare.
@@ -18,6 +19,8 @@ pub enum DiffSpec {
     Range { from: String, to: String },
     /// `from...to`: merge base of both vs `to`.
     MergeBase { from: String, to: String },
+    /// Each layer of a stack against the one below, in order.
+    Stack(Stack),
 }
 
 impl DiffSpec {
@@ -47,6 +50,35 @@ impl GitSource {
         Ok(Self { repo, spec })
     }
 
+    /// Switches to reviewing a stack layer by layer: the current one with
+    /// `explicit` (`--stack`), or when the spec runs from a stack's trunk to
+    /// one of its branches.
+    pub fn with_stack(mut self, explicit: bool) -> Result<Self> {
+        let workdir = self.repo.workdir().unwrap_or(self.repo.path()).to_path_buf();
+        let detect = || Stack::detect(self.repo.commondir(), &workdir);
+        if explicit {
+            let stack = detect().context("the current branch is not part of a stack (see `gh stack view`)")?;
+            self.spec = DiffSpec::Stack(stack);
+            return Ok(self);
+        }
+        let (DiffSpec::Range { from, to } | DiffSpec::MergeBase { from, to }) = &self.spec else {
+            return Ok(self);
+        };
+        let Some(stack) = detect() else { return Ok(self) };
+        let same = |a: &str, b: &str| {
+            let commit = |rev: &str| self.repo.revparse_single(rev).and_then(|o| o.peel_to_commit()).map(|c| c.id());
+            matches!((commit(a), commit(b)), (Ok(a), Ok(b)) if a == b)
+        };
+        if !same(from, &stack.trunk) {
+            return Ok(self);
+        }
+        let top = stack.layers.iter().rev().find(|l| same(to, &l.branch)).map(|l| l.branch.clone());
+        if let Some(stack) = top.and_then(|top| stack.up_to(&top)) {
+            self.spec = DiffSpec::Stack(stack);
+        }
+        Ok(self)
+    }
+
     fn tree(&self, rev: &str) -> Result<Tree<'_>> {
         self.repo
             .revparse_single(rev)
@@ -57,6 +89,25 @@ impl GitSource {
     /// HEAD's tree, or `None` in a repository with no commits yet.
     fn head_tree(&self) -> Option<Tree<'_>> {
         self.repo.head().ok()?.peel_to_tree().ok()
+    }
+
+    /// `from...to`: the merge base of both vs `to`.
+    fn merge_base_diff(&self, from: &str, to: &str, opts: &mut DiffOptions) -> Result<git2::Diff<'_>> {
+        let repo = &self.repo;
+        let commit = |rev: &str| -> Result<git2::Oid> {
+            Ok(repo
+                .revparse_single(rev)
+                .and_then(|obj| obj.peel_to_commit())
+                .with_context(|| format!("cannot resolve `{rev}` to a commit"))?
+                .id())
+        };
+        let base = repo
+            .merge_base(commit(from)?, commit(to)?)
+            .with_context(|| format!("no merge base between `{from}` and `{to}`"))?;
+        let base_tree = repo.find_commit(base)?.tree()?;
+        let mut diff = repo.diff_tree_to_tree(Some(&base_tree), Some(&self.tree(to)?), Some(opts))?;
+        diff.find_similar(None)?;
+        Ok(diff)
     }
 
     fn git_diff(&self) -> Result<git2::Diff<'_>> {
@@ -77,16 +128,8 @@ impl GitSource {
             DiffSpec::Range { from, to } => {
                 repo.diff_tree_to_tree(Some(&self.tree(from)?), Some(&self.tree(to)?), Some(&mut opts))?
             }
-            DiffSpec::MergeBase { from, to } => {
-                let commit = |rev: &str| -> Result<git2::Oid> {
-                    Ok(repo.revparse_single(rev)?.peel_to_commit()?.id())
-                };
-                let base = repo
-                    .merge_base(commit(from)?, commit(to)?)
-                    .with_context(|| format!("no merge base between `{from}` and `{to}`"))?;
-                let base_tree = repo.find_commit(base)?.tree()?;
-                repo.diff_tree_to_tree(Some(&base_tree), Some(&self.tree(to)?), Some(&mut opts))?
-            }
+            DiffSpec::MergeBase { from, to } => return self.merge_base_diff(from, to, &mut opts),
+            DiffSpec::Stack(_) => unreachable!("stacks are loaded layer by layer"),
         };
         diff.find_similar(None)?;
         Ok(diff)
@@ -101,6 +144,7 @@ impl GitSource {
             DiffSpec::RevToWorkTree(rev) => format!("rev-{rev}"),
             DiffSpec::Range { from, to } => format!("range-{from}..{to}"),
             DiffSpec::MergeBase { from, to } => format!("mergebase-{from}...{to}"),
+            DiffSpec::Stack(stack) => format!("stack-{}-{}", stack.trunk, stack.top()),
         };
         key.chars()
             .map(|c| if c.is_ascii_alphanumeric() || "-_.".contains(c) { c } else { '_' })
@@ -116,35 +160,55 @@ impl DiffSource for GitSource {
             DiffSpec::RevToWorkTree(rev) => format!("{rev} → working tree"),
             DiffSpec::Range { from, to } => format!("{from}..{to}"),
             DiffSpec::MergeBase { from, to } => format!("{from}...{to}"),
+            DiffSpec::Stack(stack) => {
+                let layers = stack.layers.iter().map(|l| l.branch.as_str());
+                format!("stack {}", std::iter::once(stack.trunk.as_str()).chain(layers).collect::<Vec<_>>().join(" ← "))
+            }
         }
     }
 
     fn load(&self) -> Result<Diff> {
-        let diff = self.git_diff()?;
-        let mut files = Vec::with_capacity(diff.deltas().len());
-        for idx in 0..diff.deltas().len() {
-            let delta = diff.get_delta(idx).expect("index within deltas()");
-            let path = |file: git2::DiffFile| file.path().map(|p| p.to_string_lossy().into_owned());
-            let mut file = FileDiff {
-                old_path: path(delta.old_file()),
-                new_path: path(delta.new_file()),
-                status: map_status(delta.status()),
-                is_binary: delta.flags().is_binary(),
-                hunks: Vec::new(),
-            };
-            match Patch::from_diff(&diff, idx)? {
-                Some(patch) => file.hunks = read_hunks(&patch)?,
-                None => file.is_binary = true,
+        let DiffSpec::Stack(stack) = &self.spec else {
+            return Ok(Diff::new(read_files(&self.git_diff()?)?));
+        };
+        let count = stack.layers.len();
+        let mut parts = Vec::with_capacity(count);
+        for (i, layer) in stack.layers.iter().enumerate() {
+            let diff = self.merge_base_diff(&layer.base, &layer.branch, &mut DiffOptions::new())?;
+            let mut rationale = format!("Layer {} of {count}: {} → {}.", i + 1, layer.base, layer.branch);
+            if layer.needs_rebase {
+                rationale += " Needs a rebase onto the layer below.";
             }
-            files.push(file);
+            parts.push((layer.title(), rationale, read_files(&diff)?));
         }
-        Ok(Diff::new(files))
+        Ok(Diff::sectioned(parts))
     }
 
     fn state_file(&self) -> PathBuf {
         // `.git` itself, or `.git/worktrees/<name>` in a linked worktree.
         self.repo.path().join("rrrev").join(format!("{}.json", self.state_key()))
     }
+}
+
+fn read_files(diff: &git2::Diff) -> Result<Vec<FileDiff>> {
+    let mut files = Vec::with_capacity(diff.deltas().len());
+    for idx in 0..diff.deltas().len() {
+        let delta = diff.get_delta(idx).expect("index within deltas()");
+        let path = |file: git2::DiffFile| file.path().map(|p| p.to_string_lossy().into_owned());
+        let mut file = FileDiff {
+            old_path: path(delta.old_file()),
+            new_path: path(delta.new_file()),
+            status: map_status(delta.status()),
+            is_binary: delta.flags().is_binary(),
+            hunks: Vec::new(),
+        };
+        match Patch::from_diff(diff, idx)? {
+            Some(patch) => file.hunks = read_hunks(&patch)?,
+            None => file.is_binary = true,
+        }
+        files.push(file);
+    }
+    Ok(files)
 }
 
 fn map_status(delta: Delta) -> FileStatus {
@@ -255,6 +319,60 @@ mod tests {
 
         let new = diff.files.iter().find(|f| f.new_path.as_deref() == Some("new.txt")).unwrap();
         assert_eq!(new.status, FileStatus::Added);
+    }
+
+    #[test]
+    fn loads_a_stack_layer_by_layer() {
+        use crate::diff::stack::Layer;
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        fs::write(dir.path().join("a.txt"), "one\n").unwrap();
+        commit_all(&repo, "init");
+        let branch = |name: &str| {
+            let head = repo.head().unwrap().peel_to_commit().unwrap();
+            repo.branch(name, &head, true).unwrap();
+        };
+        branch("trunk");
+        fs::write(dir.path().join("a.txt"), "one\ntwo\n").unwrap();
+        commit_all(&repo, "first");
+        branch("first");
+        fs::write(dir.path().join("a.txt"), "one\ntwo\nthree\n").unwrap();
+        fs::write(dir.path().join("b.txt"), "b\n").unwrap();
+        commit_all(&repo, "second");
+        branch("second");
+
+        let layer = |branch: &str, base: &str, pr| Layer { branch: branch.into(), base: base.into(), pr, needs_rebase: false };
+        let stack = Stack {
+            trunk: "trunk".into(),
+            layers: vec![layer("first", "trunk", Some(7)), layer("second", "first", None)],
+        };
+        let source = GitSource::discover(dir.path(), DiffSpec::Stack(stack)).unwrap();
+        assert_eq!(source.describe(), "stack trunk ← first ← second");
+        assert!(source.state_file().ends_with("rrrev/stack-trunk-second.json"));
+
+        let diff = source.load().unwrap();
+        let paths: Vec<_> = diff.files.iter().map(|f| f.path()).collect();
+        assert_eq!(paths, ["a.txt", "a.txt", "b.txt"]);
+        assert_eq!(diff.sections[0].title, "#7 first");
+        assert_eq!(diff.sections[0].files, 0..1);
+        assert_eq!(diff.sections[1].rationale, "Layer 2 of 2: first → second.");
+        assert_eq!(diff.sections[1].files, 1..3);
+        // Each layer shows only its own change.
+        let added = |f: usize| -> Vec<&str> {
+            diff.files[f].hunks[0].lines.iter().filter(|l| l.kind == LineKind::Added).map(|l| l.content.as_str()).collect()
+        };
+        assert_eq!(added(0), ["two"]);
+        assert_eq!(added(1), ["three"]);
+    }
+
+    #[test]
+    fn plain_ranges_stay_plain_without_stack_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        Repository::init(dir.path()).unwrap();
+        let spec = DiffSpec::from_args(Some("main...feat"), false);
+        let source = GitSource::discover(dir.path(), spec.clone()).unwrap().with_stack(false).unwrap();
+        assert_eq!(source.spec, spec);
+        assert!(GitSource::discover(dir.path(), DiffSpec::WorkTree).unwrap().with_stack(true).is_err());
     }
 
     #[test]
