@@ -245,7 +245,8 @@ impl App {
     }
 
     pub(super) fn scroll_into_view(&mut self) {
-        if self.viewport_height == 0 {
+        // A clean working tree has no rows to scroll.
+        if self.viewport_height == 0 || self.rows.is_empty() {
             return;
         }
         if self.cursor < self.scroll {
