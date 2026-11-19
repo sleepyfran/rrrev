@@ -1,12 +1,14 @@
 //! Source-agnostic diff model, plus the trait every diff source implements.
 
 pub mod git;
+pub mod scope;
 pub mod stack;
 pub mod words;
 
 use std::collections::HashMap;
 use std::ops::Range;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -27,8 +29,35 @@ pub struct Diff {
     /// Runs of files reviewed as one group each, like the layers of a stack;
     /// empty for a plain diff.
     pub sections: Vec<Section>,
+    /// Per file, its whole text before and after, when the source could read
+    /// it; shorter than `files` (or empty) when it couldn't.
+    pub sources: Vec<Sources>,
     /// Per file, hunk and line: the byte ranges that changed word by word.
     words: Vec<Vec<Vec<Vec<Range<usize>>>>>,
+}
+
+/// A file's full text, line by line.
+pub type Source = Arc<Vec<String>>;
+
+/// A file's text on each side of the diff, where it exists.
+#[derive(Debug, Clone, Default)]
+pub struct Sources {
+    pub old: Option<Source>,
+    pub new: Option<Source>,
+}
+
+impl Sources {
+    /// Splits file contents into lines, as the diff numbers them.
+    pub fn lines(bytes: &[u8]) -> Source {
+        Arc::new(String::from_utf8_lossy(bytes).lines().map(str::to_string).collect())
+    }
+}
+
+/// Which side of the diff a line number counts on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    Old,
+    New,
 }
 
 /// Consecutive files of a diff that belong together, e.g. one layer's diff.
@@ -57,12 +86,51 @@ impl Diff {
             }
         }
         let words = files.iter().map(|f| f.hunks.iter().map(|h| words::changes(&h.lines)).collect()).collect();
-        Diff { files, sections: Vec::new(), words }
+        Diff { files, sections: Vec::new(), sources: Vec::new(), words }
+    }
+
+    /// The same diff, with the files' full text.
+    pub fn with_sources(self, sources: Vec<Sources>) -> Self {
+        Diff { sources, ..self }
     }
 
     /// The byte ranges of a line's content that changed, word by word.
     pub fn word_changes(&self, file: usize, hunk: usize, line: usize) -> &[Range<usize>] {
         self.words.get(file).and_then(|f| f.get(hunk)).and_then(|h| h.get(line)).map_or(&[], Vec::as_slice)
+    }
+
+    /// The text to show around a file's hunks: the new side, or the old one
+    /// for a deleted file, with the side its line numbers count on.
+    pub fn context_source(&self, file: usize) -> Option<(&Source, Side)> {
+        let sources = self.sources.get(file)?;
+        match (&sources.new, &sources.old) {
+            (Some(new), _) => Some((new, Side::New)),
+            (None, Some(old)) => Some((old, Side::Old)),
+            (None, None) => None,
+        }
+    }
+
+    /// The definitions around a diff line, outermost first: from the file's
+    /// text when there is one, on the line's own side.
+    pub fn scopes(&self, file: usize, hunk: usize, line: usize) -> Vec<scope::Scope> {
+        let l = &self.files[file].hunks[hunk].lines[line];
+        let sources = self.sources.get(file);
+        let new = sources.and_then(|s| s.new.as_ref()).zip(l.new_no);
+        let old = sources.and_then(|s| s.old.as_ref()).zip(l.old_no);
+        let on_side = if l.kind == LineKind::Removed { old.or(new) } else { new.or(old) };
+        on_side.map_or_else(Vec::new, |(source, no)| scope::enclosing(source, no))
+    }
+
+    /// What a hunk is in: the innermost definition around its first changed
+    /// line, or failing that the context git put in its `@@` header.
+    pub fn hunk_scope(&self, file: usize, hunk: usize) -> Option<String> {
+        let h = &self.files[file].hunks[hunk];
+        let first = h.lines.iter().position(|l| matches!(l.kind, LineKind::Added | LineKind::Removed)).unwrap_or(0);
+        if self.sources.get(file).is_some_and(|s| s.new.is_some() || s.old.is_some()) {
+            return (!h.lines.is_empty()).then(|| self.scopes(file, hunk, first).pop().map(|s| s.label)).flatten();
+        }
+        let context = h.header.rsplit_once("@@").map(|(_, rest)| rest.trim()).unwrap_or("");
+        (!context.is_empty()).then(|| context.to_string())
     }
 
     /// Builds a diff out of sections, each with its own files, in order.

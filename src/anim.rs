@@ -331,7 +331,9 @@ impl Animator {
             for &(row, rect) in rows {
                 let hit = match row {
                     Row::File { file } => glint.hunks.iter().any(|&(f, _)| f == file),
-                    Row::Hunk { file, hunk } | Row::Line { file, hunk, .. } => glint.hunks.contains(&(file, hunk)),
+                    Row::Hunk { file, hunk } | Row::Line { file, hunk, .. } | Row::Context { file, hunk, .. } => {
+                        glint.hunks.contains(&(file, hunk))
+                    }
                     Row::Group { .. } | Row::Comment { .. } => false,
                 };
                 if hit {

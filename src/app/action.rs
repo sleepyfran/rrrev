@@ -44,6 +44,13 @@ pub enum Action {
     FocusSidebar,
     FocusDiff,
     ToggleSidebar,
+    /// `[e` / `]e`: more of the file above / below the hunk, in steps.
+    ExpandAbove(usize),
+    ExpandBelow(usize),
+    /// `ze`: the whole function the hunk is in.
+    ExpandScope,
+    /// `zE`: drop all the extra context.
+    ResetContext,
     Select,
     Cancel,
     Quit,

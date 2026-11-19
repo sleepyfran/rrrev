@@ -5,6 +5,7 @@
 mod action;
 mod command;
 mod comments;
+mod context;
 mod marks;
 mod mode;
 mod navigation;
@@ -16,11 +17,14 @@ mod view;
 mod test_support;
 
 pub use action::{Action, Effect};
+pub use context::{context_numbers, context_text, is_above};
 pub use marks::Progress;
 pub use mode::{CommentTarget, Focus, Mode, View};
 pub use plan::Job;
 pub use search::find_matches;
 pub use view::Row;
+
+use std::collections::HashMap;
 
 use crate::diff::{Diff, DiffLine, Hunk};
 use crate::input::InputAction;
@@ -65,6 +69,8 @@ pub struct App {
     pub highlight_search: bool,
     /// First line shown of the `?` overlay, while it's open.
     pub help_scroll: Option<usize>,
+    /// Extra lines of the file shown around hunks, by `(file, hunk)`.
+    pub expanded: HashMap<(usize, usize), context::Expansion>,
     pub should_quit: bool,
 }
 
@@ -102,6 +108,7 @@ impl App {
             search: None,
             highlight_search: false,
             help_scroll: None,
+            expanded: HashMap::new(),
             should_quit: false,
         };
         // Generated files and files already reviewed start out of the way.
@@ -128,7 +135,12 @@ impl App {
 
     /// True while keys should go to a text field rather than the keymap.
     pub fn is_typing(&self) -> bool {
-        matches!(self.mode, Mode::Comment { .. } | Mode::Command { .. } | Mode::Search { .. })
+        matches!(
+            self.mode,
+            Mode::Comment { .. }
+                | Mode::Command { .. }
+                | Mode::Search { .. }
+        )
     }
 
     pub fn update(&mut self, action: Action) {
@@ -183,6 +195,10 @@ impl App {
             Action::FocusSidebar => self.focus_sidebar(),
             Action::FocusDiff => self.focus = Focus::Diff,
             Action::ToggleSidebar => self.toggle_sidebar(),
+            Action::ExpandAbove(n) => self.expand(n, true),
+            Action::ExpandBelow(n) => self.expand(n, false),
+            Action::ExpandScope => self.expand_scope(),
+            Action::ResetContext => self.reset_context(),
             Action::Select => {
                 if let Some(Row::File { .. }) = self.current_row() {
                     self.toggle_fold();

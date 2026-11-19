@@ -9,8 +9,11 @@ use ratatui::{
 use std::ops::Range;
 
 use crate::anim::{Animator, Popup};
-use crate::app::{App, CommentTarget, Focus, Mode, Progress, Row, View, find_matches};
-use crate::diff::{FileStatus, LineKind};
+use crate::app::{
+    App, CommentTarget, Focus, Mode, Progress, Row, View, context_numbers, context_text,
+    find_matches, is_above,
+};
+use crate::diff::{FileStatus, LineKind, scope};
 use crate::help;
 use crate::highlight::{Highlighter, Segment};
 use crate::text::wrap_words;
@@ -44,10 +47,13 @@ pub fn render(frame: &mut Frame, app: &mut App, highlighter: &mut Highlighter, a
     // The comment box covers the bottom of the diff, so rows scroll above it
     // and the commented line stays in sight.
     let comment_box = comment_box_area(app, body);
-    let rows_area = Rect { height: body.height - comment_box.map_or(0, |b| b.height), ..body };
+    let diff_area = Rect { height: body.height - comment_box.map_or(0, |b| b.height), ..body };
+    // Where the cursor is in its file, above the rows.
+    let [crumbs, rows_area] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(diff_area);
     app.set_viewport(rows_area.width as usize, rows_area.height as usize);
     render_title(frame, title, app);
     anim.glint_title(frame.buffer_mut(), title);
+    render_breadcrumbs(frame, crumbs, app);
     let scroll = anim.scroll(app);
     let rows = render_body(frame, rows_area, app, highlighter, scroll);
     anim.glint_rows(frame.buffer_mut(), &rows);
@@ -172,15 +178,13 @@ fn render_title(frame: &mut Frame, area: Rect, app: &App) {
         n => format!("{n} comments · "),
     };
     let organizing = match app.organizing {
-        Some(job) => {
-            const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-            let elapsed = job.started.elapsed();
-            let frame = SPINNER[(elapsed.as_millis() / 100) as usize % SPINNER.len()];
-            format!("{frame} organizing… {}s · ", elapsed.as_secs())
-        }
+        Some(job) => format!("{} organizing… {}s · ", spinner(job.started), job.started.elapsed().as_secs()),
         None => String::new(),
     };
-    let right = format!("{organizing}{comments}{}/{} hunks reviewed{done} ", progress.reviewed, progress.total);
+    let right = format!(
+        "{organizing}{comments}{}/{} hunks reviewed{done} ",
+        progress.reviewed, progress.total
+    );
     // In a narrow pane the status on the right matters more than the title.
     let left = if left.chars().count() + right.chars().count() > area.width as usize {
         " rrrev ".to_string()
@@ -195,6 +199,12 @@ fn render_title(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled(right, right_style.bold()),
     ]);
     frame.render_widget(Paragraph::new(line).reversed(), area);
+}
+
+/// A braille spinner frame for something running since `started`.
+fn spinner(started: std::time::Instant) -> char {
+    const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    SPINNER[(started.elapsed().as_millis() / 100) as usize % SPINNER.len()]
 }
 
 /// `✓` when fully reviewed, `◐` when partly.
@@ -407,6 +417,7 @@ fn row_lines(app: &App, row: Row, highlighter: &mut Highlighter) -> Vec<Line<'st
             .map(|l| l.patch_style(Style::new().dim()))
             .collect(),
         Row::Line { file, hunk, line } => diff_line(app, highlighter, file, hunk, line),
+        Row::Context { file, hunk, no } => context_line(app, highlighter, file, hunk, no),
         Row::Comment { id, line, .. } => comment_line(app, id, line),
         row => vec![row_line(app, row)],
     }
@@ -442,16 +453,36 @@ fn row_line(app: &App, row: Row) -> Line<'static> {
         }
         Row::Hunk { file, hunk } => {
             let header = &app.hunk(file, hunk).header;
-            if app.is_reviewed(file, hunk) {
-                Line::from(vec![
-                    Span::styled("✓", Style::new().fg(Color::Green).bold()),
-                    Span::styled(format!(" {header}"), Style::new().fg(Color::Cyan).dim()),
-                ])
-            } else {
-                Line::from(Span::styled(format!("  {header}"), Style::new().fg(Color::Cyan)))
+            // The line ranges, then what the hunk is in: the definition from
+            // the file's text, or git's own guess after the `@@`.
+            let ranges = match header.match_indices("@@").nth(1) {
+                Some((i, _)) => &header[..i + 2],
+                None => header.as_str(),
+            };
+            let reviewed = app.is_reviewed(file, hunk);
+            let mut spans = vec![
+                if reviewed { Span::styled("✓ ", Style::new().fg(Color::Green).bold()) } else { Span::raw("  ") },
+                Span::styled(ranges.to_string(), Style::new().fg(Color::Cyan)),
+            ];
+            if let Some(scope) = app.diff.hunk_scope(file, hunk) {
+                spans.push(Span::raw(" "));
+                spans.push(Span::styled(scope, Style::new().bold()));
             }
+            let (above, below) = app.hidden_around(file, hunk);
+            let mut hidden = Vec::new();
+            if above > 0 {
+                hidden.push(format!("[e {above} above"));
+            }
+            if below > 0 {
+                hidden.push(format!("]e {below} below"));
+            }
+            if !hidden.is_empty() && app.diff.context_source(file).is_some() {
+                spans.push(Span::raw(format!("  ⋯ {} · ze function", hidden.join(" · "))).dim());
+            }
+            let line = Line::from(spans);
+            if reviewed { line.patch_style(Style::new().dim()) } else { line }
         }
-        Row::Line { .. } | Row::Comment { .. } => unreachable!("drawn by row_lines"),
+        Row::Line { .. } | Row::Context { .. } | Row::Comment { .. } => unreachable!("drawn by row_lines"),
     }
 }
 
@@ -596,6 +627,81 @@ fn emphasize(segments: Vec<Segment>, ranges: &[Range<usize>], style: Style) -> V
     out
 }
 
+/// A line of the file shown as extra context next to a hunk: numbered on
+/// both sides, with a dotted bar to tell it from the diff's own lines.
+fn context_line(app: &App, highlighter: &mut Highlighter, file: usize, hunk: usize, no: u32) -> Vec<Line<'static>> {
+    let Some((_, side)) = app.diff.context_source(file) else { return vec![Line::default()] };
+    let h = app.hunk(file, hunk);
+    let (old_no, new_no) = context_numbers(h, side, no, is_above(h, side, no));
+    let w = app.gutter_width;
+    let number = |n: Option<u32>| n.map_or_else(|| " ".repeat(w), |n| format!("{n:>w$}"));
+    let bar = Span::styled("┊", Style::new().fg(Color::DarkGray));
+    let gutter = vec![
+        Span::raw(" "),
+        Span::raw(number(old_no)).dim(),
+        Span::raw(" "),
+        Span::raw(number(new_no)).dim(),
+        Span::raw(" "),
+        bar.clone(),
+        Span::raw(" "),
+    ];
+    let hang = vec![Span::raw(" ".repeat(2 * w + 3)), bar, Span::raw(" ")];
+    let text = context_text(&app.diff, file, no).unwrap_or("");
+    let segments = match highlighter.source_line(&app.diff, file, no) {
+        [] => vec![(Style::new(), text.to_string())],
+        segments => segments.to_vec(),
+    };
+    let segments = segments.into_iter().map(|(style, text)| (style, text.replace('\t', "    "))).collect();
+    hanging(app, gutter, hang, highlighted(segments, app))
+}
+
+/// The path of the file under the cursor and the definitions around it,
+/// outermost first: `src/output.rs › impl Output › fn truncate(…)`.
+fn render_breadcrumbs(frame: &mut Frame, area: Rect, app: &App) {
+    let Some(row) = app.current_row() else { return };
+    let Some(file) = row.file() else {
+        let title = app.plan.get(app.page).map_or(String::new(), |p| p.title.clone());
+        frame.render_widget(Paragraph::new(Line::from(Span::raw(format!(" {title}")).dim())), area);
+        return;
+    };
+    let scopes: Vec<String> = match row {
+        Row::Line { file, hunk, line } => app.diff.scopes(file, hunk, line).into_iter().map(|s| s.label).collect(),
+        Row::Hunk { file, hunk } => {
+            let line = app.hunk(file, hunk).lines.iter().position(|l| l.kind != LineKind::Context).unwrap_or(0);
+            if app.hunk(file, hunk).lines.is_empty() {
+                Vec::new()
+            } else {
+                app.diff.scopes(file, hunk, line).into_iter().map(|s| s.label).collect()
+            }
+        }
+        Row::Context { file, no, .. } => app.diff.context_source(file).map_or_else(Vec::new, |(source, _)| {
+            scope::enclosing(source, no).into_iter().map(|s| s.label).collect()
+        }),
+        Row::Group { .. } | Row::File { .. } | Row::Comment { .. } => Vec::new(),
+    };
+    let path = app.diff.files[file].path().to_string();
+    let width = area.width as usize;
+    // Outer scopes give way first when it doesn't fit, then the path's head.
+    let mut scopes = scopes;
+    let len = |scopes: &[String]| path.chars().count() + 2 + scopes.iter().map(|s| s.chars().count() + 3).sum::<usize>();
+    while scopes.len() > 1 && len(&scopes) > width {
+        if scopes[0] == "…" {
+            scopes.remove(1);
+        } else {
+            scopes[0] = "…".to_string();
+        }
+    }
+    let separator = || Span::styled(" › ", Style::new().fg(Color::DarkGray));
+    let room = width.saturating_sub(len(&scopes) - path.chars().count());
+    let mut spans = vec![Span::raw(" "), Span::raw(truncate_left(&path, room.max(8))).dim()];
+    for (i, scope) in scopes.iter().enumerate() {
+        spans.push(separator());
+        let innermost = i + 1 == scopes.len();
+        spans.push(Span::styled(scope.clone(), if innermost { Style::new().bold() } else { Style::new() }));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
 const MAX_COMMENT_BOX_LINES: u16 = 8;
 
 fn comment_box_area(app: &App, body: Rect) -> Option<Rect> {
@@ -699,6 +805,9 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
                 location.push_str(&format!(":{n}"));
             }
         }
+        if let Row::Context { no, .. } = row {
+            location.push_str(&format!(":{no}"));
+        }
         parts.push(location);
         parts.push(match app.view {
             View::Files => format!("file {}/{}", app.page + 1, app.diff.files.len()),
@@ -728,9 +837,9 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
         None => {
             let hints = match app.mode {
                 Mode::Visual { .. } => " c comment on selection  Esc cancel ",
-                // The comment box lists its own keys.
+                // The boxes list their own keys.
                 Mode::Comment { .. } => " ",
-                _ => " ? help  r review  c comment  ]u unreviewed  ]f page  p plan  / search  q quit ",
+                _ => " ? help  r review  c comment  [e ]e ze context  ]u unreviewed  q quit ",
             };
             let hints = if fits(&left, hints) { hints } else { " " };
             (hints.to_string(), Style::new().dim())
