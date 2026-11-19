@@ -53,9 +53,16 @@ pub type Segment = (Style, String);
 pub struct Highlighter {
     syntaxes: SyntaxSet,
     theme: Theme,
+    background: Background,
     /// Per `(file, hunk)`: each line's segments, empty for lines left plain.
     cache: HashMap<(usize, usize), Vec<Vec<Segment>>>,
+    /// Per file: each line of its whole text, for context shown around hunks.
+    sources: HashMap<usize, Vec<Vec<Segment>>>,
 }
+
+/// Files longer than this are shown as plain text around hunks, rather than
+/// highlighted whole.
+const MAX_SOURCE_LINES: usize = 20_000;
 
 impl Highlighter {
     pub fn new(background: Background) -> Self {
@@ -68,7 +75,67 @@ impl Highlighter {
                 scope.style.foreground = scope.style.foreground.map(readable_on_white);
             }
         }
-        Self { syntaxes: two_face::syntax::extra_newlines(), theme, cache: HashMap::new() }
+        Self {
+            syntaxes: two_face::syntax::extra_newlines(),
+            theme,
+            background,
+            cache: HashMap::new(),
+            sources: HashMap::new(),
+        }
+    }
+
+    /// The tint behind words that changed within a changed line.
+    pub fn emphasis(&self, kind: LineKind) -> Style {
+        let bg = match (self.background, kind) {
+            (Background::Dark, LineKind::Removed) => Color::Rgb(110, 38, 44),
+            (Background::Dark, _) => Color::Rgb(30, 92, 50),
+            (Background::Light, LineKind::Removed) => Color::Rgb(255, 196, 196),
+            (Background::Light, _) => Color::Rgb(188, 240, 196),
+        };
+        Style::new().bg(bg)
+    }
+
+    /// The segments of line `no` (1-based) of a file's whole text, for
+    /// context shown around its hunks. The file is highlighted top to bottom
+    /// the first time, so lines start in the right state.
+    pub fn source_line(&mut self, diff: &Diff, file: usize, no: u32) -> &[Segment] {
+        if !self.sources.contains_key(&file) {
+            let lines = match diff.context_source(file) {
+                Some((source, _)) if source.len() <= MAX_SOURCE_LINES => {
+                    self.highlight_source(diff.files[file].path(), source)
+                }
+                _ => Vec::new(),
+            };
+            self.sources.insert(file, lines);
+        }
+        let index = (no as usize).checked_sub(1);
+        index.and_then(|i| self.sources[&file].get(i)).map_or(&[], Vec::as_slice)
+    }
+
+    fn highlight_source(&self, path: &str, source: &[String]) -> Vec<Vec<Segment>> {
+        let name = path.rsplit('/').next().unwrap_or(path);
+        let syntax = name
+            .rsplit_once('.')
+            .and_then(|(_, ext)| self.syntaxes.find_syntax_by_extension(ext))
+            .or_else(|| self.syntaxes.find_syntax_by_extension(name))
+            .or_else(|| source.first().and_then(|l| self.syntaxes.find_syntax_by_first_line(l)))
+            .filter(|s| s.name != "Plain Text");
+        let Some(syntax) = syntax else { return Vec::new() };
+        let mut parser = HighlightLines::new(syntax, &self.theme);
+        source
+            .iter()
+            .map(|line| {
+                let text = format!("{line}\n");
+                match parser.highlight_line(&text, &self.syntaxes) {
+                    Ok(ranges) if line.len() <= MAX_LINE_LEN => ranges
+                        .into_iter()
+                        .map(|(style, text)| (self.style(style), text.trim_end_matches('\n').to_string()))
+                        .filter(|(_, text)| !text.is_empty())
+                        .collect(),
+                    _ => Vec::new(),
+                }
+            })
+            .collect()
     }
 
     /// The segments of one diff line; empty when it should be drawn plain,
@@ -235,6 +302,21 @@ mod tests {
             let Color::Rgb(r, g, b) = color else { panic!("{color:?}") };
             assert!(contrast_with_white(highlighting::Color { r, g, b, a: 255 }) >= 4.5, "{color:?}");
         }
+    }
+
+    #[test]
+    fn highlights_whole_sources_for_context() {
+        use crate::diff::Sources;
+        let mut diff = diff("a.rs", &[(LineKind::Added, "x")]);
+        diff.sources = vec![Sources { old: None, new: Some(std::sync::Arc::new(vec!["/*".into(), "fn a() {}".into()])) }];
+        let mut highlighter = Highlighter::new(Background::Dark);
+        assert_eq!(text(highlighter.source_line(&diff, 0, 2)), "fn a() {}");
+        // Line 2 is inside the comment line 1 opened.
+        let inside = highlighter.source_line(&diff, 0, 2).to_vec();
+        let plain = Highlighter::new(Background::Dark).line(&super::tests::diff("a.rs", &[(LineKind::Added, "fn a() {}")]), 0, 0, 0).to_vec();
+        assert_ne!(inside, plain);
+        assert!(highlighter.source_line(&diff, 0, 0).is_empty());
+        assert!(highlighter.source_line(&diff, 0, 9).is_empty());
     }
 
     #[test]

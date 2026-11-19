@@ -6,11 +6,17 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Clear, Paragraph},
 };
 
+use std::ops::Range;
+
 use crate::anim::{Animator, Popup};
-use crate::app::{App, CommentTarget, Focus, Mode, Progress, Row, View, find_matches};
-use crate::diff::{FileStatus, LineKind};
+use crate::app::{
+    Answer, App, CommentTarget, Focus, LineStats, Mode, Progress, Row, View, context_numbers, context_text,
+    find_matches, is_above,
+};
+use crate::diff::{FileStatus, LineKind, scope};
 use crate::help;
 use crate::highlight::{Highlighter, Segment};
+use crate::review::VerdictKind;
 use crate::text::wrap_words;
 
 /// Below this many columns the sidebar won't dock, as it would leave too
@@ -39,17 +45,39 @@ pub fn render(frame: &mut Frame, app: &mut App, highlighter: &mut Highlighter, a
         main
     };
 
+    // The ask panel docks to the right of a wide diff, or under a narrow one.
+    let (body, ask_area) = match app.ask.open {
+        true if body.width >= ASK_DOCK_RIGHT_FROM => {
+            let width = (body.width * 2 / 5).clamp(36, 72);
+            let [body, ask] = Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(body);
+            (body, Some((ask, true)))
+        }
+        true => {
+            let [body, ask] = Layout::vertical([Constraint::Percentage(55), Constraint::Min(0)]).areas(body);
+            (body, Some((ask, false)))
+        }
+        false => (body, None),
+    };
+
     // The comment box covers the bottom of the diff, so rows scroll above it
     // and the commented line stays in sight.
     let comment_box = comment_box_area(app, body);
-    let rows_area = Rect { height: body.height - comment_box.map_or(0, |b| b.height), ..body };
+    let diff_area = Rect { height: body.height - comment_box.map_or(0, |b| b.height), ..body };
+    // Where the cursor is in its file, above the rows.
+    let [crumbs, rows_area] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(diff_area);
     app.set_viewport(rows_area.width as usize, rows_area.height as usize);
     render_title(frame, title, app);
     anim.glint_title(frame.buffer_mut(), title);
+    render_breadcrumbs(frame, crumbs, app);
     let scroll = anim.scroll(app);
     let rows = render_body(frame, rows_area, app, highlighter, scroll);
+    let shown: Vec<Row> = rows.iter().map(|(row, _)| *row).collect();
+    app.mark_seen(&shown);
     anim.glint_rows(frame.buffer_mut(), &rows);
     anim.slide(frame.buffer_mut(), rows_area);
+    if let Some((area, docked_right)) = ask_area {
+        render_ask_panel(frame, area, app, docked_right);
+    }
     let cursor = comment_box.map(|area| render_comment_box(frame, area, app));
     if let Some(unroll) = anim.popup(frame.buffer_mut(), Popup::Comment, comment_box, None)
         && let Some((x, y)) = cursor
@@ -61,7 +89,7 @@ pub fn render(frame: &mut Frame, app: &mut App, highlighter: &mut Highlighter, a
     render_status(frame, status, app, pending);
 
     let sidebar_popup = app.compact && app.focus == Focus::Sidebar;
-    if sidebar_popup || app.help_scroll.is_some() {
+    if sidebar_popup || app.help_scroll.is_some() || app.show_verdict {
         dim_backdrop(frame);
     }
     // What the pop-ups cover, to show around them as they unroll.
@@ -72,9 +100,14 @@ pub fn render(frame: &mut Frame, app: &mut App, highlighter: &mut Highlighter, a
         rect
     });
     anim.popup(frame.buffer_mut(), Popup::Sidebar, sidebar, Some(&under));
+    let verdict = app.show_verdict.then(|| render_verdict(frame, frame.area(), app));
+    anim.popup(frame.buffer_mut(), Popup::Verdict, verdict, Some(&under));
     let help = app.help_scroll.is_some().then(|| render_help(frame, frame.area(), app));
     anim.popup(frame.buffer_mut(), Popup::Help, help, Some(&under));
 }
+
+/// From this many columns the ask panel docks at the diff's right.
+const ASK_DOCK_RIGHT_FROM: u16 = 110;
 
 /// Greys out everything drawn so far, so a pop-up drawn on top stands out.
 /// Done with plain colours rather than the dim attribute, which many
@@ -170,15 +203,19 @@ fn render_title(frame: &mut Frame, area: Rect, app: &App) {
         n => format!("{n} comments · "),
     };
     let organizing = match app.organizing {
-        Some(job) => {
-            const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-            let elapsed = job.started.elapsed();
-            let frame = SPINNER[(elapsed.as_millis() / 100) as usize % SPINNER.len()];
-            format!("{frame} organizing… {}s · ", elapsed.as_secs())
-        }
+        Some(job) => format!("{} organizing… {}s · ", spinner(job.started), job.started.elapsed().as_secs()),
         None => String::new(),
     };
-    let right = format!("{organizing}{comments}{}/{} hunks reviewed{done} ", progress.reviewed, progress.total);
+    // The panel shows its own spinner; this one is for when it's hidden.
+    let asking = match app.ask.running.filter(|_| !app.ask.open) {
+        Some(job) => format!("{} asking… · ", spinner(job.started)),
+        None => String::new(),
+    };
+    let seen = format!("{}% seen · ", app.line_stats().seen_percent());
+    let right = format!(
+        "{organizing}{asking}{comments}{seen}{}/{} hunks reviewed{done} ",
+        progress.reviewed, progress.total
+    );
     // In a narrow pane the status on the right matters more than the title.
     let left = if left.chars().count() + right.chars().count() > area.width as usize {
         " rrrev ".to_string()
@@ -193,6 +230,12 @@ fn render_title(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled(right, right_style.bold()),
     ]);
     frame.render_widget(Paragraph::new(line).reversed(), area);
+}
+
+/// A braille spinner frame for something running since `started`.
+fn spinner(started: std::time::Instant) -> char {
+    const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    SPINNER[(started.elapsed().as_millis() / 100) as usize % SPINNER.len()]
 }
 
 /// `✓` when fully reviewed, `◐` when partly.
@@ -405,7 +448,9 @@ fn row_lines(app: &App, row: Row, highlighter: &mut Highlighter) -> Vec<Line<'st
             .map(|l| l.patch_style(Style::new().dim()))
             .collect(),
         Row::Line { file, hunk, line } => diff_line(app, highlighter, file, hunk, line),
+        Row::Context { file, hunk, no } => context_line(app, highlighter, file, hunk, no),
         Row::Comment { id, line, .. } => comment_line(app, id, line),
+        Row::Note { note, .. } => note_line(app, note),
         row => vec![row_line(app, row)],
     }
 }
@@ -417,7 +462,18 @@ fn row_line(app: &App, row: Row) -> Line<'static> {
             let header = app.group_header(group);
             let Some((is_title, text)) = header.get(line).cloned() else { return Line::default() };
             let style = if is_title { Style::new().fg(Color::Magenta).bold() } else { Style::new().italic() };
-            Line::from(vec![Span::styled("▌ ", Style::new().fg(Color::Magenta)), Span::styled(text, style)])
+            let mut spans = vec![Span::styled("▌ ", Style::new().fg(Color::Magenta)), Span::styled(text, style)];
+            // How far this step is, after its title.
+            if line == 0 {
+                let progress = app.group_progress(group);
+                spans.push(if progress.is_complete() {
+                    let next = if group + 1 < app.plan.len() { " · ]f next step" } else { "" };
+                    Span::styled(format!("  ✓ {0} of {0} · all good{next}", progress.total), Style::new().fg(Color::Green))
+                } else {
+                    Span::raw(format!("  {} of {} hunks", progress.reviewed, progress.total)).dim()
+                });
+            }
+            Line::from(spans)
         }
         Row::File { file } => {
             let f = &app.diff.files[file];
@@ -440,16 +496,38 @@ fn row_line(app: &App, row: Row) -> Line<'static> {
         }
         Row::Hunk { file, hunk } => {
             let header = &app.hunk(file, hunk).header;
-            if app.is_reviewed(file, hunk) {
-                Line::from(vec![
-                    Span::styled("✓", Style::new().fg(Color::Green).bold()),
-                    Span::styled(format!(" {header}"), Style::new().fg(Color::Cyan).dim()),
-                ])
-            } else {
-                Line::from(Span::styled(format!("  {header}"), Style::new().fg(Color::Cyan)))
+            // The line ranges, then what the hunk is in: the definition from
+            // the file's text, or git's own guess after the `@@`.
+            let ranges = match header.match_indices("@@").nth(1) {
+                Some((i, _)) => &header[..i + 2],
+                None => header.as_str(),
+            };
+            let reviewed = app.is_reviewed(file, hunk);
+            let mut spans = vec![
+                if reviewed { Span::styled("✓ ", Style::new().fg(Color::Green).bold()) } else { Span::raw("  ") },
+                Span::styled(ranges.to_string(), Style::new().fg(Color::Cyan)),
+            ];
+            if let Some(scope) = app.diff.hunk_scope(file, hunk) {
+                spans.push(Span::raw(" "));
+                spans.push(Span::styled(scope, Style::new().bold()));
             }
+            let (above, below) = app.hidden_around(file, hunk);
+            let mut hidden = Vec::new();
+            if above > 0 {
+                hidden.push(format!("[e {above} above"));
+            }
+            if below > 0 {
+                hidden.push(format!("]e {below} below"));
+            }
+            if !hidden.is_empty() && app.diff.context_source(file).is_some() {
+                spans.push(Span::raw(format!("  ⋯ {} · ze function", hidden.join(" · "))).dim());
+            }
+            let line = Line::from(spans);
+            if reviewed { line.patch_style(Style::new().dim()) } else { line }
         }
-        Row::Line { .. } | Row::Comment { .. } => unreachable!("drawn by row_lines"),
+        Row::Line { .. } | Row::Context { .. } | Row::Comment { .. } | Row::Note { .. } => {
+            unreachable!("drawn by row_lines")
+        }
     }
 }
 
@@ -558,8 +636,359 @@ fn diff_line(app: &App, highlighter: &mut Highlighter, file: usize, hunk: usize,
         [] => vec![(text_style, l.content.clone())],
         segments => segments.to_vec(),
     };
+    // What changed within the line, word by word, gets a tint behind it.
+    let changes = app.diff.word_changes(file, hunk, line);
+    let segments = emphasize(segments, changes, highlighter.emphasis(l.kind));
     let segments = segments.into_iter().map(|(style, text)| (style, text.replace('\t', "    "))).collect();
     hanging(app, gutter, hang, highlighted(segments, app))
+}
+
+/// Splits `segments` where `ranges` (byte offsets into their joined text)
+/// start and end, and patches `style` onto the parts inside them.
+fn emphasize(segments: Vec<Segment>, ranges: &[Range<usize>], style: Style) -> Vec<Segment> {
+    if ranges.is_empty() {
+        return segments;
+    }
+    let mut out = Vec::new();
+    let mut start = 0;
+    for (seg_style, text) in segments {
+        let end = start + text.len();
+        let mut cuts: Vec<usize> = ranges
+            .iter()
+            .flat_map(|r| [r.start, r.end])
+            .filter(|&c| c > start && c < end && text.is_char_boundary(c - start))
+            .collect();
+        cuts.sort_unstable();
+        cuts.dedup();
+        let mut from = start;
+        for to in cuts.into_iter().chain([end]) {
+            let inside = ranges.iter().any(|r| r.start <= from && to <= r.end);
+            let piece = text[from - start..to - start].to_string();
+            out.push((if inside { seg_style.patch(style) } else { seg_style }, piece));
+            from = to;
+        }
+        start = end;
+    }
+    out
+}
+
+/// A line of the file shown as extra context next to a hunk: numbered on
+/// both sides, with a dotted bar to tell it from the diff's own lines.
+fn context_line(app: &App, highlighter: &mut Highlighter, file: usize, hunk: usize, no: u32) -> Vec<Line<'static>> {
+    let Some((_, side)) = app.diff.context_source(file) else { return vec![Line::default()] };
+    let h = app.hunk(file, hunk);
+    let (old_no, new_no) = context_numbers(h, side, no, is_above(h, side, no));
+    let w = app.gutter_width;
+    let number = |n: Option<u32>| n.map_or_else(|| " ".repeat(w), |n| format!("{n:>w$}"));
+    let bar = Span::styled("┊", Style::new().fg(Color::DarkGray));
+    let gutter = vec![
+        Span::raw(" "),
+        Span::raw(number(old_no)).dim(),
+        Span::raw(" "),
+        Span::raw(number(new_no)).dim(),
+        Span::raw(" "),
+        bar.clone(),
+        Span::raw(" "),
+    ];
+    let hang = vec![Span::raw(" ".repeat(2 * w + 3)), bar, Span::raw(" ")];
+    let text = context_text(&app.diff, file, no).unwrap_or("");
+    let segments = match highlighter.source_line(&app.diff, file, no) {
+        [] => vec![(Style::new(), text.to_string())],
+        segments => segments.to_vec(),
+    };
+    let segments = segments.into_iter().map(|(style, text)| (style, text.replace('\t', "    "))).collect();
+    hanging(app, gutter, hang, highlighted(segments, app))
+}
+
+/// An agent note, set out like a comment but in the AI's colour.
+fn note_line(app: &App, note: usize) -> Vec<Line<'static>> {
+    let Some(n) = app.notes.get(note) else { return vec![Line::default()] };
+    let indent = Span::raw(" ".repeat(app.code_column() - 2));
+    let color = Style::new().fg(Color::Magenta);
+    let gutter = vec![indent.clone(), Span::styled("┃ ◆ ", color)];
+    let hang = vec![indent, Span::styled("┃   ", color)];
+    let mut spans = vec![Span::styled(crate::app::NOTE_LABEL, color.bold())];
+    spans.extend(highlighted(vec![(Style::new().italic(), n.text.clone())], app));
+    hanging(app, gutter, hang, spans)
+}
+
+/// The path of the file under the cursor and the definitions around it,
+/// outermost first: `src/output.rs › impl Output › fn truncate(…)`.
+fn render_breadcrumbs(frame: &mut Frame, area: Rect, app: &App) {
+    let Some(row) = app.current_row() else { return };
+    let Some(file) = row.file() else {
+        let title = app.plan.get(app.page).map_or(String::new(), |p| p.title.clone());
+        frame.render_widget(Paragraph::new(Line::from(Span::raw(format!(" {title}")).dim())), area);
+        return;
+    };
+    let scopes: Vec<String> = match row {
+        Row::Line { file, hunk, line } => app.diff.scopes(file, hunk, line).into_iter().map(|s| s.label).collect(),
+        Row::Hunk { file, hunk } | Row::Note { file, hunk, .. } => {
+            let line = match row {
+                Row::Note { note, .. } => app.notes.get(note).map_or(0, |n| n.line),
+                _ => app.hunk(file, hunk).lines.iter().position(|l| l.kind != LineKind::Context).unwrap_or(0),
+            };
+            if app.hunk(file, hunk).lines.is_empty() {
+                Vec::new()
+            } else {
+                app.diff.scopes(file, hunk, line).into_iter().map(|s| s.label).collect()
+            }
+        }
+        Row::Context { file, no, .. } => app.diff.context_source(file).map_or_else(Vec::new, |(source, _)| {
+            scope::enclosing(source, no).into_iter().map(|s| s.label).collect()
+        }),
+        Row::Group { .. } | Row::File { .. } | Row::Comment { .. } => Vec::new(),
+    };
+    let path = app.diff.files[file].path().to_string();
+    let width = area.width as usize;
+    // Outer scopes give way first when it doesn't fit, then the path's head.
+    let mut scopes = scopes;
+    let len = |scopes: &[String]| path.chars().count() + 2 + scopes.iter().map(|s| s.chars().count() + 3).sum::<usize>();
+    while scopes.len() > 1 && len(&scopes) > width {
+        if scopes[0] == "…" {
+            scopes.remove(1);
+        } else {
+            scopes[0] = "…".to_string();
+        }
+    }
+    let separator = || Span::styled(" › ", Style::new().fg(Color::DarkGray));
+    let room = width.saturating_sub(len(&scopes) - path.chars().count());
+    let mut spans = vec![Span::raw(" "), Span::raw(truncate_left(&path, room.max(8))).dim()];
+    for (i, scope) in scopes.iter().enumerate() {
+        spans.push(separator());
+        let innermost = i + 1 == scopes.len();
+        spans.push(Span::styled(scope.clone(), if innermost { Style::new().bold() } else { Style::new() }));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// Questions about the code and their answers, with the question being
+/// typed at the bottom. The latest exchange shows from its question down,
+/// and `C-e` / `C-y` scroll from there.
+fn render_ask_panel(frame: &mut Frame, area: Rect, app: &mut App, docked_right: bool) {
+    let typing = matches!(app.mode, Mode::Ask { .. });
+    let border = if typing { Style::new().fg(Color::Magenta) } else { Style::new().fg(Color::DarkGray) };
+    // Docked right it's set off by a line on its left; under the diff, on top.
+    let borders = if docked_right { Borders::LEFT } else { Borders::TOP };
+    let hint = if typing { " Enter ask · Alt-Enter newline · Esc cancel " } else { " a ask · C-e/C-y scroll · A/Esc hide " };
+    let block = Block::new()
+        .borders(borders)
+        .border_style(border)
+        .title(Span::styled(" Ask Claude ", Style::new().fg(Color::Magenta).bold()))
+        .title(Span::raw("· reads the whole repository ").dim())
+        .title_bottom(Line::from(hint).dim());
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+    let inner = Rect { x: inner.x + 1, width: inner.width.saturating_sub(1), ..inner };
+    let width = inner.width as usize;
+
+    // The question being typed, at the bottom.
+    let mut conversation_area = inner;
+    if let Mode::Ask { target, input } = &app.mode {
+        let (lines, (x, y)) = wrap_input(input.text(), input.cursor(), width.saturating_sub(2).max(1));
+        let shown = lines.len().clamp(1, MAX_COMMENT_BOX_LINES as usize);
+        let height = (shown as u16 + 3).min(inner.height);
+        let box_area = Rect { y: inner.bottom() - height, height, ..inner };
+        conversation_area.height -= height;
+        let location = format!("{}{}", target.location, target.scopes.last().map_or(String::new(), |s| format!(" {s}")));
+        let input_block = Block::bordered()
+            .border_style(Style::new().fg(Color::Magenta))
+            .title(Span::styled(truncate_right(&format!(" {location} "), width.saturating_sub(2)), Style::new().fg(Color::Cyan)));
+        let field = input_block.inner(box_area);
+        frame.render_widget(input_block, box_area);
+        let skip = (y + 1).saturating_sub(field.height as usize);
+        let placeholder = input.text().is_empty();
+        let text: Vec<Line> = if placeholder {
+            vec![Line::from("Ask what a line does, why it changed, who calls it…").dim()]
+        } else {
+            lines.into_iter().skip(skip).map(Line::from).collect()
+        };
+        frame.render_widget(Paragraph::new(text), field);
+        frame.set_cursor_position((field.x + x as u16, field.y + (y - skip) as u16));
+    }
+
+    let mut lines: Vec<Line> = Vec::new();
+    let mut latest = 0;
+    for entry in &app.ask.entries {
+        if !lines.is_empty() {
+            lines.push(Line::default());
+        }
+        latest = lines.len();
+        lines.push(Line::from(Span::styled(truncate_right(&entry.location, width), Style::new().fg(Color::Cyan))));
+        for text in wrap_words(&entry.question, width.saturating_sub(2)) {
+            lines.push(Line::from(vec![Span::styled("│ ", Style::new().fg(Color::Magenta)), Span::raw(text).bold()]));
+        }
+        match &entry.answer {
+            Answer::Pending => {
+                let elapsed = app.ask.running.map_or(0, |job| job.started.elapsed().as_secs());
+                let started = app.ask.running.map_or_else(std::time::Instant::now, |job| job.started);
+                lines.push(Line::from(format!("{} reading the code… {elapsed}s", spinner(started))).dim());
+            }
+            Answer::Done(text) => {
+                for paragraph in text.lines() {
+                    if paragraph.trim().is_empty() {
+                        lines.push(Line::default());
+                        continue;
+                    }
+                    // Keep code and list indentation; wrap the rest.
+                    let indent: String = paragraph.chars().take_while(|c| c.is_whitespace()).collect();
+                    let room = width.saturating_sub(indent.chars().count()).max(8);
+                    for piece in wrap_words(paragraph, room) {
+                        lines.push(Line::from(format!("{indent}{piece}")));
+                    }
+                }
+            }
+            Answer::Failed(error) => {
+                for piece in wrap_words(&format!("error: {error}"), width) {
+                    lines.push(Line::from(Span::styled(piece, Style::new().fg(Color::Red))));
+                }
+            }
+            Answer::Cancelled => lines.push(Line::from("cancelled").dim().italic()),
+        }
+    }
+    if lines.is_empty() {
+        for text in wrap_words("Point at a line, a selection or a hunk and press a to ask about it.", width) {
+            lines.push(Line::from(text).dim());
+        }
+    }
+    let height = conversation_area.height as usize;
+    // Everything fits: show it all. Otherwise from the latest question.
+    let base = if lines.len() <= height { 0 } else { latest.min(lines.len() - height) };
+    let max_scroll = lines.len().saturating_sub(height + base);
+    app.ask.scroll = app.ask.scroll.min(max_scroll);
+    let first = base + app.ask.scroll;
+    frame.render_widget(Paragraph::new(lines).scroll((first as u16, 0)), conversation_area);
+}
+
+/// The review summed up, with its verdict: how much was looked at, what
+/// was said, and the keys to approve, request changes or hand over.
+fn render_verdict(frame: &mut Frame, area: Rect, app: &App) -> Rect {
+    let width = 84.min(area.width.saturating_sub(4));
+    let inner_width = width.saturating_sub(4) as usize;
+    let progress = app.progress();
+    let stats = app.line_stats();
+    let mut lines: Vec<Line> = Vec::new();
+
+    let to_go = progress.total - progress.reviewed;
+    let headline = if progress.total > 0 && to_go == 0 {
+        format!("All {} hunks reviewed ✓", progress.total)
+    } else {
+        format!("{to_go} of {} hunks to go", progress.total)
+    };
+    let headline_style = if to_go == 0 { Style::new().fg(Color::Green).bold() } else { Style::new().bold() };
+    lines.push(Line::from(Span::styled(headline, headline_style)));
+    lines.push(Line::from(Span::raw(truncate_right(&app.title, inner_width)).dim()));
+    lines.push(Line::default());
+
+    lines.push(Line::from(Span::raw("WHAT YOU WENT THROUGH").dim().bold()));
+    lines.push(stacked_bar(stats, inner_width.saturating_sub(10)));
+    let total = stats.total().max(1);
+    let row = |label: &str, note: &str, count: usize, color: Color| {
+        let bar_width = inner_width.saturating_sub(34).max(4);
+        let filled = (count * bar_width).div_ceil(total).min(bar_width);
+        Line::from(vec![
+            Span::styled("■ ", Style::new().fg(color)),
+            Span::raw(format!("{label:<11}")).bold(),
+            Span::raw(format!("{note:<10}")).dim(),
+            Span::raw(format!("{count:>5} lines  ")),
+            Span::styled("━".repeat(filled), Style::new().fg(color)),
+            Span::styled("━".repeat(bar_width - filled), Style::new().fg(Color::DarkGray)),
+        ])
+    };
+    lines.push(row("Looks good", "by you", stats.good, Color::Green));
+    lines.push(row("Read", "on screen", stats.read, Color::Blue));
+    lines.push(row("Not seen", "to go", stats.unseen, Color::Gray));
+    lines.push(Line::default());
+
+    let comments = app.review.comments().len();
+    let plural = |n: usize, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
+    let mut chips = vec![
+        Span::styled(format!(" {} of {} hunks good ", progress.reviewed, progress.total), Style::new().reversed()),
+        Span::raw(" "),
+        Span::styled(format!(" {} in your review ", plural(comments, "comment")), Style::new().fg(Color::Yellow).reversed()),
+    ];
+    if !app.notes.is_empty() {
+        chips.push(Span::raw(" "));
+        chips.push(Span::styled(format!(" {} ", plural(app.notes.len(), "agent note")), Style::new().fg(Color::Magenta).reversed()));
+    }
+    lines.push(Line::from(chips));
+    lines.push(Line::default());
+
+    lines.push(Line::from(Span::raw(format!("YOUR VERDICT, WITH YOUR {}", plural(comments, "COMMENT").to_uppercase())).dim().bold()));
+    let verdict = app.review.verdict();
+    let message_lines: Vec<Line> = match (&app.mode, verdict) {
+        (Mode::VerdictMessage { input }, _) => {
+            let (rows, _) = wrap_input(input.text(), input.cursor(), inner_width.saturating_sub(2).max(1));
+            rows.into_iter().map(|r| Line::from(format!("│ {r}"))).collect()
+        }
+        (_, Some(v)) if !v.message.trim().is_empty() => {
+            wrap_words(&v.message, inner_width.saturating_sub(2)).into_iter().map(|r| Line::from(format!("│ {r}"))).collect()
+        }
+        _ => vec![Line::from("│ m: say something to the author (optional for an approval)").dim()],
+    };
+    let message_top = lines.len();
+    lines.extend(message_lines);
+    let button = |key: &str, label: &str, kind: VerdictKind, color: Color| {
+        let chosen = verdict.is_some_and(|v| v.kind == kind);
+        let style = if chosen { Style::new().fg(Color::Black).bg(color).bold() } else { Style::new().fg(color) };
+        let mark = if chosen { "● " } else { "" };
+        Span::styled(format!(" [{key}] {mark}{label} "), style)
+    };
+    lines.push(Line::default());
+    lines.push(Line::from(vec![
+        button("r", "Request changes", VerdictKind::RequestChanges, Color::Yellow),
+        Span::raw("  "),
+        button("c", "Comment", VerdictKind::Comment, Color::Blue),
+        Span::raw("  "),
+        button("a", "Approve", VerdictKind::Approve, Color::Green),
+    ]));
+    lines.push(Line::default());
+    for text in wrap_words(
+        &format!(
+            "Or hand all {} to an agent: Y copies them as `path:line` and what you wrote. e exports them with the verdict.",
+            plural(comments, "comment")
+        ),
+        inner_width,
+    ) {
+        lines.push(Line::from(text).dim());
+    }
+
+    let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(2));
+    let rect = centered(area, width, height);
+    let block = Block::bordered()
+        .border_type(BorderType::Thick)
+        .border_style(Style::new().fg(Color::Cyan).bold())
+        .title(Span::styled(" Verdict ", Style::new().bold()))
+        .title_bottom(Line::from(" a/r/c verdict · m message · x clear · Y copy for agent · e export · Esc close ").dim());
+    let inner = block.inner(rect);
+    let inner = Rect { x: inner.x + 1, width: inner.width.saturating_sub(2), ..inner };
+    frame.render_widget(Clear, rect);
+    frame.render_widget(block, rect);
+    frame.render_widget(Paragraph::new(lines), inner);
+    if let Mode::VerdictMessage { input } = &app.mode {
+        let (_, (x, y)) = wrap_input(input.text(), input.cursor(), inner_width.saturating_sub(2).max(1));
+        let y = inner.y + (message_top + y) as u16;
+        if y < inner.bottom() {
+            frame.set_cursor_position((inner.x + 2 + x as u16, y));
+        }
+    }
+    rect
+}
+
+/// One bar for everything changed: reviewed, read and not seen yet, with
+/// the share looked at after it.
+fn stacked_bar(stats: LineStats, width: usize) -> Line<'static> {
+    let total = stats.total().max(1);
+    let good = stats.good * width / total;
+    let read = (stats.good + stats.read) * width / total - good;
+    let rest = width - good - read;
+    Line::from(vec![
+        Span::styled("█".repeat(good), Style::new().fg(Color::Green)),
+        Span::styled("█".repeat(read), Style::new().fg(Color::Blue)),
+        Span::styled("░".repeat(rest), Style::new().fg(Color::DarkGray)),
+        Span::raw(format!(" {:>3}% seen", stats.seen_percent())).bold(),
+    ])
 }
 
 const MAX_COMMENT_BOX_LINES: u16 = 8;
@@ -650,6 +1079,9 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
     let mode = match (&app.mode, app.focus) {
         (Mode::Visual { .. }, _) => " VISUAL ",
         (Mode::Comment { .. }, _) => " COMMENT ",
+        (Mode::Ask { .. }, _) => " ASK ",
+        (Mode::VerdictMessage { .. }, _) => " VERDICT ",
+        _ if app.show_verdict => " VERDICT ",
         (_, Focus::Sidebar) => " FILES ",
         _ => " NORMAL ",
     };
@@ -664,6 +1096,9 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
             if let Some(n) = l.new_no.or(l.old_no) {
                 location.push_str(&format!(":{n}"));
             }
+        }
+        if let Row::Context { no, .. } = row {
+            location.push_str(&format!(":{no}"));
         }
         parts.push(location);
         parts.push(match app.view {
@@ -693,10 +1128,14 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
         }
         None => {
             let hints = match app.mode {
-                Mode::Visual { .. } => " c comment on selection  Esc cancel ",
-                // The comment box lists its own keys.
-                Mode::Comment { .. } => " ",
-                _ => " ? help  r review  c comment  ]u unreviewed  ]f page  p plan  / search  q quit ",
+                Mode::Visual { .. } => " c comment  a ask  y copy  Esc cancel ",
+                // The boxes list their own keys.
+                Mode::Comment { .. } | Mode::Ask { .. } | Mode::VerdictMessage { .. } => " ",
+                _ if app.show_verdict => " ",
+                _ if matches!(app.current_row(), Some(Row::Note { .. })) => {
+                    " c comment with this  dd dismiss  a ask about it  y copy "
+                }
+                _ => " ? help  r review  c comment  a ask  [e ]e ze context  S verdict  ]u unreviewed  q quit ",
             };
             let hints = if fits(&left, hints) { hints } else { " " };
             (hints.to_string(), Style::new().dim())
@@ -741,6 +1180,18 @@ mod tests {
         assert_eq!(text(wrap_spans(spans(), 8)), ["abcdéfgh"]);
         assert_eq!(text(wrap_spans(vec![], 4)), [""]);
         assert_eq!(wrap_spans(spans(), 3)[1].len(), 2, "split where a span crosses a break");
+    }
+
+    #[test]
+    fn emphasizes_changed_ranges_across_segments() {
+        let bold = Style::new().bold();
+        let tint = Style::new().bg(Color::Red);
+        let segments = vec![(bold, "let x".to_string()), (Style::new(), " = 16;".to_string())];
+        let out = emphasize(segments, &[4..5, 8..10], tint);
+        let pieces: Vec<(&str, bool)> = out.iter().map(|(s, t)| (t.as_str(), s.bg == Some(Color::Red))).collect();
+        assert_eq!(pieces, [("let ", false), ("x", true), (" = ", false), ("16", true), (";", false)]);
+        assert_eq!(out[1].0.add_modifier, bold.add_modifier, "keeps the syntax style under the tint");
+        assert_eq!(emphasize(vec![(bold, "x".into())], &[], tint).len(), 1);
     }
 
     #[test]

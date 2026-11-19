@@ -7,6 +7,19 @@
 - [x] Stop the `claude` process when quitting during `:organize`.
 - [x] Cancel a running `:organize`, and clear a saved plan (`:organize cancel`, `:organize clear`).
 
+## From the native-review-tool demos
+
+- [x] Word-level highlights of what changed inside a changed line.
+- [x] Breadcrumbs: the definitions around the cursor, and on each hunk header.
+- [x] Read past a hunk: `[e` / `]e` for 20 more lines, `ze` for the whole function.
+- [x] Ask the AI about a line, selection or hunk, in a side panel (`a`).
+- [x] Agent notes from `:organize`, inline, to turn into comments or dismiss.
+- [x] What you went through (good / read on screen / not seen) and a verdict (`S`).
+- [x] Copy every comment for an agent (`Y`); copy lines (`y`).
+- [ ] A real parser (tree-sitter) for the scopes and a structural diff; today scopes come from indentation and changes from a word-level diff.
+- [ ] Show the commit messages of the range (the "description").
+- [ ] GitHub mode: the PR queue, CI checks, posting the review and merging. Deliberately out of scope while rrrev is local-only.
+
 ## Polish
 
 - [x] Syntax highlighting for diff lines (`syntect`).

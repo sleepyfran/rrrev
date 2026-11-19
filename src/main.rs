@@ -1,5 +1,6 @@
 mod anim;
 mod app;
+mod ask;
 mod diff;
 mod export;
 mod help;
@@ -33,6 +34,7 @@ use ratatui::{
 
 use anim::Animator;
 use app::{App, Effect};
+use ask::Assistant;
 use diff::DiffSource;
 use diff::git::{DiffSpec, GitSource};
 use export::{CommentSink, FileSink, Format};
@@ -82,10 +84,12 @@ fn main() -> Result<()> {
     }
 
     let mut app = App::new(source.describe(), diff, review);
-    let organizer: Arc<dyn Organizer> = Arc::new(ClaudeCli::from_env());
+    let claude = Arc::new(ClaudeCli::from_env());
+    let organizer: Arc<dyn Organizer> = claude.clone();
+    let assistant: Arc<dyn Assistant> = claude;
     let highlighter = Highlighter::new(Background::detect());
     let mut terminal = ratatui::init();
-    let result = run(&mut terminal, &mut app, &state_file, organizer, highlighter);
+    let result = run(&mut terminal, &mut app, &state_file, Ai { organizer, assistant }, highlighter);
     ratatui::restore();
     result
 }
@@ -96,24 +100,41 @@ const TICK: Duration = Duration::from_millis(100);
 
 /// What a background organizer run sends back: its job id and its answer.
 type PlanResult = (u64, Result<Plan>);
+/// What a background question sends back: its job id and the answer.
+type AskResult = (u64, Result<String>);
 
-/// An organizer run on its background thread.
+/// The AI behind `:organize` and the ask panel.
+struct Ai {
+    organizer: Arc<dyn Organizer>,
+    assistant: Arc<dyn Assistant>,
+}
+
+/// A background AI run on its own thread.
 struct Running {
     job: u64,
     cancel: Cancel,
     thread: thread::JoinHandle<()>,
 }
 
+impl Running {
+    fn stop(self) {
+        self.cancel.cancel();
+        let _ = self.thread.join();
+    }
+}
+
 fn run(
     terminal: &mut DefaultTerminal,
     app: &mut App,
     state_file: &Path,
-    organizer: Arc<dyn Organizer>,
+    ai: Ai,
     mut highlighter: Highlighter,
 ) -> Result<()> {
     let mut keys = KeyHandler::default();
     let (plans_tx, plans): (Sender<PlanResult>, Receiver<PlanResult>) = mpsc::channel();
+    let (answers_tx, answers): (Sender<AskResult>, Receiver<AskResult>) = mpsc::channel();
     let mut running: Option<Running> = None;
+    let mut asking: Option<Running> = None;
     let mut anim = Animator::from_env();
     while !app.should_quit {
         terminal.draw(|frame| ui::render(frame, app, &mut highlighter, &mut anim, &keys.pending()))?;
@@ -124,6 +145,12 @@ fn run(
             }
             app.finish_organize(job, result);
         }
+        while let Ok((job, result)) = answers.try_recv() {
+            if asking.as_ref().is_some_and(|r| r.job == job) {
+                asking = None;
+            }
+            app.finish_ask(job, result);
+        }
         if event::poll(if anim.is_animating() { anim::FRAME } else { TICK })?
             && let Event::Key(key) = event::read()?
             && key.kind == KeyEventKind::Press
@@ -131,6 +158,13 @@ fn run(
             if app.is_typing() {
                 if let Some(action) = keymap::input_action(key) {
                     app.update_input(action);
+                }
+            } else if app.show_verdict && app.help_scroll.is_none() {
+                // The verdict page has its own keys, but `?` still opens the help.
+                if let Some(action) = keymap::verdict_action(key) {
+                    app.verdict_action(action);
+                } else if let Some(action) = keys.handle(key) {
+                    app.update(action);
                 }
             } else if let Some(action) = keys.handle(key) {
                 app.update(action);
@@ -154,7 +188,7 @@ fn run(
                 });
             }
             Some(Effect::Organize { job, request }) => {
-                let (organizer, done, cancel) = (Arc::clone(&organizer), plans_tx.clone(), Cancel::default());
+                let (organizer, done, cancel) = (Arc::clone(&ai.organizer), plans_tx.clone(), Cancel::default());
                 let token = cancel.clone();
                 let thread = thread::spawn(move || {
                     let _ = done.send((job, organizer.organize(&request, &token)));
@@ -168,6 +202,24 @@ fn run(
                     run.cancel.cancel();
                 }
             }
+            Some(Effect::Ask { job, request }) => {
+                let (assistant, done, cancel) = (Arc::clone(&ai.assistant), answers_tx.clone(), Cancel::default());
+                let token = cancel.clone();
+                let thread = thread::spawn(move || {
+                    let _ = done.send((job, assistant.ask(&request, &token)));
+                });
+                asking = Some(Running { job, cancel, thread });
+            }
+            Some(Effect::CancelAsk { job }) => {
+                if let Some(run) = asking.take_if(|r| r.job == job) {
+                    run.cancel.cancel();
+                }
+            }
+            Some(Effect::Copy { text }) => {
+                if let Err(e) = copy_to_clipboard(&text) {
+                    app.message = Some(format!("error: could not copy: {e:#}"));
+                }
+            }
             None => {}
         }
 
@@ -178,12 +230,39 @@ fn run(
             app.message = Some(format!("error: could not save review state: {e:#}"));
         }
     }
-    // Don't leave the organizer's process running after we're gone.
-    if let Some(run) = running {
-        run.cancel.cancel();
-        let _ = run.thread.join();
+    // Don't leave an AI process running after we're gone.
+    for run in [running, asking].into_iter().flatten() {
+        run.stop();
     }
     Ok(())
+}
+
+/// Puts `text` on the clipboard with the OSC 52 escape, which terminals
+/// (and tmux, with `set-clipboard on`) pass to the system clipboard, over
+/// SSH too.
+fn copy_to_clipboard(text: &str) -> Result<()> {
+    use std::io::Write;
+    let mut out = stdout();
+    write!(out, "\x1b]52;c;{}\x07", base64(text.as_bytes()))?;
+    out.flush()?;
+    Ok(())
+}
+
+/// Standard base64, padded.
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = chunk.iter().enumerate().fold(0u32, |n, (i, &b)| n | (u32::from(b) << (16 - 8 * i)));
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(ALPHABET[(n >> (18 - 6 * i)) as usize & 63] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
 }
 
 /// Next to the review state, e.g. `.git/rrrev/worktree-comments.md`, so the
@@ -226,6 +305,15 @@ fn edit_in_editor(terminal: &mut DefaultTerminal, initial: &str) -> Result<Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encodes_base64() {
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"f"), "Zg==");
+        assert_eq!(base64(b"fo"), "Zm8=");
+        assert_eq!(base64(b"foo"), "Zm9v");
+        assert_eq!(base64("héllo\n".as_bytes()), "aMOpbGxvCg==");
+    }
 
     #[test]
     fn exports_land_next_to_the_state_file() {

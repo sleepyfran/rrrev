@@ -33,9 +33,25 @@ impl Cancel {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Plan {
     pub groups: Vec<PlanGroup>,
+    /// What the organizer thinks deserves a closer look, shown in the diff
+    /// next to the code it's about.
+    #[serde(default)]
+    pub notes: Vec<AgentNote>,
+}
+
+/// A remark from the AI on one hunk: a subtle behaviour change, a risk,
+/// something easy to miss.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentNote {
+    pub hunk: HunkId,
+    /// The new-side line it's about, if it's about one; otherwise the note
+    /// goes under the hunk.
+    #[serde(default)]
+    pub line: Option<u32>,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,6 +66,8 @@ impl Plan {
     /// dropped, a hunk listed twice stays in its first group, and groups left
     /// empty are removed. Hunks it leaves out are the caller's to place.
     pub fn sanitize(self, known: &HashSet<&HunkId>) -> Plan {
+        let notes =
+            self.notes.into_iter().filter(|n| known.contains(&n.hunk) && !n.text.trim().is_empty()).collect();
         let mut seen = HashSet::new();
         let groups = self
             .groups
@@ -60,7 +78,7 @@ impl Plan {
             })
             .filter(|group| !group.hunks.is_empty())
             .collect();
-        Plan { groups }
+        Plan { groups, notes }
     }
 }
 
@@ -203,15 +221,18 @@ mod tests {
         let [one, two] = [0, 1].map(|h| diff.files[0].hunks[h].id.clone());
         let bogus: HunkId = serde_json::from_str("\"nope\"").unwrap();
         let group = |title: &str, hunks: Vec<HunkId>| PlanGroup { title: title.into(), rationale: String::new(), hunks };
+        let note = |hunk: &HunkId, text: &str| AgentNote { hunk: hunk.clone(), line: None, text: text.into() };
         let plan = Plan {
             groups: vec![
                 group("first", vec![two.clone(), bogus.clone()]),
-                group("only bogus", vec![bogus]),
+                group("only bogus", vec![bogus.clone()]),
                 group("second", vec![one.clone(), two.clone()]),
             ],
+            notes: vec![note(&one, "look"), note(&bogus, "gone"), note(&two, "  ")],
         };
         let known: HashSet<&HunkId> = [&one, &two].into();
         let clean = plan.sanitize(&known);
+        assert_eq!(clean.notes, [note(&one, "look")]);
         assert_eq!(clean.groups.len(), 2);
         assert_eq!(clean.groups[0].hunks, [two]);
         assert_eq!(clean.groups[1].hunks, [one]);

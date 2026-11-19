@@ -1,6 +1,6 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::Action;
+use crate::app::{Action, VerdictAction};
 use crate::input::InputAction;
 
 /// Turns key presses into actions, handling vim-style counts (`5j`) and
@@ -54,6 +54,8 @@ impl KeyHandler {
             (Some('['), KeyCode::Char('u')) => Action::PrevUnreviewed(n),
             (Some(']'), KeyCode::Char('m')) => Action::NextComment(n),
             (Some('['), KeyCode::Char('m')) => Action::PrevComment(n),
+            (Some('['), KeyCode::Char('e')) => Action::ExpandAbove(n),
+            (Some(']'), KeyCode::Char('e')) => Action::ExpandBelow(n),
             (Some('d'), KeyCode::Char('d')) => Action::DeleteComment,
             (Some('z'), KeyCode::Char('a')) => Action::ToggleFold,
             (Some('z'), KeyCode::Char('o')) => Action::OpenFold,
@@ -63,11 +65,15 @@ impl KeyHandler {
             (Some('z'), KeyCode::Char('t')) => Action::ScrollCursorTop,
             (Some('z'), KeyCode::Char('z')) => Action::ScrollCursorCenter,
             (Some('z'), KeyCode::Char('b')) => Action::ScrollCursorBottom,
+            (Some('z'), KeyCode::Char('e')) => Action::ExpandScope,
+            (Some('z'), KeyCode::Char('E')) => Action::ResetContext,
             (Some(_), _) => return None,
 
             (None, KeyCode::Char('c')) if ctrl => Action::Quit,
             (None, KeyCode::Char('d')) if ctrl => Action::HalfPageDown,
             (None, KeyCode::Char('u')) if ctrl => Action::HalfPageUp,
+            (None, KeyCode::Char('e')) if ctrl => Action::PanelDown(3 * n),
+            (None, KeyCode::Char('y')) if ctrl => Action::PanelUp(3 * n),
             (None, KeyCode::Char('q')) => Action::Quit,
             (None, KeyCode::Char('j') | KeyCode::Down) => Action::Down(n),
             (None, KeyCode::Char('k') | KeyCode::Up) => Action::Up(n),
@@ -93,10 +99,32 @@ impl KeyHandler {
             (None, KeyCode::Char('n')) => Action::SearchNext(n),
             (None, KeyCode::Char('N')) => Action::SearchPrev(n),
             (None, KeyCode::Char('?')) => Action::ToggleHelp,
+            (None, KeyCode::Char('a')) => Action::Ask,
+            (None, KeyCode::Char('A')) => Action::ToggleAskPanel,
+            (None, KeyCode::Char('y')) => Action::Yank,
+            (None, KeyCode::Char('Y')) => Action::CopyForAgent,
+            (None, KeyCode::Char('S')) => Action::ToggleVerdict,
             _ => return None,
         };
         Some(action)
     }
+}
+
+/// Keys on the verdict page, where each letter picks a button.
+pub fn verdict_action(key: KeyEvent) -> Option<VerdictAction> {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    Some(match key.code {
+        KeyCode::Char('c') if ctrl => VerdictAction::Close,
+        KeyCode::Esc | KeyCode::Char('q' | 'S') => VerdictAction::Close,
+        KeyCode::Char('a') => VerdictAction::Approve,
+        KeyCode::Char('r') => VerdictAction::RequestChanges,
+        KeyCode::Char('c') => VerdictAction::Comment,
+        KeyCode::Char('m') | KeyCode::Enter => VerdictAction::Message,
+        KeyCode::Char('x') => VerdictAction::Clear,
+        KeyCode::Char('Y' | 'y') => VerdictAction::CopyForAgent,
+        KeyCode::Char('e') => VerdictAction::Export,
+        _ => return None,
+    })
 }
 
 /// Keys for the comment box and the `:` line, readline-style.
@@ -159,6 +187,23 @@ mod tests {
         assert_eq!(press(&mut h, "N"), Some(Action::SearchPrev(1)));
         assert_eq!(press(&mut h, "/"), Some(Action::StartSearch));
         assert_eq!(press(&mut h, "?"), Some(Action::ToggleHelp));
+        assert_eq!(press(&mut h, "2[e"), Some(Action::ExpandAbove(2)));
+        assert_eq!(press(&mut h, "]e"), Some(Action::ExpandBelow(1)));
+        assert_eq!(press(&mut h, "ze"), Some(Action::ExpandScope));
+        assert_eq!(press(&mut h, "zE"), Some(Action::ResetContext));
+        assert_eq!(press(&mut h, "a"), Some(Action::Ask));
+        assert_eq!(press(&mut h, "Y"), Some(Action::CopyForAgent));
+        assert_eq!(press(&mut h, "S"), Some(Action::ToggleVerdict));
+    }
+
+    #[test]
+    fn verdict_keys_pick_buttons() {
+        let key = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+        assert_eq!(verdict_action(key('a')), Some(VerdictAction::Approve));
+        assert_eq!(verdict_action(key('r')), Some(VerdictAction::RequestChanges));
+        assert_eq!(verdict_action(key('Y')), Some(VerdictAction::CopyForAgent));
+        assert_eq!(verdict_action(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)), Some(VerdictAction::Close));
+        assert_eq!(verdict_action(key('j')), None);
     }
 
     #[test]

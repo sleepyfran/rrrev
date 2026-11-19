@@ -61,6 +61,10 @@ impl App {
     /// `c` / `C`: opens the comment box for the selection, line, hunk or
     /// existing comment under the cursor, optionally going straight to `$EDITOR`.
     pub(super) fn start_comment(&mut self, in_editor: bool) {
+        if let Some(note) = self.current_note().filter(|_| !in_editor) {
+            self.comment_with_note(note);
+            return;
+        }
         let Some(target) = self.comment_target() else {
             self.mode = Mode::Normal;
             self.message = Some("Move to a line or hunk to comment".to_string());
@@ -84,6 +88,7 @@ impl App {
                 self.rebuild_rows();
                 self.message = Some("Comment deleted".to_string());
             }
+            Some(Row::Note { note, .. }) => self.dismiss_note(note),
             _ => self.message = Some("No comment under the cursor".to_string()),
         }
     }
@@ -117,7 +122,11 @@ impl App {
                 Some(CommentTarget::New { file, hunk, start: 0, end })
             }
             Row::Comment { id, .. } => Some(CommentTarget::Edit { id }),
-            Row::Group { .. } | Row::File { .. } => None,
+            Row::Note { note, .. } => {
+                let n = self.notes.get(note)?;
+                Some(CommentTarget::New { file: n.file, hunk: n.hunk, start: n.line, end: n.line })
+            }
+            Row::Group { .. } | Row::File { .. } | Row::Context { .. } => None,
         }
     }
 

@@ -17,9 +17,19 @@ pub const SECTIONS: &[Section] = &[
             ("]c / [c   } / {", "next / previous hunk"),
             ("]f / [f", "next / previous file, or plan group"),
             ("]u / [u", "next / previous unreviewed hunk"),
-            ("]m / [m", "next / previous comment"),
+            ("]m / [m", "next / previous comment or AI note"),
             ("zt / zz / zb", "scroll the cursor to top / middle / bottom"),
             (":<n>", "go to line n of the file"),
+        ],
+    },
+    Section {
+        title: "Reading around a change",
+        entries: &[
+            ("[e / ]e", "20 more lines of the file above / below the hunk (counts work: 3[e)"),
+            ("ze", "the whole function, impl or class the hunk is in"),
+            ("zE", "back to the hunks as git shows them"),
+            ("breadcrumbs", "the line above the diff shows the file and the definitions around the cursor"),
+            ("tinted words", "within a changed line, the words that changed"),
         ],
     },
     Section {
@@ -45,6 +55,25 @@ pub const SECTIONS: &[Section] = &[
             ("C", "write the comment in $EDITOR"),
             ("dd", "delete the comment under the cursor"),
             ("in the box", "Enter save · Alt-Enter newline · C-o $EDITOR · Esc cancel"),
+            ("c / dd on a ◆ note", "turn the AI's note into a comment / dismiss it"),
+        ],
+    },
+    Section {
+        title: "Asking the AI",
+        entries: &[
+            ("a", "ask about the line, selection or hunk; Claude can read the whole repository"),
+            ("A", "show / hide the answers; Esc hides them too"),
+            ("C-e / C-y", "scroll the answers"),
+            (":ask cancel / clear", "stop the question being answered / forget them all"),
+        ],
+    },
+    Section {
+        title: "Wrapping up",
+        entries: &[
+            ("S   :verdict", "what you went through, and your verdict"),
+            ("on the verdict page", "a approve · r request changes · c comment · m message · x clear · e export"),
+            ("Y", "copy every comment as `path:line` and what you wrote, to paste into an agent"),
+            ("y", "copy the line, selection, hunk or comment (through the terminal: OSC 52)"),
         ],
     },
     Section {
@@ -61,7 +90,7 @@ pub const SECTIONS: &[Section] = &[
     Section {
         title: "Commands",
         entries: &[
-            (":organize", "plan the review with AI, in the background"),
+            (":organize", "plan the review with AI, in the background, with notes on what to check"),
             (":organize cancel", "stop a running plan"),
             (":organize clear", "drop the plan (a stack goes back to its layers)"),
             (":export [md|json] [path]", "write the comments to a file"),

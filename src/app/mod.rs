@@ -3,24 +3,34 @@
 //! outside world leaves as an [`Effect`] for the main loop.
 
 mod action;
+mod ask;
 mod command;
 mod comments;
+mod context;
 mod marks;
 mod mode;
 mod navigation;
+mod notes;
 mod plan;
 mod search;
+mod verdict;
 mod view;
 
 #[cfg(test)]
 mod test_support;
 
-pub use action::{Action, Effect};
+pub use action::{Action, Effect, VerdictAction};
+pub use ask::{Answer, AskPanel};
+pub use context::{context_numbers, context_text, is_above};
 pub use marks::Progress;
-pub use mode::{CommentTarget, Focus, Mode, View};
+pub use mode::{AskTarget, CommentTarget, Focus, Mode, View};
+pub use notes::PlacedNote;
+pub use verdict::LineStats;
 pub use plan::Job;
 pub use search::find_matches;
-pub use view::Row;
+pub use view::{NOTE_LABEL, Row};
+
+use std::collections::HashMap;
 
 use crate::diff::{Diff, DiffLine, Hunk};
 use crate::input::InputAction;
@@ -65,6 +75,14 @@ pub struct App {
     pub highlight_search: bool,
     /// First line shown of the `?` overlay, while it's open.
     pub help_scroll: Option<usize>,
+    /// Extra lines of the file shown around hunks, by `(file, hunk)`.
+    pub expanded: HashMap<(usize, usize), context::Expansion>,
+    /// The AI's notes from the plan, placed on the diff.
+    pub notes: Vec<PlacedNote>,
+    /// Questions asked about the code, and their answers.
+    pub ask: AskPanel,
+    /// Whether the verdict page is open.
+    pub show_verdict: bool,
     pub should_quit: bool,
 }
 
@@ -102,6 +120,10 @@ impl App {
             search: None,
             highlight_search: false,
             help_scroll: None,
+            expanded: HashMap::new(),
+            notes: Vec::new(),
+            ask: AskPanel::default(),
+            show_verdict: false,
             should_quit: false,
         };
         // Generated files and files already reviewed start out of the way.
@@ -122,19 +144,36 @@ impl App {
         if !app.plan.is_empty() {
             app.view = View::Plan;
         }
+        app.place_notes();
         app.open_page(0, 0);
         app
     }
 
     /// True while keys should go to a text field rather than the keymap.
     pub fn is_typing(&self) -> bool {
-        matches!(self.mode, Mode::Comment { .. } | Mode::Command { .. } | Mode::Search { .. })
+        matches!(
+            self.mode,
+            Mode::Comment { .. }
+                | Mode::Command { .. }
+                | Mode::Search { .. }
+                | Mode::Ask { .. }
+                | Mode::VerdictMessage { .. }
+        )
     }
 
     pub fn update(&mut self, action: Action) {
         self.message = None;
         if self.help_scroll.is_some() {
             self.update_help(action);
+            return;
+        }
+        if self.show_verdict {
+            // Only closing it, or the help, gets through.
+            match action {
+                Action::ToggleVerdict | Action::Cancel | Action::Quit => self.show_verdict = false,
+                Action::ToggleHelp => self.help_scroll = Some(0),
+                _ => {}
+            }
             return;
         }
         let action = match self.focus {
@@ -183,6 +222,17 @@ impl App {
             Action::FocusSidebar => self.focus_sidebar(),
             Action::FocusDiff => self.focus = Focus::Diff,
             Action::ToggleSidebar => self.toggle_sidebar(),
+            Action::ExpandAbove(n) => self.expand(n, true),
+            Action::ExpandBelow(n) => self.expand(n, false),
+            Action::ExpandScope => self.expand_scope(),
+            Action::ResetContext => self.reset_context(),
+            Action::Ask => self.start_ask(),
+            Action::ToggleAskPanel => self.toggle_ask_panel(),
+            Action::PanelDown(n) => self.ask.scroll = self.ask.scroll.saturating_add(n),
+            Action::PanelUp(n) => self.ask.scroll = self.ask.scroll.saturating_sub(n),
+            Action::Yank => self.yank(),
+            Action::CopyForAgent => self.copy_for_agent(),
+            Action::ToggleVerdict => self.show_verdict = true,
             Action::Select => {
                 if let Some(Row::File { .. }) = self.current_row() {
                     self.toggle_fold();
@@ -192,7 +242,13 @@ impl App {
                 if self.focus == Focus::Sidebar {
                     self.focus = Focus::Diff;
                 } else if self.mode == Mode::Normal {
-                    self.clear_search_highlight();
+                    // Esc puts things away one at a time: the search
+                    // highlight, then the ask panel.
+                    if self.highlighted_search().is_some() {
+                        self.clear_search_highlight();
+                    } else {
+                        self.ask.open = false;
+                    }
                 }
                 self.mode = Mode::Normal;
             }
@@ -208,6 +264,8 @@ impl App {
             Mode::Command { .. } => self.command_input(action),
             Mode::Comment { .. } => self.comment_input(action),
             Mode::Search { .. } => self.search_input(action),
+            Mode::Ask { .. } => self.ask_input(action),
+            Mode::VerdictMessage { .. } => self.verdict_message_input(action),
             Mode::Normal | Mode::Visual { .. } => {}
         }
     }

@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use crate::ask::AskRequest;
 use crate::export::Format;
 use crate::organizer::OrganizeRequest;
 
@@ -44,9 +45,44 @@ pub enum Action {
     FocusSidebar,
     FocusDiff,
     ToggleSidebar,
+    /// `[e` / `]e`: more of the file above / below the hunk, in steps.
+    ExpandAbove(usize),
+    ExpandBelow(usize),
+    /// `ze`: the whole function the hunk is in.
+    ExpandScope,
+    /// `zE`: drop all the extra context.
+    ResetContext,
+    /// `a`: ask the AI about the line, selection or hunk.
+    Ask,
+    /// `A`: show / hide the ask panel.
+    ToggleAskPanel,
+    /// `C-e` / `C-y`: scroll the ask panel.
+    PanelDown(usize),
+    PanelUp(usize),
+    /// `y`: copy the line, selection or comment to the clipboard.
+    Yank,
+    /// `Y`: copy every comment, as `path:line` and its text, for an agent.
+    CopyForAgent,
+    /// `S`: the summary of the review, and its verdict.
+    ToggleVerdict,
     Select,
     Cancel,
     Quit,
+}
+
+/// Keys on the verdict page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerdictAction {
+    Approve,
+    RequestChanges,
+    Comment,
+    /// Write or edit the message to the author.
+    Message,
+    /// Take the verdict back.
+    Clear,
+    CopyForAgent,
+    Export,
+    Close,
 }
 
 /// Work `update` can't do itself, for the main loop to carry out.
@@ -60,4 +96,10 @@ pub enum Effect {
     Organize { job: u64, request: OrganizeRequest },
     /// Stop that job; its result, if one still arrives, is ignored.
     CancelOrganize { job: u64 },
+    /// Answer a question in the background, then call `finish_ask` with the
+    /// same `job`.
+    Ask { job: u64, request: AskRequest },
+    CancelAsk { job: u64 },
+    /// Put `text` on the system clipboard.
+    Copy { text: String },
 }

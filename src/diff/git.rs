@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use git2::{Delta, DiffOptions, Patch, Repository, Tree};
 
 use super::stack::Stack;
-use super::{Diff, DiffLine, DiffSource, FileDiff, FileStatus, Hunk, LineKind};
+use super::{Diff, DiffLine, DiffSource, FileDiff, FileStatus, Hunk, LineKind, Sources};
 
 /// Which two snapshots of the repository to compare.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -169,19 +169,23 @@ impl DiffSource for GitSource {
 
     fn load(&self) -> Result<Diff> {
         let DiffSpec::Stack(stack) = &self.spec else {
-            return Ok(Diff::new(read_files(&self.git_diff()?)?));
+            let (files, sources) = read_files(&self.repo, &self.git_diff()?)?;
+            return Ok(Diff::new(files).with_sources(sources));
         };
         let count = stack.layers.len();
         let mut parts = Vec::with_capacity(count);
+        let mut all_sources = Vec::new();
         for (i, layer) in stack.layers.iter().enumerate() {
             let diff = self.merge_base_diff(&layer.base, &layer.branch, &mut DiffOptions::new())?;
             let mut rationale = format!("Layer {} of {count}: {} → {}.", i + 1, layer.base, layer.branch);
             if layer.needs_rebase {
                 rationale += " Needs a rebase onto the layer below.";
             }
-            parts.push((layer.title(), rationale, read_files(&diff)?));
+            let (files, sources) = read_files(&self.repo, &diff)?;
+            all_sources.extend(sources);
+            parts.push((layer.title(), rationale, files));
         }
-        Ok(Diff::sectioned(parts))
+        Ok(Diff::sectioned(parts).with_sources(all_sources))
     }
 
     fn state_file(&self) -> PathBuf {
@@ -190,8 +194,31 @@ impl DiffSource for GitSource {
     }
 }
 
-fn read_files(diff: &git2::Diff) -> Result<Vec<FileDiff>> {
+/// Files bigger than this aren't read whole: no breadcrumbs or extra
+/// context for them, which they'd be slow to give anyway.
+const MAX_SOURCE_BYTES: usize = 4 << 20;
+
+/// Each file's text on both sides, from the object database, or from the
+/// working tree for a side that isn't stored yet.
+fn read_sources(repo: &Repository, delta: &git2::DiffDelta) -> Sources {
+    let read = |file: git2::DiffFile, workdir_fallback: bool| -> Option<super::Source> {
+        if !file.exists() || file.size() as usize > MAX_SOURCE_BYTES {
+            return None;
+        }
+        let from_odb = (!file.id().is_zero()).then(|| repo.find_blob(file.id()).ok()).flatten();
+        if let Some(blob) = from_odb {
+            return (!blob.is_binary()).then(|| Sources::lines(blob.content()));
+        }
+        let path = repo.workdir()?.join(file.path()?);
+        let bytes = std::fs::read(path).ok().filter(|b| workdir_fallback && b.len() <= MAX_SOURCE_BYTES)?;
+        (!bytes.contains(&0)).then(|| Sources::lines(&bytes))
+    };
+    Sources { old: read(delta.old_file(), false), new: read(delta.new_file(), true) }
+}
+
+fn read_files(repo: &Repository, diff: &git2::Diff) -> Result<(Vec<FileDiff>, Vec<Sources>)> {
     let mut files = Vec::with_capacity(diff.deltas().len());
+    let mut sources = Vec::with_capacity(diff.deltas().len());
     for idx in 0..diff.deltas().len() {
         let delta = diff.get_delta(idx).expect("index within deltas()");
         let path = |file: git2::DiffFile| file.path().map(|p| p.to_string_lossy().into_owned());
@@ -206,9 +233,10 @@ fn read_files(diff: &git2::Diff) -> Result<Vec<FileDiff>> {
             Some(patch) => file.hunks = read_hunks(&patch)?,
             None => file.is_binary = true,
         }
+        sources.push(if file.is_binary { Sources::default() } else { read_sources(repo, &delta) });
         files.push(file);
     }
-    Ok(files)
+    Ok((files, sources))
 }
 
 fn map_status(delta: Delta) -> FileStatus {
@@ -319,6 +347,24 @@ mod tests {
 
         let new = diff.files.iter().find(|f| f.new_path.as_deref() == Some("new.txt")).unwrap();
         assert_eq!(new.status, FileStatus::Added);
+    }
+
+    #[test]
+    fn reads_both_sides_whole_for_context_and_scopes() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let body: String = (1..=30).map(|i| format!("    let x{i} = {i};\n")).collect();
+        fs::write(dir.path().join("a.rs"), format!("fn work() {{\n{body}}}\n")).unwrap();
+        commit_all(&repo, "init");
+        fs::write(dir.path().join("a.rs"), format!("fn work() {{\n{}}}\n", body.replace("x15 = 15", "x15 = 16"))).unwrap();
+
+        let diff = GitSource::discover(dir.path(), DiffSpec::WorkTree).unwrap().load().unwrap();
+        let sources = &diff.sources[0];
+        assert_eq!(sources.old.as_ref().unwrap()[15], "    let x15 = 15;");
+        assert_eq!(sources.new.as_ref().unwrap()[15], "    let x15 = 16;");
+        assert_eq!(diff.hunk_scope(0, 0).as_deref(), Some("fn work()"));
+        let removed = diff.files[0].hunks[0].lines.iter().position(|l| l.kind == LineKind::Removed).unwrap();
+        assert_eq!(diff.word_changes(0, 0, removed), vec![14..16]);
     }
 
     #[test]

@@ -136,6 +136,7 @@ impl App {
             return;
         }
         self.review.clear_plan();
+        self.place_notes();
         if sections.is_empty() {
             if self.view == View::Plan {
                 self.set_view(View::Files);
@@ -175,12 +176,18 @@ impl App {
         }
         self.plan = pages;
         self.review.set_plan(plan);
+        self.place_notes();
         // A fresh plan is read from the top.
         self.view = View::Plan;
         self.rows.clear();
         self.open_page(0, 0);
         let groups = self.plan.len();
-        self.message = Some(format!("Organized into {groups} groups · p switches plan / files"));
+        let notes = match self.notes.len() {
+            0 => String::new(),
+            1 => " and 1 note".to_string(),
+            n => format!(" and {n} notes"),
+        };
+        self.message = Some(format!("Organized into {groups} groups{notes} · p switches plan / files"));
     }
 
     /// `p`: between the plan and the file list.
@@ -234,6 +241,7 @@ mod tests {
                 PlanGroup { title: "Types".into(), rationale: "First.".into(), hunks: vec![id(1, 0)] },
                 PlanGroup { title: "Logic".into(), rationale: "Then.".into(), hunks: vec![id(0, 1)] },
             ],
+            ..Plan::default()
         }
     }
 
@@ -446,7 +454,10 @@ mod tests {
         command(&mut app, "organize");
         let Some(Effect::Organize { job, .. }) = app.effect.take() else { panic!() };
         let bogus: HunkId = serde_json::from_str("\"nope\"").unwrap();
-        let plan = Plan { groups: vec![PlanGroup { title: "x".into(), rationale: String::new(), hunks: vec![bogus] }] };
+        let plan = Plan {
+            groups: vec![PlanGroup { title: "x".into(), rationale: String::new(), hunks: vec![bogus] }],
+            ..Plan::default()
+        };
         app.finish_organize(job, Ok(plan));
         assert_eq!(app.view, View::Files);
         assert!(app.review.plan().is_none());
@@ -481,7 +492,10 @@ mod tests {
         command(&mut app, "organize");
         let Some(Effect::Organize { job, .. }) = app.effect.take() else { panic!() };
         let id = app.diff.files[2].hunks[0].id.clone();
-        let plan = Plan { groups: vec![PlanGroup { title: "AI".into(), rationale: String::new(), hunks: vec![id] }] };
+        let plan = Plan {
+            groups: vec![PlanGroup { title: "AI".into(), rationale: String::new(), hunks: vec![id] }],
+            ..Plan::default()
+        };
         app.finish_organize(job, Ok(plan));
         assert_eq!(app.plan[0].title, "AI");
 
