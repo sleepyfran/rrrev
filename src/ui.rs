@@ -419,6 +419,7 @@ fn row_lines(app: &App, row: Row, highlighter: &mut Highlighter) -> Vec<Line<'st
         Row::Line { file, hunk, line } => diff_line(app, highlighter, file, hunk, line),
         Row::Context { file, hunk, no } => context_line(app, highlighter, file, hunk, no),
         Row::Comment { id, line, .. } => comment_line(app, id, line),
+        Row::Note { note, .. } => note_line(app, note),
         row => vec![row_line(app, row)],
     }
 }
@@ -482,7 +483,9 @@ fn row_line(app: &App, row: Row) -> Line<'static> {
             let line = Line::from(spans);
             if reviewed { line.patch_style(Style::new().dim()) } else { line }
         }
-        Row::Line { .. } | Row::Context { .. } | Row::Comment { .. } => unreachable!("drawn by row_lines"),
+        Row::Line { .. } | Row::Context { .. } | Row::Comment { .. } | Row::Note { .. } => {
+            unreachable!("drawn by row_lines")
+        }
     }
 }
 
@@ -655,6 +658,18 @@ fn context_line(app: &App, highlighter: &mut Highlighter, file: usize, hunk: usi
     hanging(app, gutter, hang, highlighted(segments, app))
 }
 
+/// An agent note, set out like a comment but in the AI's colour.
+fn note_line(app: &App, note: usize) -> Vec<Line<'static>> {
+    let Some(n) = app.notes.get(note) else { return vec![Line::default()] };
+    let indent = Span::raw(" ".repeat(app.code_column() - 2));
+    let color = Style::new().fg(Color::Magenta);
+    let gutter = vec![indent.clone(), Span::styled("┃ ◆ ", color)];
+    let hang = vec![indent, Span::styled("┃   ", color)];
+    let mut spans = vec![Span::styled(crate::app::NOTE_LABEL, color.bold())];
+    spans.extend(highlighted(vec![(Style::new().italic(), n.text.clone())], app));
+    hanging(app, gutter, hang, spans)
+}
+
 /// The path of the file under the cursor and the definitions around it,
 /// outermost first: `src/output.rs › impl Output › fn truncate(…)`.
 fn render_breadcrumbs(frame: &mut Frame, area: Rect, app: &App) {
@@ -666,8 +681,11 @@ fn render_breadcrumbs(frame: &mut Frame, area: Rect, app: &App) {
     };
     let scopes: Vec<String> = match row {
         Row::Line { file, hunk, line } => app.diff.scopes(file, hunk, line).into_iter().map(|s| s.label).collect(),
-        Row::Hunk { file, hunk } => {
-            let line = app.hunk(file, hunk).lines.iter().position(|l| l.kind != LineKind::Context).unwrap_or(0);
+        Row::Hunk { file, hunk } | Row::Note { file, hunk, .. } => {
+            let line = match row {
+                Row::Note { note, .. } => app.notes.get(note).map_or(0, |n| n.line),
+                _ => app.hunk(file, hunk).lines.iter().position(|l| l.kind != LineKind::Context).unwrap_or(0),
+            };
             if app.hunk(file, hunk).lines.is_empty() {
                 Vec::new()
             } else {
@@ -839,6 +857,9 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
                 Mode::Visual { .. } => " c comment on selection  Esc cancel ",
                 // The boxes list their own keys.
                 Mode::Comment { .. } => " ",
+                _ if matches!(app.current_row(), Some(Row::Note { .. })) => {
+                    " c comment with this  dd dismiss "
+                }
                 _ => " ? help  r review  c comment  [e ]e ze context  ]u unreviewed  q quit ",
             };
             let hints = if fits(&left, hints) { hints } else { " " };

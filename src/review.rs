@@ -24,6 +24,9 @@ pub struct ReviewState {
     /// The organizer's latest plan, as it returned it.
     #[serde(default)]
     plan: Option<Plan>,
+    /// Agent notes the reviewer dismissed, by [`note_key`].
+    #[serde(default)]
+    dismissed_notes: BTreeSet<String>,
     /// Set when there are changes that haven't been saved yet.
     #[serde(skip)]
     dirty: bool,
@@ -45,6 +48,11 @@ pub struct Comment {
     /// comment still makes sense once the hunk has changed.
     pub code: Vec<String>,
     pub text: String,
+}
+
+/// Identifies an agent note across runs: its hunk and its text.
+pub fn note_key(hunk: &HunkId, text: &str) -> String {
+    format!("{}:{}", hunk.as_str(), text.trim())
 }
 
 impl ReviewState {
@@ -125,6 +133,14 @@ impl ReviewState {
 
     pub fn clear_plan(&mut self) {
         self.dirty |= self.plan.take().is_some();
+    }
+
+    pub fn is_note_dismissed(&self, key: &str) -> bool {
+        self.dismissed_notes.contains(key)
+    }
+
+    pub fn dismiss_note(&mut self, key: String) {
+        self.dirty |= self.dismissed_notes.insert(key);
     }
 
     /// Forces the next save, for an explicit `:w`.
@@ -242,6 +258,23 @@ mod tests {
         let state = ReviewState::load(&path).unwrap();
         assert!(state.comments().is_empty());
         assert!(state.plan().is_none());
+    }
+
+    #[test]
+    fn dismissed_notes_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        let id = some_id();
+        let mut state = ReviewState::default();
+        state.dismiss_note(note_key(&id, "watch out "));
+        assert!(state.take_dirty());
+        // Dismissing it again changes nothing.
+        state.dismiss_note(note_key(&id, "watch out"));
+        assert!(!state.take_dirty());
+        state.save(&path).unwrap();
+
+        let loaded = ReviewState::load(&path).unwrap();
+        assert!(loaded.is_note_dismissed(&note_key(&id, "watch out")));
     }
 
     #[test]

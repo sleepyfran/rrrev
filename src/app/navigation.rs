@@ -77,12 +77,13 @@ impl App {
     }
 
     pub(super) fn jump_comment(&mut self, n: usize, forward: bool) {
+        // Agent notes are stops too: they're comments waiting to be written.
         let stops = self.stops(
-            |row| matches!(row, Row::Comment { line: 0, .. }),
-            |file| self.has_comments_in_hunks(file),
+            |row| matches!(row, Row::Comment { line: 0, .. } | Row::Note { .. }),
+            |file| self.has_comments_in_hunks(file) || self.notes.iter().any(|n| n.file == file),
         );
         if !self.jump_to_stop(&stops, n, forward) {
-            self.message = Some("No more comments in this direction".to_string());
+            self.message = Some("No more comments or notes in this direction".to_string());
         }
     }
 
@@ -258,7 +259,7 @@ mod tests {
         app.update(Action::NextComment(1));
         assert_eq!(position(&app), (1, 3));
         app.update(Action::NextComment(1));
-        assert!(app.message.is_some());
+        assert_eq!(app.message.as_deref(), Some("No more comments or notes in this direction"));
         app.update(Action::PrevComment(1));
         assert_eq!(position(&app), (0, 7));
     }

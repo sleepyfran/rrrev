@@ -19,9 +19,13 @@ together in one group even when they are in different files. Aim for 3 to 9 \
 groups, fewer for a small diff. Give each group a title of a few words and a \
 one-sentence rationale saying what it changes and why it comes at this point. \
 Within a group, list hunks in the order they should be read. Use every hunk \
-id exactly once, copied exactly.";
+id exactly once, copied exactly. Also add a few notes, only where they earn \
+their place: a subtle behaviour change, a risk, an edge case, something a \
+reviewer could easily miss. Each note names its hunk id, optionally the \
+new-side line number it is about, and says in one or two sentences what to \
+check. Most hunks need no note; a small diff may need none at all.";
 
-const SCHEMA: &str = r#"{"type":"object","properties":{"groups":{"type":"array","items":{"type":"object","properties":{"title":{"type":"string"},"rationale":{"type":"string"},"hunks":{"type":"array","items":{"type":"string"}}},"required":["title","rationale","hunks"]}}},"required":["groups"]}"#;
+const SCHEMA: &str = r#"{"type":"object","properties":{"groups":{"type":"array","items":{"type":"object","properties":{"title":{"type":"string"},"rationale":{"type":"string"},"hunks":{"type":"array","items":{"type":"string"}}},"required":["title","rationale","hunks"]}},"notes":{"type":"array","items":{"type":"object","properties":{"hunk":{"type":"string"},"line":{"type":"integer"},"text":{"type":"string"}},"required":["hunk","text"]}}},"required":["groups"]}"#;
 
 /// Plans with the `claude` CLI in print mode, with no tools and our own system
 /// prompt, so it only reads the diff it's given.
@@ -155,6 +159,15 @@ mod tests {
     fn falls_back_to_the_result_text() {
         let stdout = serde_json::json!({ "is_error": false, "result": PLAN_JSON }).to_string();
         assert_eq!(parse_response(&stdout).unwrap().groups.len(), 1);
+    }
+
+    #[test]
+    fn reads_plans_with_notes() {
+        let stdout = r#"{"is_error":false,"structured_output":{"groups":[],"notes":[{"hunk":"abc","line":12,"text":"Check the bound."}]}}"#;
+        let plan = parse_response(stdout).unwrap();
+        assert_eq!(plan.notes[0].line, Some(12));
+        // Plans saved before notes existed still load.
+        assert!(parse_response(&format!(r#"{{"structured_output":{PLAN_JSON}}}"#)).unwrap().notes.is_empty());
     }
 
     #[test]
