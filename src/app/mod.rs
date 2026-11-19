@@ -13,17 +13,19 @@ mod navigation;
 mod notes;
 mod plan;
 mod search;
+mod verdict;
 mod view;
 
 #[cfg(test)]
 mod test_support;
 
-pub use action::{Action, Effect};
+pub use action::{Action, Effect, VerdictAction};
 pub use ask::{Answer, AskPanel};
 pub use context::{context_numbers, context_text, is_above};
 pub use marks::Progress;
 pub use mode::{AskTarget, CommentTarget, Focus, Mode, View};
 pub use notes::PlacedNote;
+pub use verdict::LineStats;
 pub use plan::Job;
 pub use search::find_matches;
 pub use view::{NOTE_LABEL, Row};
@@ -79,6 +81,8 @@ pub struct App {
     pub notes: Vec<PlacedNote>,
     /// Questions asked about the code, and their answers.
     pub ask: AskPanel,
+    /// Whether the verdict page is open.
+    pub show_verdict: bool,
     pub should_quit: bool,
 }
 
@@ -119,6 +123,7 @@ impl App {
             expanded: HashMap::new(),
             notes: Vec::new(),
             ask: AskPanel::default(),
+            show_verdict: false,
             should_quit: false,
         };
         // Generated files and files already reviewed start out of the way.
@@ -152,6 +157,7 @@ impl App {
                 | Mode::Command { .. }
                 | Mode::Search { .. }
                 | Mode::Ask { .. }
+                | Mode::VerdictMessage { .. }
         )
     }
 
@@ -159,6 +165,15 @@ impl App {
         self.message = None;
         if self.help_scroll.is_some() {
             self.update_help(action);
+            return;
+        }
+        if self.show_verdict {
+            // Only closing it, or the help, gets through.
+            match action {
+                Action::ToggleVerdict | Action::Cancel | Action::Quit => self.show_verdict = false,
+                Action::ToggleHelp => self.help_scroll = Some(0),
+                _ => {}
+            }
             return;
         }
         let action = match self.focus {
@@ -215,6 +230,9 @@ impl App {
             Action::ToggleAskPanel => self.toggle_ask_panel(),
             Action::PanelDown(n) => self.ask.scroll = self.ask.scroll.saturating_add(n),
             Action::PanelUp(n) => self.ask.scroll = self.ask.scroll.saturating_sub(n),
+            Action::Yank => self.yank(),
+            Action::CopyForAgent => self.copy_for_agent(),
+            Action::ToggleVerdict => self.show_verdict = true,
             Action::Select => {
                 if let Some(Row::File { .. }) = self.current_row() {
                     self.toggle_fold();
@@ -247,6 +265,7 @@ impl App {
             Mode::Comment { .. } => self.comment_input(action),
             Mode::Search { .. } => self.search_input(action),
             Mode::Ask { .. } => self.ask_input(action),
+            Mode::VerdictMessage { .. } => self.verdict_message_input(action),
             Mode::Normal | Mode::Visual { .. } => {}
         }
     }

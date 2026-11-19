@@ -40,6 +40,7 @@ impl App {
             "export" => self.export_command(&args),
             "organize" => self.organize_command(&args),
             "ask" => self.ask_command(&args),
+            "verdict" => self.show_verdict = true,
             _ => match name.parse::<u32>() {
                 Ok(line) => self.go_to_line(line),
                 Err(_) => self.message = Some(format!("error: not a command: {name}")),

@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 
 use crate::diff::Diff;
-use crate::review::ReviewState;
+use crate::review::{ReviewState, Verdict};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
@@ -35,6 +35,9 @@ impl Format {
 #[derive(Debug, Serialize)]
 pub struct Export {
     pub title: String,
+    /// The reviewer's verdict, once they've given one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<Verdict>,
     pub comments: Vec<ExportedComment>,
 }
 
@@ -77,7 +80,25 @@ pub fn collect(title: &str, diff: &Diff, review: &ReviewState) -> Export {
         })
         .collect();
     comments.sort_by_key(|c| (c.path.clone(), c.new_lines.or(c.old_lines)));
-    Export { title: title.to_string(), comments }
+    Export { title: title.to_string(), verdict: review.verdict().cloned(), comments }
+}
+
+/// The comments as a short brief for a coding agent: each as `path:line`
+/// and what the reviewer wrote, the way you'd paste them into a chat.
+pub fn agent_brief(export: &Export) -> String {
+    let mut out = format!("Review comments on {} to address:\n", export.title);
+    if let Some(verdict) = export.verdict.as_ref().filter(|v| !v.message.trim().is_empty()) {
+        out += &format!("\nOverall: {}\n", verdict.message.trim());
+    }
+    for comment in &export.comments {
+        let outdated = if comment.outdated { " (on code that has since changed)" } else { "" };
+        let mut lines = comment.text.trim().lines();
+        out += &format!("\n- `{}`{outdated}: {}\n", comment.location(), lines.next().unwrap_or(""));
+        for line in lines {
+            out += &format!("  {line}\n");
+        }
+    }
+    out
 }
 
 pub fn render(export: &Export, format: Format) -> Result<String> {
@@ -89,6 +110,11 @@ pub fn render(export: &Export, format: Format) -> Result<String> {
 
 fn markdown(export: &Export) -> String {
     let mut out = format!("# Review comments: {} ({})\n", export.title, export.comments.len());
+    if let Some(verdict) = &export.verdict {
+        out += &format!("\n**{}**", verdict.kind.label());
+        let message = verdict.message.trim();
+        out += &if message.is_empty() { "\n".to_string() } else { format!(": {message}\n") };
+    }
     for comment in &export.comments {
         let outdated = if comment.outdated { " (outdated)" } else { "" };
         out += &format!("\n## {}{outdated}\n\n", comment.location());
@@ -156,6 +182,7 @@ mod tests {
     fn markdown_quotes_code_and_comment() {
         let export = Export {
             title: "main..feat".into(),
+            verdict: None,
             comments: vec![exported("a.rs", Some((3, 3)), &["-old", "+new"], "Why?\n")],
         };
         let md = render(&export, Format::Markdown).unwrap();
@@ -169,16 +196,37 @@ mod tests {
     fn markdown_fence_outgrows_backticks_in_code() {
         let export = Export {
             title: String::new(),
+            verdict: None,
             comments: vec![exported("README.md", Some((1, 1)), &["+```rust"], "x")],
         };
         assert!(render(&export, Format::Markdown).unwrap().contains("````diff\n+```rust\n````"));
     }
 
     #[test]
+    fn verdicts_lead_the_markdown_and_the_brief() {
+        use crate::review::VerdictKind;
+        let mut outdated = exported("b.rs", Some((9, 9)), &[], "Rename\nthis too");
+        outdated.outdated = true;
+        let export = Export {
+            title: "main..feat".into(),
+            verdict: Some(Verdict { kind: VerdictKind::RequestChanges, message: "Close, two nits.".into() }),
+            comments: vec![exported("a.rs", Some((3, 4)), &["+x"], "Why two locks?"), outdated],
+        };
+        let md = render(&export, Format::Markdown).unwrap();
+        assert!(md.starts_with("# Review comments: main..feat (2)\n\n**Changes requested**: Close, two nits.\n"));
+        assert_eq!(
+            agent_brief(&export),
+            "Review comments on main..feat to address:\n\nOverall: Close, two nits.\n\n\
+             - `a.rs:3-4`: Why two locks?\n\n\
+             - `b.rs:9` (on code that has since changed): Rename\n  this too\n"
+        );
+    }
+
+    #[test]
     fn file_sink_writes_and_reports() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("out").join("c.json");
-        let export = Export { title: String::new(), comments: vec![exported("a.rs", None, &[], "x")] };
+        let export = Export { title: String::new(), verdict: None, comments: vec![exported("a.rs", None, &[], "x")] };
         let note = FileSink { path: path.clone(), format: Format::Json }.send(&export).unwrap();
         assert!(note.starts_with("Exported 1 comment to"));
         let json: serde_json::Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();

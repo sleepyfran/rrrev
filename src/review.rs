@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
@@ -24,9 +24,15 @@ pub struct ReviewState {
     /// The organizer's latest plan, as it returned it.
     #[serde(default)]
     plan: Option<Plan>,
+    /// Per hunk, the indices of its changed lines that have been on screen.
+    #[serde(default)]
+    seen: BTreeMap<HunkId, BTreeSet<usize>>,
     /// Agent notes the reviewer dismissed, by [`note_key`].
     #[serde(default)]
     dismissed_notes: BTreeSet<String>,
+    /// How the review ends, once the reviewer says.
+    #[serde(default)]
+    verdict: Option<Verdict>,
     /// Set when there are changes that haven't been saved yet.
     #[serde(skip)]
     dirty: bool,
@@ -48,6 +54,33 @@ pub struct Comment {
     /// comment still makes sense once the hunk has changed.
     pub code: Vec<String>,
     pub text: String,
+}
+
+/// What the reviewer makes of the change as a whole.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerdictKind {
+    Approve,
+    RequestChanges,
+    Comment,
+}
+
+impl VerdictKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            VerdictKind::Approve => "Approved",
+            VerdictKind::RequestChanges => "Changes requested",
+            VerdictKind::Comment => "Commented",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Verdict {
+    pub kind: VerdictKind,
+    /// A word to the author; may be empty.
+    #[serde(default)]
+    pub message: String,
 }
 
 /// Identifies an agent note across runs: its hunk and its text.
@@ -135,12 +168,36 @@ impl ReviewState {
         self.dirty |= self.plan.take().is_some();
     }
 
+    /// Whether line `line` of hunk `id` has been on screen.
+    pub fn is_seen(&self, id: &HunkId, line: usize) -> bool {
+        self.seen.get(id).is_some_and(|lines| lines.contains(&line))
+    }
+
+    /// Notes lines of hunk `id` as having been on screen.
+    pub fn mark_seen(&mut self, id: &HunkId, lines: impl IntoIterator<Item = usize>) {
+        let set = self.seen.entry(id.clone()).or_default();
+        let before = set.len();
+        set.extend(lines);
+        self.dirty |= set.len() != before;
+    }
+
     pub fn is_note_dismissed(&self, key: &str) -> bool {
         self.dismissed_notes.contains(key)
     }
 
     pub fn dismiss_note(&mut self, key: String) {
         self.dirty |= self.dismissed_notes.insert(key);
+    }
+
+    pub fn verdict(&self) -> Option<&Verdict> {
+        self.verdict.as_ref()
+    }
+
+    pub fn set_verdict(&mut self, verdict: Option<Verdict>) {
+        if self.verdict != verdict {
+            self.verdict = verdict;
+            self.dirty = true;
+        }
     }
 
     /// Forces the next save, for an explicit `:w`.
@@ -261,20 +318,26 @@ mod tests {
     }
 
     #[test]
-    fn dismissed_notes_round_trip() {
+    fn seen_lines_notes_and_verdict_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("state.json");
         let id = some_id();
         let mut state = ReviewState::default();
-        state.dismiss_note(note_key(&id, "watch out "));
+        state.mark_seen(&id, [0, 2]);
         assert!(state.take_dirty());
-        // Dismissing it again changes nothing.
-        state.dismiss_note(note_key(&id, "watch out"));
+        // Lines already seen change nothing.
+        state.mark_seen(&id, [2]);
         assert!(!state.take_dirty());
+        state.dismiss_note(note_key(&id, "watch out "));
+        state.set_verdict(Some(Verdict { kind: VerdictKind::Approve, message: "ship it".into() }));
         state.save(&path).unwrap();
 
         let loaded = ReviewState::load(&path).unwrap();
+        assert!(loaded.is_seen(&id, 2) && !loaded.is_seen(&id, 1));
         assert!(loaded.is_note_dismissed(&note_key(&id, "watch out")));
+        assert_eq!(loaded.verdict().unwrap().kind, VerdictKind::Approve);
+        let json = std::fs::read_to_string(&path).unwrap();
+        assert!(json.contains("\"approve\""));
     }
 
     #[test]

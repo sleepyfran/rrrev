@@ -59,9 +59,30 @@ pub enum Action {
     /// `C-e` / `C-y`: scroll the ask panel.
     PanelDown(usize),
     PanelUp(usize),
+    /// `y`: copy the line, selection or comment to the clipboard.
+    Yank,
+    /// `Y`: copy every comment, as `path:line` and its text, for an agent.
+    CopyForAgent,
+    /// `S`: the summary of the review, and its verdict.
+    ToggleVerdict,
     Select,
     Cancel,
     Quit,
+}
+
+/// Keys on the verdict page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerdictAction {
+    Approve,
+    RequestChanges,
+    Comment,
+    /// Write or edit the message to the author.
+    Message,
+    /// Take the verdict back.
+    Clear,
+    CopyForAgent,
+    Export,
+    Close,
 }
 
 /// Work `update` can't do itself, for the main loop to carry out.
@@ -79,4 +100,6 @@ pub enum Effect {
     /// same `job`.
     Ask { job: u64, request: AskRequest },
     CancelAsk { job: u64 },
+    /// Put `text` on the system clipboard.
+    Copy { text: String },
 }

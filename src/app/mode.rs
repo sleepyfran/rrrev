@@ -23,6 +23,8 @@ pub enum Mode {
     Search { input: TextInput },
     /// Typing a question about `target` for the ask panel.
     Ask { target: AskTarget, input: TextInput },
+    /// Typing the verdict's message to the author.
+    VerdictMessage { input: TextInput },
 }
 
 /// What a question is about: a line, a selection or a hunk.

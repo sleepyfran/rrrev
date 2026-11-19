@@ -71,6 +71,7 @@ pub enum Popup {
     Help,
     Sidebar,
     Comment,
+    Verdict,
 }
 
 impl Popup {
@@ -79,7 +80,7 @@ impl Popup {
     fn anchor(self) -> Anchor {
         match self {
             Popup::Comment => Anchor::Bottom,
-            Popup::Help | Popup::Sidebar => Anchor::Center,
+            Popup::Help | Popup::Sidebar | Popup::Verdict => Anchor::Center,
         }
     }
 }
@@ -148,7 +149,7 @@ pub struct Animator {
     now: Instant,
     /// Whether anything moved this frame, so the next one comes soon.
     busy: bool,
-    popups: [PopupState; 3],
+    popups: [PopupState; 4],
     page: Option<(View, usize)>,
     /// Columns the diff is pushed aside by, while a new page slides in.
     slide: Option<Tween>,
