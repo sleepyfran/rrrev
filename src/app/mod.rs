@@ -3,6 +3,7 @@
 //! outside world leaves as an [`Effect`] for the main loop.
 
 mod action;
+mod ask;
 mod command;
 mod comments;
 mod context;
@@ -18,9 +19,10 @@ mod view;
 mod test_support;
 
 pub use action::{Action, Effect};
+pub use ask::{Answer, AskPanel};
 pub use context::{context_numbers, context_text, is_above};
 pub use marks::Progress;
-pub use mode::{CommentTarget, Focus, Mode, View};
+pub use mode::{AskTarget, CommentTarget, Focus, Mode, View};
 pub use notes::PlacedNote;
 pub use plan::Job;
 pub use search::find_matches;
@@ -75,6 +77,8 @@ pub struct App {
     pub expanded: HashMap<(usize, usize), context::Expansion>,
     /// The AI's notes from the plan, placed on the diff.
     pub notes: Vec<PlacedNote>,
+    /// Questions asked about the code, and their answers.
+    pub ask: AskPanel,
     pub should_quit: bool,
 }
 
@@ -114,6 +118,7 @@ impl App {
             help_scroll: None,
             expanded: HashMap::new(),
             notes: Vec::new(),
+            ask: AskPanel::default(),
             should_quit: false,
         };
         // Generated files and files already reviewed start out of the way.
@@ -146,6 +151,7 @@ impl App {
             Mode::Comment { .. }
                 | Mode::Command { .. }
                 | Mode::Search { .. }
+                | Mode::Ask { .. }
         )
     }
 
@@ -205,6 +211,10 @@ impl App {
             Action::ExpandBelow(n) => self.expand(n, false),
             Action::ExpandScope => self.expand_scope(),
             Action::ResetContext => self.reset_context(),
+            Action::Ask => self.start_ask(),
+            Action::ToggleAskPanel => self.toggle_ask_panel(),
+            Action::PanelDown(n) => self.ask.scroll = self.ask.scroll.saturating_add(n),
+            Action::PanelUp(n) => self.ask.scroll = self.ask.scroll.saturating_sub(n),
             Action::Select => {
                 if let Some(Row::File { .. }) = self.current_row() {
                     self.toggle_fold();
@@ -214,7 +224,13 @@ impl App {
                 if self.focus == Focus::Sidebar {
                     self.focus = Focus::Diff;
                 } else if self.mode == Mode::Normal {
-                    self.clear_search_highlight();
+                    // Esc puts things away one at a time: the search
+                    // highlight, then the ask panel.
+                    if self.highlighted_search().is_some() {
+                        self.clear_search_highlight();
+                    } else {
+                        self.ask.open = false;
+                    }
                 }
                 self.mode = Mode::Normal;
             }
@@ -230,6 +246,7 @@ impl App {
             Mode::Command { .. } => self.command_input(action),
             Mode::Comment { .. } => self.comment_input(action),
             Mode::Search { .. } => self.search_input(action),
+            Mode::Ask { .. } => self.ask_input(action),
             Mode::Normal | Mode::Visual { .. } => {}
         }
     }

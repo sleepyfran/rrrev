@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use crate::ask::AskRequest;
 use crate::export::Format;
 use crate::organizer::OrganizeRequest;
 
@@ -51,6 +52,13 @@ pub enum Action {
     ExpandScope,
     /// `zE`: drop all the extra context.
     ResetContext,
+    /// `a`: ask the AI about the line, selection or hunk.
+    Ask,
+    /// `A`: show / hide the ask panel.
+    ToggleAskPanel,
+    /// `C-e` / `C-y`: scroll the ask panel.
+    PanelDown(usize),
+    PanelUp(usize),
     Select,
     Cancel,
     Quit,
@@ -67,4 +75,8 @@ pub enum Effect {
     Organize { job: u64, request: OrganizeRequest },
     /// Stop that job; its result, if one still arrives, is ignored.
     CancelOrganize { job: u64 },
+    /// Answer a question in the background, then call `finish_ask` with the
+    /// same `job`.
+    Ask { job: u64, request: AskRequest },
+    CancelAsk { job: u64 },
 }

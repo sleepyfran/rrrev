@@ -59,6 +59,15 @@ pub const SECTIONS: &[Section] = &[
         ],
     },
     Section {
+        title: "Asking the AI",
+        entries: &[
+            ("a", "ask about the line, selection or hunk; Claude can read the whole repository"),
+            ("A", "show / hide the answers; Esc hides them too"),
+            ("C-e / C-y", "scroll the answers"),
+            (":ask cancel / clear", "stop the question being answered / forget them all"),
+        ],
+    },
+    Section {
         title: "Layout",
         entries: &[
             ("za / zo / zc", "toggle / open / close the file's fold"),

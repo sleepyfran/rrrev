@@ -1,5 +1,6 @@
 mod anim;
 mod app;
+mod ask;
 mod diff;
 mod export;
 mod help;
@@ -33,6 +34,7 @@ use ratatui::{
 
 use anim::Animator;
 use app::{App, Effect};
+use ask::Assistant;
 use diff::DiffSource;
 use diff::git::{DiffSpec, GitSource};
 use export::{CommentSink, FileSink, Format};
@@ -82,10 +84,12 @@ fn main() -> Result<()> {
     }
 
     let mut app = App::new(source.describe(), diff, review);
-    let organizer: Arc<dyn Organizer> = Arc::new(ClaudeCli::from_env());
+    let claude = Arc::new(ClaudeCli::from_env());
+    let organizer: Arc<dyn Organizer> = claude.clone();
+    let assistant: Arc<dyn Assistant> = claude;
     let highlighter = Highlighter::new(Background::detect());
     let mut terminal = ratatui::init();
-    let result = run(&mut terminal, &mut app, &state_file, organizer, highlighter);
+    let result = run(&mut terminal, &mut app, &state_file, Ai { organizer, assistant }, highlighter);
     ratatui::restore();
     result
 }
@@ -96,24 +100,41 @@ const TICK: Duration = Duration::from_millis(100);
 
 /// What a background organizer run sends back: its job id and its answer.
 type PlanResult = (u64, Result<Plan>);
+/// What a background question sends back: its job id and the answer.
+type AskResult = (u64, Result<String>);
 
-/// An organizer run on its background thread.
+/// The AI behind `:organize` and the ask panel.
+struct Ai {
+    organizer: Arc<dyn Organizer>,
+    assistant: Arc<dyn Assistant>,
+}
+
+/// A background AI run on its own thread.
 struct Running {
     job: u64,
     cancel: Cancel,
     thread: thread::JoinHandle<()>,
 }
 
+impl Running {
+    fn stop(self) {
+        self.cancel.cancel();
+        let _ = self.thread.join();
+    }
+}
+
 fn run(
     terminal: &mut DefaultTerminal,
     app: &mut App,
     state_file: &Path,
-    organizer: Arc<dyn Organizer>,
+    ai: Ai,
     mut highlighter: Highlighter,
 ) -> Result<()> {
     let mut keys = KeyHandler::default();
     let (plans_tx, plans): (Sender<PlanResult>, Receiver<PlanResult>) = mpsc::channel();
+    let (answers_tx, answers): (Sender<AskResult>, Receiver<AskResult>) = mpsc::channel();
     let mut running: Option<Running> = None;
+    let mut asking: Option<Running> = None;
     let mut anim = Animator::from_env();
     while !app.should_quit {
         terminal.draw(|frame| ui::render(frame, app, &mut highlighter, &mut anim, &keys.pending()))?;
@@ -123,6 +144,12 @@ fn run(
                 running = None;
             }
             app.finish_organize(job, result);
+        }
+        while let Ok((job, result)) = answers.try_recv() {
+            if asking.as_ref().is_some_and(|r| r.job == job) {
+                asking = None;
+            }
+            app.finish_ask(job, result);
         }
         if event::poll(if anim.is_animating() { anim::FRAME } else { TICK })?
             && let Event::Key(key) = event::read()?
@@ -154,7 +181,7 @@ fn run(
                 });
             }
             Some(Effect::Organize { job, request }) => {
-                let (organizer, done, cancel) = (Arc::clone(&organizer), plans_tx.clone(), Cancel::default());
+                let (organizer, done, cancel) = (Arc::clone(&ai.organizer), plans_tx.clone(), Cancel::default());
                 let token = cancel.clone();
                 let thread = thread::spawn(move || {
                     let _ = done.send((job, organizer.organize(&request, &token)));
@@ -168,6 +195,19 @@ fn run(
                     run.cancel.cancel();
                 }
             }
+            Some(Effect::Ask { job, request }) => {
+                let (assistant, done, cancel) = (Arc::clone(&ai.assistant), answers_tx.clone(), Cancel::default());
+                let token = cancel.clone();
+                let thread = thread::spawn(move || {
+                    let _ = done.send((job, assistant.ask(&request, &token)));
+                });
+                asking = Some(Running { job, cancel, thread });
+            }
+            Some(Effect::CancelAsk { job }) => {
+                if let Some(run) = asking.take_if(|r| r.job == job) {
+                    run.cancel.cancel();
+                }
+            }
             None => {}
         }
 
@@ -178,10 +218,9 @@ fn run(
             app.message = Some(format!("error: could not save review state: {e:#}"));
         }
     }
-    // Don't leave the organizer's process running after we're gone.
-    if let Some(run) = running {
-        run.cancel.cancel();
-        let _ = run.thread.join();
+    // Don't leave an AI process running after we're gone.
+    for run in [running, asking].into_iter().flatten() {
+        run.stop();
     }
     Ok(())
 }

@@ -7,6 +7,7 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
 use super::{Cancel, OrganizeRequest, Organizer, Plan};
+use crate::ask::{AskRequest, Assistant};
 
 const SYSTEM_PROMPT: &str = "\
 You plan code reviews. You get a diff split into hunks, each introduced by a \
@@ -26,6 +27,14 @@ new-side line number it is about, and says in one or two sentences what to \
 check. Most hunks need no note; a small diff may need none at all.";
 
 const SCHEMA: &str = r#"{"type":"object","properties":{"groups":{"type":"array","items":{"type":"object","properties":{"title":{"type":"string"},"rationale":{"type":"string"},"hunks":{"type":"array","items":{"type":"string"}}},"required":["title","rationale","hunks"]}},"notes":{"type":"array","items":{"type":"object","properties":{"hunk":{"type":"string"},"line":{"type":"integer"},"text":{"type":"string"}},"required":["hunk","text"]}}},"required":["groups"]}"#;
+
+const ASK_SYSTEM_PROMPT: &str = "\
+You help someone review a code change in their terminal. They point at some \
+code in the diff and ask about it. You can read any file in the repository \
+with your tools, so look things up (callers, definitions, tests, docs) rather \
+than guess, and say when something can't be told from the code. Answer in \
+plain text for a narrow terminal pane: short paragraphs, no headings, no \
+tables, code only when it helps, and lead with the answer.";
 
 /// Plans with the `claude` CLI in print mode, with no tools and our own system
 /// prompt, so it only reads the diff it's given.
@@ -47,19 +56,38 @@ impl ClaudeCli {
 
 impl Organizer for ClaudeCli {
     fn organize(&self, request: &OrganizeRequest, cancel: &Cancel) -> Result<Plan> {
+        let args = ["--tools", "", "--system-prompt", SYSTEM_PROMPT, "--json-schema", SCHEMA];
+        let (stdout, outcome) = self.run(&args, request.to_prompt(), cancel)?;
+        let parsed = parse_response(&stdout);
+        self.finish(outcome, &stdout, parsed)
+    }
+}
+
+impl Assistant for ClaudeCli {
+    /// Read-only tools, so it can look around the repository it runs in but
+    /// never change it.
+    fn ask(&self, request: &AskRequest, cancel: &Cancel) -> Result<String> {
+        let args = ["--tools", "Read,Grep,Glob", "--system-prompt", ASK_SYSTEM_PROMPT];
+        let (stdout, outcome) = self.run(&args, request.to_prompt(), cancel)?;
+        let parsed = parse_text(&stdout);
+        self.finish(outcome, &stdout, parsed)
+    }
+}
+
+/// How a finished `claude` run went: its exit status, what it printed on
+/// stderr, and whether the prompt made it onto stdin.
+struct Outcome {
+    status: std::process::ExitStatus,
+    stderr: String,
+    written: std::io::Result<()>,
+}
+
+impl ClaudeCli {
+    /// Runs the CLI in print mode with `args` and `prompt` on stdin, until
+    /// it exits or `cancel` fires. Returns what it printed.
+    fn run(&self, args: &[&str], prompt: String, cancel: &Cancel) -> Result<(String, Outcome)> {
         let mut command = Command::new(&self.program);
-        command.args([
-            "-p",
-            "--output-format",
-            "json",
-            "--no-session-persistence",
-            "--tools",
-            "",
-            "--system-prompt",
-            SYSTEM_PROMPT,
-            "--json-schema",
-            SCHEMA,
-        ]);
+        command.args(["-p", "--output-format", "json", "--no-session-persistence"]).args(args);
         if let Some(model) = &self.model {
             command.args(["--model", model]);
         }
@@ -73,7 +101,6 @@ impl Organizer for ClaudeCli {
         // Each pipe gets its own thread so neither side can block the other
         // on a full buffer, and this one is free to watch for `cancel`.
         let mut stdin = child.stdin.take().expect("stdin is piped");
-        let prompt = request.to_prompt();
         let writer = thread::spawn(move || stdin.write_all(prompt.as_bytes()));
         let stdout = read_in_background(child.stdout.take().expect("stdout is piped"));
         let stderr = read_in_background(child.stderr.take().expect("stderr is piped"));
@@ -92,8 +119,12 @@ impl Organizer for ClaudeCli {
         let stdout = stdout.join().expect("stdout reader panicked")?;
         let stderr = stderr.join().expect("stderr reader panicked")?;
         let written = writer.join().expect("stdin writer panicked");
+        Ok((stdout, Outcome { status, stderr, written }))
+    }
 
-        let parsed = parse_response(&stdout);
+    /// The parsed answer of a successful run, or why the run failed.
+    fn finish<T>(&self, outcome: Outcome, stdout: &str, parsed: Result<T>) -> Result<T> {
+        let Outcome { status, stderr, written } = outcome;
         if status.success() {
             written?;
             return parsed;
@@ -117,6 +148,22 @@ fn read_in_background(mut pipe: impl Read + Send + 'static) -> thread::JoinHandl
         pipe.read_to_end(&mut bytes)?;
         Ok(String::from_utf8_lossy(&bytes).into_owned())
     })
+}
+
+/// Reads the text answer out of the `--output-format json` envelope.
+fn parse_text(stdout: &str) -> Result<String> {
+    #[derive(Deserialize)]
+    struct Envelope {
+        #[serde(default)]
+        is_error: bool,
+        result: Option<String>,
+    }
+    let envelope: Envelope = serde_json::from_str(stdout.trim()).context("unexpected output from claude")?;
+    match (envelope.is_error, envelope.result) {
+        (true, result) => bail!("{}", result.unwrap_or_else(|| "claude reported an error".to_string())),
+        (false, Some(text)) if !text.trim().is_empty() => Ok(text.trim().to_string()),
+        (false, _) => bail!("claude gave no answer"),
+    }
 }
 
 /// Reads the `--output-format json` envelope.
@@ -159,6 +206,14 @@ mod tests {
     fn falls_back_to_the_result_text() {
         let stdout = serde_json::json!({ "is_error": false, "result": PLAN_JSON }).to_string();
         assert_eq!(parse_response(&stdout).unwrap().groups.len(), 1);
+    }
+
+    #[test]
+    fn reads_plain_answers() {
+        let stdout = r#"{"is_error":false,"result":"  It rounds down.\n"}"#;
+        assert_eq!(parse_text(stdout).unwrap(), "It rounds down.");
+        assert!(parse_text(r#"{"is_error":false,"result":""}"#).is_err());
+        assert_eq!(parse_text(r#"{"is_error":true,"result":"nope"}"#).unwrap_err().to_string(), "nope");
     }
 
     #[test]

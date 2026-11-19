@@ -72,6 +72,8 @@ impl KeyHandler {
             (None, KeyCode::Char('c')) if ctrl => Action::Quit,
             (None, KeyCode::Char('d')) if ctrl => Action::HalfPageDown,
             (None, KeyCode::Char('u')) if ctrl => Action::HalfPageUp,
+            (None, KeyCode::Char('e')) if ctrl => Action::PanelDown(3 * n),
+            (None, KeyCode::Char('y')) if ctrl => Action::PanelUp(3 * n),
             (None, KeyCode::Char('q')) => Action::Quit,
             (None, KeyCode::Char('j') | KeyCode::Down) => Action::Down(n),
             (None, KeyCode::Char('k') | KeyCode::Up) => Action::Up(n),
@@ -97,6 +99,8 @@ impl KeyHandler {
             (None, KeyCode::Char('n')) => Action::SearchNext(n),
             (None, KeyCode::Char('N')) => Action::SearchPrev(n),
             (None, KeyCode::Char('?')) => Action::ToggleHelp,
+            (None, KeyCode::Char('a')) => Action::Ask,
+            (None, KeyCode::Char('A')) => Action::ToggleAskPanel,
             _ => return None,
         };
         Some(action)
@@ -167,6 +171,7 @@ mod tests {
         assert_eq!(press(&mut h, "]e"), Some(Action::ExpandBelow(1)));
         assert_eq!(press(&mut h, "ze"), Some(Action::ExpandScope));
         assert_eq!(press(&mut h, "zE"), Some(Action::ResetContext));
+        assert_eq!(press(&mut h, "a"), Some(Action::Ask));
     }
 
     #[test]
