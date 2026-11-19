@@ -97,13 +97,6 @@ impl Stack {
         Ok(Stack { trunk: view.trunk, layers })
     }
 
-    /// The stack cut at `branch`, its top layer, or `None` if it isn't one.
-    pub fn up_to(mut self, branch: &str) -> Option<Stack> {
-        let top = self.layers.iter().position(|l| l.branch == branch)?;
-        self.layers.truncate(top + 1);
-        Some(self)
-    }
-
     pub fn top(&self) -> &str {
         &self.layers.last().expect("a stack has a layer").branch
     }
@@ -137,13 +130,6 @@ mod tests {
         );
         assert_eq!(stack.layers[0].title(), "#12 auth");
         assert_eq!(stack.top(), "api");
-    }
-
-    #[test]
-    fn cuts_at_a_layer() {
-        let stack = Stack::parse(VIEW).unwrap();
-        assert_eq!(stack.clone().up_to("auth").unwrap().top(), "auth");
-        assert!(stack.up_to("types").is_none());
     }
 
     #[test]
