@@ -53,6 +53,7 @@ pub type Segment = (Style, String);
 pub struct Highlighter {
     syntaxes: SyntaxSet,
     theme: Theme,
+    background: Background,
     /// Per `(file, hunk)`: each line's segments, empty for lines left plain.
     cache: HashMap<(usize, usize), Vec<Vec<Segment>>>,
 }
@@ -68,7 +69,18 @@ impl Highlighter {
                 scope.style.foreground = scope.style.foreground.map(readable_on_white);
             }
         }
-        Self { syntaxes: two_face::syntax::extra_newlines(), theme, cache: HashMap::new() }
+        Self { syntaxes: two_face::syntax::extra_newlines(), theme, background, cache: HashMap::new() }
+    }
+
+    /// The tint behind words that changed within a changed line.
+    pub fn emphasis(&self, kind: LineKind) -> Style {
+        let bg = match (self.background, kind) {
+            (Background::Dark, LineKind::Removed) => Color::Rgb(110, 38, 44),
+            (Background::Dark, _) => Color::Rgb(30, 92, 50),
+            (Background::Light, LineKind::Removed) => Color::Rgb(255, 196, 196),
+            (Background::Light, _) => Color::Rgb(188, 240, 196),
+        };
+        Style::new().bg(bg)
     }
 
     /// The segments of one diff line; empty when it should be drawn plain,

@@ -6,6 +6,8 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Clear, Paragraph},
 };
 
+use std::ops::Range;
+
 use crate::anim::{Animator, Popup};
 use crate::app::{App, CommentTarget, Focus, Mode, Progress, Row, View, find_matches};
 use crate::diff::{FileStatus, LineKind};
@@ -558,8 +560,40 @@ fn diff_line(app: &App, highlighter: &mut Highlighter, file: usize, hunk: usize,
         [] => vec![(text_style, l.content.clone())],
         segments => segments.to_vec(),
     };
+    // What changed within the line, word by word, gets a tint behind it.
+    let changes = app.diff.word_changes(file, hunk, line);
+    let segments = emphasize(segments, changes, highlighter.emphasis(l.kind));
     let segments = segments.into_iter().map(|(style, text)| (style, text.replace('\t', "    "))).collect();
     hanging(app, gutter, hang, highlighted(segments, app))
+}
+
+/// Splits `segments` where `ranges` (byte offsets into their joined text)
+/// start and end, and patches `style` onto the parts inside them.
+fn emphasize(segments: Vec<Segment>, ranges: &[Range<usize>], style: Style) -> Vec<Segment> {
+    if ranges.is_empty() {
+        return segments;
+    }
+    let mut out = Vec::new();
+    let mut start = 0;
+    for (seg_style, text) in segments {
+        let end = start + text.len();
+        let mut cuts: Vec<usize> = ranges
+            .iter()
+            .flat_map(|r| [r.start, r.end])
+            .filter(|&c| c > start && c < end && text.is_char_boundary(c - start))
+            .collect();
+        cuts.sort_unstable();
+        cuts.dedup();
+        let mut from = start;
+        for to in cuts.into_iter().chain([end]) {
+            let inside = ranges.iter().any(|r| r.start <= from && to <= r.end);
+            let piece = text[from - start..to - start].to_string();
+            out.push((if inside { seg_style.patch(style) } else { seg_style }, piece));
+            from = to;
+        }
+        start = end;
+    }
+    out
 }
 
 const MAX_COMMENT_BOX_LINES: u16 = 8;
@@ -741,6 +775,18 @@ mod tests {
         assert_eq!(text(wrap_spans(spans(), 8)), ["abcdéfgh"]);
         assert_eq!(text(wrap_spans(vec![], 4)), [""]);
         assert_eq!(wrap_spans(spans(), 3)[1].len(), 2, "split where a span crosses a break");
+    }
+
+    #[test]
+    fn emphasizes_changed_ranges_across_segments() {
+        let bold = Style::new().bold();
+        let tint = Style::new().bg(Color::Red);
+        let segments = vec![(bold, "let x".to_string()), (Style::new(), " = 16;".to_string())];
+        let out = emphasize(segments, &[4..5, 8..10], tint);
+        let pieces: Vec<(&str, bool)> = out.iter().map(|(s, t)| (t.as_str(), s.bg == Some(Color::Red))).collect();
+        assert_eq!(pieces, [("let ", false), ("x", true), (" = ", false), ("16", true), (";", false)]);
+        assert_eq!(out[1].0.add_modifier, bold.add_modifier, "keeps the syntax style under the tint");
+        assert_eq!(emphasize(vec![(bold, "x".into())], &[], tint).len(), 1);
     }
 
     #[test]
