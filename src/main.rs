@@ -51,11 +51,12 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Mode>,
 
-    /// What to review: `<rev>` (vs the working tree), `a..b`, or `a...b` (from
-    /// the merge base). Defaults to HEAD vs the working tree, untracked files included.
+    /// What to review, in git's own syntax: `<rev>`, `a..b` or `a...b`. The
+    /// subcommands say the same in plain words. Defaults to everything not
+    /// committed yet, new files included.
     spec: Option<String>,
 
-    /// Review staged changes only (HEAD vs index).
+    /// Review only the changes staged with `git add`.
     #[arg(long, conflicts_with = "spec")]
     staged: bool,
 
@@ -67,6 +68,34 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Mode {
+    /// Review the last commit, or the last COUNT commits together.
+    Last {
+        #[arg(default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..))]
+        count: u32,
+    },
+    /// Review what one commit changed.
+    Commit {
+        /// A commit id, branch or tag.
+        commit: String,
+    },
+    /// Review the changes from one commit to another.
+    Between {
+        /// Where to start: a commit id, branch or tag.
+        from: String,
+        /// Where to end: a commit id, branch or tag.
+        to: String,
+    },
+    /// Review everything since a commit, uncommitted changes included.
+    Since {
+        /// A commit id, branch or tag.
+        commit: String,
+    },
+    /// Review what this branch adds since it split off another one,
+    /// uncommitted changes included.
+    Branch {
+        /// The branch it split off. Defaults to `main`, or `master`.
+        base: Option<String>,
+    },
     /// Review the current branch's stack (`gh stack`) one layer per group,
     /// each layer against the one below, plus what isn't committed yet.
     Stack,
@@ -75,6 +104,11 @@ enum Mode {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let source = match cli.command {
+        Some(Mode::Last { count }) => GitSource::discover(".", DiffSpec::Last(count))?,
+        Some(Mode::Commit { commit }) => GitSource::discover(".", DiffSpec::Commit(commit))?,
+        Some(Mode::Between { from, to }) => GitSource::discover(".", DiffSpec::Range { from, to })?,
+        Some(Mode::Since { commit }) => GitSource::discover(".", DiffSpec::RevToWorkTree(commit))?,
+        Some(Mode::Branch { base }) => GitSource::branch(".", base)?,
         Some(Mode::Stack) => GitSource::stack(".")?,
         None => GitSource::discover(".", DiffSpec::from_args(cli.spec.as_deref(), cli.staged))?,
     };

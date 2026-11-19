@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
-use git2::{Delta, DiffOptions, Patch, Repository, Tree};
+use anyhow::{Context, Result, bail};
+use git2::{Commit, Delta, DiffOptions, Patch, Repository, Tree};
 
 use super::stack::Stack;
 use super::{Diff, DiffLine, DiffSource, FileDiff, FileStatus, Hunk, LineKind, Sources};
@@ -19,6 +19,13 @@ pub enum DiffSpec {
     Range { from: String, to: String },
     /// `from...to`: merge base of both vs `to`.
     MergeBase { from: String, to: String },
+    /// The last `n` commits on the checked-out branch.
+    Last(u32),
+    /// What one commit changed, against the commit before it.
+    Commit(String),
+    /// Everything the checked-out branch adds since it split off `base`,
+    /// uncommitted changes included.
+    Branch { base: String },
     /// Each layer of a stack against the one below, in order.
     Stack(Stack),
 }
@@ -48,6 +55,27 @@ impl GitSource {
     pub fn discover(path: impl AsRef<Path>, spec: DiffSpec) -> Result<Self> {
         let repo = Repository::discover(path).context("not inside a git repository")?;
         Ok(Self { repo, spec })
+    }
+
+    /// What the checked-out branch adds since it split off `base`, or off
+    /// `main` / `master` when no base is given.
+    pub fn branch(path: impl AsRef<Path>, base: Option<String>) -> Result<Self> {
+        let repo = Repository::discover(path).context("not inside a git repository")?;
+        let base = match base {
+            Some(base) => base,
+            None => ["main", "master"]
+                .into_iter()
+                .find(|b| repo.find_branch(b, git2::BranchType::Local).is_ok())
+                .context("no `main` or `master` branch, name the one to compare with: `rrrev branch <base>`")?
+                .to_string(),
+        };
+        let source = Self { repo, spec: DiffSpec::Branch { base } };
+        if let DiffSpec::Branch { base } = &source.spec
+            && source.current_branch().as_deref() == Some(base.as_str())
+        {
+            bail!("you are on `{base}` itself, switch to the branch you want to review");
+        }
+        Ok(source)
     }
 
     /// The stack the checked-out branch belongs to (`gh stack`), layer by layer.
@@ -80,18 +108,42 @@ impl GitSource {
 
     /// The tree of the commit `from` and `to` last had in common.
     fn merge_base(&self, from: &str, to: &str) -> Result<Tree<'_>> {
-        let repo = &self.repo;
-        let commit = |rev: &str| -> Result<git2::Oid> {
-            Ok(repo
-                .revparse_single(rev)
-                .and_then(|obj| obj.peel_to_commit())
-                .with_context(|| format!("cannot resolve `{rev}` to a commit"))?
-                .id())
-        };
-        let base = repo
-            .merge_base(commit(from)?, commit(to)?)
+        let base = self
+            .repo
+            .merge_base(self.commit(from)?.id(), self.commit(to)?.id())
             .with_context(|| format!("no merge base between `{from}` and `{to}`"))?;
-        Ok(repo.find_commit(base)?.tree()?)
+        Ok(self.repo.find_commit(base)?.tree()?)
+    }
+
+    fn commit(&self, rev: &str) -> Result<Commit<'_>> {
+        self.repo
+            .revparse_single(rev)
+            .and_then(|obj| obj.peel_to_commit())
+            .with_context(|| format!("cannot find the commit `{rev}`"))
+    }
+
+    /// The tree `n` commits before `commit`, following first parents, or
+    /// `None` when history is shorter than that.
+    fn tree_before<'r>(commit: &Commit<'r>, n: u32) -> Result<Option<Tree<'r>>> {
+        let mut commit = commit.clone();
+        for _ in 0..n {
+            match commit.parent(0) {
+                Ok(parent) => commit = parent,
+                Err(_) => return Ok(None),
+            }
+        }
+        Ok(Some(commit.tree()?))
+    }
+
+    /// `abc1234 Subject line`, or the revision as given if it can't be read.
+    fn commit_label(&self, rev: &str) -> String {
+        let Ok(commit) = self.commit(rev) else { return rev.to_string() };
+        let id = commit.as_object().short_id().ok().and_then(|id| id.as_str().ok().map(str::to_string));
+        let id = id.unwrap_or_else(|| commit.id().to_string());
+        match commit.summary() {
+            Ok(Some(summary)) => format!("{id} {summary}"),
+            _ => id,
+        }
     }
 
     /// The branch checked out, if HEAD is on one.
@@ -123,6 +175,20 @@ impl GitSource {
                 repo.diff_tree_to_tree(Some(&self.tree(from)?), Some(&self.tree(to)?), Some(&mut opts))?
             }
             DiffSpec::MergeBase { from, to } => return self.merge_base_diff(from, to, &mut opts),
+            DiffSpec::Last(n) => {
+                let head = self.commit("HEAD").context("there are no commits yet")?;
+                let old = Self::tree_before(&head, *n)?;
+                repo.diff_tree_to_tree(old.as_ref(), Some(&head.tree()?), Some(&mut opts))?
+            }
+            DiffSpec::Commit(rev) => {
+                let commit = self.commit(rev)?;
+                let old = Self::tree_before(&commit, 1)?;
+                repo.diff_tree_to_tree(old.as_ref(), Some(&commit.tree()?), Some(&mut opts))?
+            }
+            DiffSpec::Branch { base } => {
+                let old = self.merge_base(base, "HEAD")?;
+                repo.diff_tree_to_workdir_with_index(Some(&old), Some(&mut opts))?
+            }
             DiffSpec::Stack(_) => unreachable!("stacks are loaded layer by layer"),
         };
         diff.find_similar(None)?;
@@ -138,6 +204,11 @@ impl GitSource {
             DiffSpec::RevToWorkTree(rev) => format!("rev-{rev}"),
             DiffSpec::Range { from, to } => format!("range-{from}..{to}"),
             DiffSpec::MergeBase { from, to } => format!("mergebase-{from}...{to}"),
+            DiffSpec::Last(n) => format!("last-{n}"),
+            DiffSpec::Commit(rev) => format!("commit-{rev}"),
+            DiffSpec::Branch { base } => {
+                format!("branch-{}-{base}", self.current_branch().unwrap_or_else(|| "detached".to_string()))
+            }
             DiffSpec::Stack(stack) => format!("stack-{}-{}", stack.trunk, stack.top()),
         };
         key.chars()
@@ -149,11 +220,19 @@ impl GitSource {
 impl DiffSource for GitSource {
     fn describe(&self) -> String {
         match &self.spec {
-            DiffSpec::WorkTree => "HEAD → working tree".to_string(),
-            DiffSpec::Staged => "HEAD → index".to_string(),
-            DiffSpec::RevToWorkTree(rev) => format!("{rev} → working tree"),
-            DiffSpec::Range { from, to } => format!("{from}..{to}"),
+            DiffSpec::WorkTree => "uncommitted changes".to_string(),
+            DiffSpec::Staged => "staged changes".to_string(),
+            DiffSpec::RevToWorkTree(rev) => format!("since {}, uncommitted changes included", self.commit_label(rev)),
+            DiffSpec::Range { from, to } => format!("{from} → {to}"),
             DiffSpec::MergeBase { from, to } => format!("{from}...{to}"),
+            DiffSpec::Last(1) => format!("last commit: {}", self.commit_label("HEAD")),
+            DiffSpec::Last(n) => format!("last {n} commits"),
+            DiffSpec::Commit(rev) => format!("commit {}", self.commit_label(rev)),
+            DiffSpec::Branch { base } => {
+                let branch = self.current_branch().unwrap_or_else(|| "this checkout".to_string());
+                let uncommitted = self.has_uncommitted_changes().unwrap_or(false);
+                format!("{branch} since it left {base}{}", if uncommitted { ", uncommitted changes included" } else { "" })
+            }
             DiffSpec::Stack(stack) => {
                 let layers = stack.layers.iter().map(|l| l.branch.as_str());
                 format!("stack {}", std::iter::once(stack.trunk.as_str()).chain(layers).collect::<Vec<_>>().join(" ← "))
@@ -432,6 +511,63 @@ mod tests {
         assert_eq!(paths, ["a.txt", "a.txt", "b.txt", "c.txt"]);
         assert_eq!(diff.sections[1].rationale, "Layer 2 of 2: first → second. Includes uncommitted changes.");
         assert!(!diff.sections[0].rationale.contains("uncommitted"));
+    }
+
+    /// Lines added across the whole diff, in order.
+    fn added(diff: &Diff) -> Vec<&str> {
+        let lines = diff.files.iter().flat_map(|f| &f.hunks).flat_map(|h| &h.lines);
+        lines.filter(|l| l.kind == LineKind::Added).map(|l| l.content.as_str()).collect()
+    }
+
+    #[test]
+    fn loads_the_last_commits_and_single_commits() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        fs::write(dir.path().join("a.txt"), "one\n").unwrap();
+        commit_all(&repo, "first");
+        fs::write(dir.path().join("a.txt"), "one\ntwo\n").unwrap();
+        commit_all(&repo, "second");
+        fs::write(dir.path().join("a.txt"), "one\ntwo\nthree\n").unwrap();
+        commit_all(&repo, "third");
+        fs::write(dir.path().join("a.txt"), "uncommitted\n").unwrap();
+
+        let source = |spec| GitSource::discover(dir.path(), spec).unwrap();
+        let last = source(DiffSpec::Last(1));
+        assert!(last.describe().starts_with("last commit: "), "{}", last.describe());
+        assert!(last.describe().ends_with(" third"));
+        assert_eq!(added(&last.load().unwrap()), ["three"]);
+        assert_eq!(added(&source(DiffSpec::Last(2)).load().unwrap()), ["two", "three"]);
+        // Asking for more commits than there are shows the whole history.
+        assert_eq!(added(&source(DiffSpec::Last(10)).load().unwrap()), ["one", "two", "three"]);
+
+        let second = source(DiffSpec::Commit("HEAD~1".into()));
+        assert!(second.describe().ends_with(" second"));
+        assert_eq!(added(&second.load().unwrap()), ["two"]);
+        // The very first commit shows everything it added.
+        assert_eq!(added(&source(DiffSpec::Commit("HEAD~2".into())).load().unwrap()), ["one"]);
+        assert!(source(DiffSpec::Commit("nope".into())).load().is_err());
+    }
+
+    #[test]
+    fn loads_what_a_branch_adds_since_it_split_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init_opts(dir.path(), git2::RepositoryInitOptions::new().initial_head("main")).unwrap();
+        fs::write(dir.path().join("a.txt"), "one\n").unwrap();
+        commit_all(&repo, "init");
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.branch("feature", &head, false).unwrap();
+        assert!(GitSource::branch(dir.path(), None).err().unwrap().to_string().contains("on `main` itself"));
+
+        repo.set_head("refs/heads/feature").unwrap();
+        fs::write(dir.path().join("a.txt"), "one\ntwo\n").unwrap();
+        commit_all(&repo, "two");
+        fs::write(dir.path().join("b.txt"), "b\n").unwrap();
+
+        let source = GitSource::branch(dir.path(), None).unwrap();
+        assert_eq!(source.describe(), "feature since it left main, uncommitted changes included");
+        assert_eq!(added(&source.load().unwrap()), ["two", "b"]);
+        assert!(source.state_file().ends_with("rrrev/branch-feature-main.json"));
+        assert!(GitSource::branch(dir.path(), Some("nope".into())).unwrap().load().is_err());
     }
 
     #[test]
