@@ -10,12 +10,13 @@ use std::ops::Range;
 
 use crate::anim::{Animator, Popup};
 use crate::app::{
-    Answer, App, CommentTarget, Focus, Mode, Progress, Row, View, context_numbers, context_text,
+    Answer, App, CommentTarget, Focus, LineStats, Mode, Progress, Row, View, context_numbers, context_text,
     find_matches, is_above,
 };
 use crate::diff::{FileStatus, LineKind, scope};
 use crate::help;
 use crate::highlight::{Highlighter, Segment};
+use crate::review::VerdictKind;
 use crate::text::wrap_words;
 
 /// Below this many columns the sidebar won't dock, as it would leave too
@@ -70,6 +71,8 @@ pub fn render(frame: &mut Frame, app: &mut App, highlighter: &mut Highlighter, a
     render_breadcrumbs(frame, crumbs, app);
     let scroll = anim.scroll(app);
     let rows = render_body(frame, rows_area, app, highlighter, scroll);
+    let shown: Vec<Row> = rows.iter().map(|(row, _)| *row).collect();
+    app.mark_seen(&shown);
     anim.glint_rows(frame.buffer_mut(), &rows);
     anim.slide(frame.buffer_mut(), rows_area);
     if let Some((area, docked_right)) = ask_area {
@@ -86,7 +89,7 @@ pub fn render(frame: &mut Frame, app: &mut App, highlighter: &mut Highlighter, a
     render_status(frame, status, app, pending);
 
     let sidebar_popup = app.compact && app.focus == Focus::Sidebar;
-    if sidebar_popup || app.help_scroll.is_some() {
+    if sidebar_popup || app.help_scroll.is_some() || app.show_verdict {
         dim_backdrop(frame);
     }
     // What the pop-ups cover, to show around them as they unroll.
@@ -97,6 +100,8 @@ pub fn render(frame: &mut Frame, app: &mut App, highlighter: &mut Highlighter, a
         rect
     });
     anim.popup(frame.buffer_mut(), Popup::Sidebar, sidebar, Some(&under));
+    let verdict = app.show_verdict.then(|| render_verdict(frame, frame.area(), app));
+    anim.popup(frame.buffer_mut(), Popup::Verdict, verdict, Some(&under));
     let help = app.help_scroll.is_some().then(|| render_help(frame, frame.area(), app));
     anim.popup(frame.buffer_mut(), Popup::Help, help, Some(&under));
 }
@@ -206,8 +211,9 @@ fn render_title(frame: &mut Frame, area: Rect, app: &App) {
         Some(job) => format!("{} asking… · ", spinner(job.started)),
         None => String::new(),
     };
+    let seen = format!("{}% seen · ", app.line_stats().seen_percent());
     let right = format!(
-        "{organizing}{asking}{comments}{}/{} hunks reviewed{done} ",
+        "{organizing}{asking}{comments}{seen}{}/{} hunks reviewed{done} ",
         progress.reviewed, progress.total
     );
     // In a narrow pane the status on the right matters more than the title.
@@ -456,7 +462,18 @@ fn row_line(app: &App, row: Row) -> Line<'static> {
             let header = app.group_header(group);
             let Some((is_title, text)) = header.get(line).cloned() else { return Line::default() };
             let style = if is_title { Style::new().fg(Color::Magenta).bold() } else { Style::new().italic() };
-            Line::from(vec![Span::styled("▌ ", Style::new().fg(Color::Magenta)), Span::styled(text, style)])
+            let mut spans = vec![Span::styled("▌ ", Style::new().fg(Color::Magenta)), Span::styled(text, style)];
+            // How far this step is, after its title.
+            if line == 0 {
+                let progress = app.group_progress(group);
+                spans.push(if progress.is_complete() {
+                    let next = if group + 1 < app.plan.len() { " · ]f next step" } else { "" };
+                    Span::styled(format!("  ✓ {0} of {0} · all good{next}", progress.total), Style::new().fg(Color::Green))
+                } else {
+                    Span::raw(format!("  {} of {} hunks", progress.reviewed, progress.total)).dim()
+                });
+            }
+            Line::from(spans)
         }
         Row::File { file } => {
             let f = &app.diff.files[file];
@@ -844,6 +861,136 @@ fn render_ask_panel(frame: &mut Frame, area: Rect, app: &mut App, docked_right: 
     frame.render_widget(Paragraph::new(lines).scroll((first as u16, 0)), conversation_area);
 }
 
+/// The review summed up, with its verdict: how much was looked at, what
+/// was said, and the keys to approve, request changes or hand over.
+fn render_verdict(frame: &mut Frame, area: Rect, app: &App) -> Rect {
+    let width = 84.min(area.width.saturating_sub(4));
+    let inner_width = width.saturating_sub(4) as usize;
+    let progress = app.progress();
+    let stats = app.line_stats();
+    let mut lines: Vec<Line> = Vec::new();
+
+    let to_go = progress.total - progress.reviewed;
+    let headline = if progress.total > 0 && to_go == 0 {
+        format!("All {} hunks reviewed ✓", progress.total)
+    } else {
+        format!("{to_go} of {} hunks to go", progress.total)
+    };
+    let headline_style = if to_go == 0 { Style::new().fg(Color::Green).bold() } else { Style::new().bold() };
+    lines.push(Line::from(Span::styled(headline, headline_style)));
+    lines.push(Line::from(Span::raw(truncate_right(&app.title, inner_width)).dim()));
+    lines.push(Line::default());
+
+    lines.push(Line::from(Span::raw("WHAT YOU WENT THROUGH").dim().bold()));
+    lines.push(stacked_bar(stats, inner_width.saturating_sub(10)));
+    let total = stats.total().max(1);
+    let row = |label: &str, note: &str, count: usize, color: Color| {
+        let bar_width = inner_width.saturating_sub(34).max(4);
+        let filled = (count * bar_width).div_ceil(total).min(bar_width);
+        Line::from(vec![
+            Span::styled("■ ", Style::new().fg(color)),
+            Span::raw(format!("{label:<11}")).bold(),
+            Span::raw(format!("{note:<10}")).dim(),
+            Span::raw(format!("{count:>5} lines  ")),
+            Span::styled("━".repeat(filled), Style::new().fg(color)),
+            Span::styled("━".repeat(bar_width - filled), Style::new().fg(Color::DarkGray)),
+        ])
+    };
+    lines.push(row("Looks good", "by you", stats.good, Color::Green));
+    lines.push(row("Read", "on screen", stats.read, Color::Blue));
+    lines.push(row("Not seen", "to go", stats.unseen, Color::Gray));
+    lines.push(Line::default());
+
+    let comments = app.review.comments().len();
+    let plural = |n: usize, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
+    let mut chips = vec![
+        Span::styled(format!(" {} of {} hunks good ", progress.reviewed, progress.total), Style::new().reversed()),
+        Span::raw(" "),
+        Span::styled(format!(" {} in your review ", plural(comments, "comment")), Style::new().fg(Color::Yellow).reversed()),
+    ];
+    if !app.notes.is_empty() {
+        chips.push(Span::raw(" "));
+        chips.push(Span::styled(format!(" {} ", plural(app.notes.len(), "agent note")), Style::new().fg(Color::Magenta).reversed()));
+    }
+    lines.push(Line::from(chips));
+    lines.push(Line::default());
+
+    lines.push(Line::from(Span::raw(format!("YOUR VERDICT, WITH YOUR {}", plural(comments, "COMMENT").to_uppercase())).dim().bold()));
+    let verdict = app.review.verdict();
+    let message_lines: Vec<Line> = match (&app.mode, verdict) {
+        (Mode::VerdictMessage { input }, _) => {
+            let (rows, _) = wrap_input(input.text(), input.cursor(), inner_width.saturating_sub(2).max(1));
+            rows.into_iter().map(|r| Line::from(format!("│ {r}"))).collect()
+        }
+        (_, Some(v)) if !v.message.trim().is_empty() => {
+            wrap_words(&v.message, inner_width.saturating_sub(2)).into_iter().map(|r| Line::from(format!("│ {r}"))).collect()
+        }
+        _ => vec![Line::from("│ m: say something to the author (optional for an approval)").dim()],
+    };
+    let message_top = lines.len();
+    lines.extend(message_lines);
+    let button = |key: &str, label: &str, kind: VerdictKind, color: Color| {
+        let chosen = verdict.is_some_and(|v| v.kind == kind);
+        let style = if chosen { Style::new().fg(Color::Black).bg(color).bold() } else { Style::new().fg(color) };
+        let mark = if chosen { "● " } else { "" };
+        Span::styled(format!(" [{key}] {mark}{label} "), style)
+    };
+    lines.push(Line::default());
+    lines.push(Line::from(vec![
+        button("r", "Request changes", VerdictKind::RequestChanges, Color::Yellow),
+        Span::raw("  "),
+        button("c", "Comment", VerdictKind::Comment, Color::Blue),
+        Span::raw("  "),
+        button("a", "Approve", VerdictKind::Approve, Color::Green),
+    ]));
+    lines.push(Line::default());
+    for text in wrap_words(
+        &format!(
+            "Or hand all {} to an agent: Y copies them as `path:line` and what you wrote. e exports them with the verdict.",
+            plural(comments, "comment")
+        ),
+        inner_width,
+    ) {
+        lines.push(Line::from(text).dim());
+    }
+
+    let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(2));
+    let rect = centered(area, width, height);
+    let block = Block::bordered()
+        .border_type(BorderType::Thick)
+        .border_style(Style::new().fg(Color::Cyan).bold())
+        .title(Span::styled(" Verdict ", Style::new().bold()))
+        .title_bottom(Line::from(" a/r/c verdict · m message · x clear · Y copy for agent · e export · Esc close ").dim());
+    let inner = block.inner(rect);
+    let inner = Rect { x: inner.x + 1, width: inner.width.saturating_sub(2), ..inner };
+    frame.render_widget(Clear, rect);
+    frame.render_widget(block, rect);
+    frame.render_widget(Paragraph::new(lines), inner);
+    if let Mode::VerdictMessage { input } = &app.mode {
+        let (_, (x, y)) = wrap_input(input.text(), input.cursor(), inner_width.saturating_sub(2).max(1));
+        let y = inner.y + (message_top + y) as u16;
+        if y < inner.bottom() {
+            frame.set_cursor_position((inner.x + 2 + x as u16, y));
+        }
+    }
+    rect
+}
+
+/// One bar for everything changed: reviewed, read and not seen yet, with
+/// the share looked at after it.
+fn stacked_bar(stats: LineStats, width: usize) -> Line<'static> {
+    let total = stats.total().max(1);
+    let good = stats.good * width / total;
+    let read = (stats.good + stats.read) * width / total - good;
+    let rest = width - good - read;
+    Line::from(vec![
+        Span::styled("█".repeat(good), Style::new().fg(Color::Green)),
+        Span::styled("█".repeat(read), Style::new().fg(Color::Blue)),
+        Span::styled("░".repeat(rest), Style::new().fg(Color::DarkGray)),
+        Span::raw(format!(" {:>3}% seen", stats.seen_percent())).bold(),
+    ])
+}
+
 const MAX_COMMENT_BOX_LINES: u16 = 8;
 
 fn comment_box_area(app: &App, body: Rect) -> Option<Rect> {
@@ -933,6 +1080,8 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
         (Mode::Visual { .. }, _) => " VISUAL ",
         (Mode::Comment { .. }, _) => " COMMENT ",
         (Mode::Ask { .. }, _) => " ASK ",
+        (Mode::VerdictMessage { .. }, _) => " VERDICT ",
+        _ if app.show_verdict => " VERDICT ",
         (_, Focus::Sidebar) => " FILES ",
         _ => " NORMAL ",
     };
@@ -979,13 +1128,14 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
         }
         None => {
             let hints = match app.mode {
-                Mode::Visual { .. } => " c comment  a ask  Esc cancel ",
+                Mode::Visual { .. } => " c comment  a ask  y copy  Esc cancel ",
                 // The boxes list their own keys.
-                Mode::Comment { .. } | Mode::Ask { .. } => " ",
+                Mode::Comment { .. } | Mode::Ask { .. } | Mode::VerdictMessage { .. } => " ",
+                _ if app.show_verdict => " ",
                 _ if matches!(app.current_row(), Some(Row::Note { .. })) => {
-                    " c comment with this  dd dismiss  a ask about it "
+                    " c comment with this  dd dismiss  a ask about it  y copy "
                 }
-                _ => " ? help  r review  c comment  a ask  [e ]e ze context  ]u unreviewed  q quit ",
+                _ => " ? help  r review  c comment  a ask  [e ]e ze context  S verdict  ]u unreviewed  q quit ",
             };
             let hints = if fits(&left, hints) { hints } else { " " };
             (hints.to_string(), Style::new().dim())

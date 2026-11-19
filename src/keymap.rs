@@ -1,6 +1,6 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::Action;
+use crate::app::{Action, VerdictAction};
 use crate::input::InputAction;
 
 /// Turns key presses into actions, handling vim-style counts (`5j`) and
@@ -101,10 +101,30 @@ impl KeyHandler {
             (None, KeyCode::Char('?')) => Action::ToggleHelp,
             (None, KeyCode::Char('a')) => Action::Ask,
             (None, KeyCode::Char('A')) => Action::ToggleAskPanel,
+            (None, KeyCode::Char('y')) => Action::Yank,
+            (None, KeyCode::Char('Y')) => Action::CopyForAgent,
+            (None, KeyCode::Char('S')) => Action::ToggleVerdict,
             _ => return None,
         };
         Some(action)
     }
+}
+
+/// Keys on the verdict page, where each letter picks a button.
+pub fn verdict_action(key: KeyEvent) -> Option<VerdictAction> {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    Some(match key.code {
+        KeyCode::Char('c') if ctrl => VerdictAction::Close,
+        KeyCode::Esc | KeyCode::Char('q' | 'S') => VerdictAction::Close,
+        KeyCode::Char('a') => VerdictAction::Approve,
+        KeyCode::Char('r') => VerdictAction::RequestChanges,
+        KeyCode::Char('c') => VerdictAction::Comment,
+        KeyCode::Char('m') | KeyCode::Enter => VerdictAction::Message,
+        KeyCode::Char('x') => VerdictAction::Clear,
+        KeyCode::Char('Y' | 'y') => VerdictAction::CopyForAgent,
+        KeyCode::Char('e') => VerdictAction::Export,
+        _ => return None,
+    })
 }
 
 /// Keys for the comment box and the `:` line, readline-style.
@@ -172,6 +192,18 @@ mod tests {
         assert_eq!(press(&mut h, "ze"), Some(Action::ExpandScope));
         assert_eq!(press(&mut h, "zE"), Some(Action::ResetContext));
         assert_eq!(press(&mut h, "a"), Some(Action::Ask));
+        assert_eq!(press(&mut h, "Y"), Some(Action::CopyForAgent));
+        assert_eq!(press(&mut h, "S"), Some(Action::ToggleVerdict));
+    }
+
+    #[test]
+    fn verdict_keys_pick_buttons() {
+        let key = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+        assert_eq!(verdict_action(key('a')), Some(VerdictAction::Approve));
+        assert_eq!(verdict_action(key('r')), Some(VerdictAction::RequestChanges));
+        assert_eq!(verdict_action(key('Y')), Some(VerdictAction::CopyForAgent));
+        assert_eq!(verdict_action(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)), Some(VerdictAction::Close));
+        assert_eq!(verdict_action(key('j')), None);
     }
 
     #[test]
