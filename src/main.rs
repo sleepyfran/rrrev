@@ -22,7 +22,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use ratatui::{
     DefaultTerminal,
     crossterm::{
@@ -46,31 +46,38 @@ use review::ReviewState;
 
 /// Keyboard-driven code review in the terminal.
 #[derive(Parser)]
-#[command(version)]
+#[command(version, args_conflicts_with_subcommands = true)]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Mode>,
+
     /// What to review: `<rev>` (vs the working tree), `a..b`, or `a...b` (from
-    /// the merge base). Defaults to HEAD vs the working tree, untracked files
-    /// included. A range from a stack's trunk to one of its branches is
-    /// reviewed layer by layer.
+    /// the merge base). Defaults to HEAD vs the working tree, untracked files included.
     spec: Option<String>,
 
     /// Review staged changes only (HEAD vs index).
     #[arg(long, conflicts_with = "spec")]
     staged: bool,
 
-    /// Review the current branch's stack (`gh stack`), one layer per group.
-    #[arg(long, conflicts_with_all = ["spec", "staged"])]
-    stack: bool,
-
     /// Print this review's comments to stdout as `md` or `json` and exit,
     /// e.g. to pipe them into an agent.
-    #[arg(long, value_name = "FORMAT")]
+    #[arg(long, value_name = "FORMAT", global = true)]
     export: Option<String>,
+}
+
+#[derive(Subcommand)]
+enum Mode {
+    /// Review the current branch's stack (`gh stack`) one layer per group,
+    /// each layer against the one below, plus what isn't committed yet.
+    Stack,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let source = GitSource::discover(".", DiffSpec::from_args(cli.spec.as_deref(), cli.staged))?.with_stack(cli.stack)?;
+    let source = match cli.command {
+        Some(Mode::Stack) => GitSource::stack(".")?,
+        None => GitSource::discover(".", DiffSpec::from_args(cli.spec.as_deref(), cli.staged))?,
+    };
     // Load before entering the alternate screen so errors print normally.
     let state_file = source.state_file();
     let review = ReviewState::load(&state_file)?;
