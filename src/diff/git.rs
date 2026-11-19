@@ -50,33 +50,13 @@ impl GitSource {
         Ok(Self { repo, spec })
     }
 
-    /// Switches to reviewing a stack layer by layer: the current one with
-    /// `explicit` (`--stack`), or when the spec runs from a stack's trunk to
-    /// one of its branches.
-    pub fn with_stack(mut self, explicit: bool) -> Result<Self> {
-        let workdir = self.repo.workdir().unwrap_or(self.repo.path()).to_path_buf();
-        let detect = || Stack::detect(self.repo.commondir(), &workdir);
-        if explicit {
-            let stack = detect().context("the current branch is not part of a stack (see `gh stack view`)")?;
-            self.spec = DiffSpec::Stack(stack);
-            return Ok(self);
-        }
-        let (DiffSpec::Range { from, to } | DiffSpec::MergeBase { from, to }) = &self.spec else {
-            return Ok(self);
-        };
-        let Some(stack) = detect() else { return Ok(self) };
-        let same = |a: &str, b: &str| {
-            let commit = |rev: &str| self.repo.revparse_single(rev).and_then(|o| o.peel_to_commit()).map(|c| c.id());
-            matches!((commit(a), commit(b)), (Ok(a), Ok(b)) if a == b)
-        };
-        if !same(from, &stack.trunk) {
-            return Ok(self);
-        }
-        let top = stack.layers.iter().rev().find(|l| same(to, &l.branch)).map(|l| l.branch.clone());
-        if let Some(stack) = top.and_then(|top| stack.up_to(&top)) {
-            self.spec = DiffSpec::Stack(stack);
-        }
-        Ok(self)
+    /// The stack the checked-out branch belongs to (`gh stack`), layer by layer.
+    pub fn stack(path: impl AsRef<Path>) -> Result<Self> {
+        let repo = Repository::discover(path).context("not inside a git repository")?;
+        let workdir = repo.workdir().unwrap_or(repo.path()).to_path_buf();
+        let stack = Stack::detect(repo.commondir(), &workdir)
+            .context("the current branch is not part of a stack (see `gh stack view`)")?;
+        Ok(Self { repo, spec: DiffSpec::Stack(stack) })
     }
 
     fn tree(&self, rev: &str) -> Result<Tree<'_>> {
@@ -93,6 +73,13 @@ impl GitSource {
 
     /// `from...to`: the merge base of both vs `to`.
     fn merge_base_diff(&self, from: &str, to: &str, opts: &mut DiffOptions) -> Result<git2::Diff<'_>> {
+        let mut diff = self.repo.diff_tree_to_tree(Some(&self.merge_base(from, to)?), Some(&self.tree(to)?), Some(opts))?;
+        diff.find_similar(None)?;
+        Ok(diff)
+    }
+
+    /// The tree of the commit `from` and `to` last had in common.
+    fn merge_base(&self, from: &str, to: &str) -> Result<Tree<'_>> {
         let repo = &self.repo;
         let commit = |rev: &str| -> Result<git2::Oid> {
             Ok(repo
@@ -104,17 +91,24 @@ impl GitSource {
         let base = repo
             .merge_base(commit(from)?, commit(to)?)
             .with_context(|| format!("no merge base between `{from}` and `{to}`"))?;
-        let base_tree = repo.find_commit(base)?.tree()?;
-        let mut diff = repo.diff_tree_to_tree(Some(&base_tree), Some(&self.tree(to)?), Some(opts))?;
-        diff.find_similar(None)?;
-        Ok(diff)
+        Ok(repo.find_commit(base)?.tree()?)
+    }
+
+    /// The branch checked out, if HEAD is on one.
+    fn current_branch(&self) -> Option<String> {
+        let head = self.repo.head().ok()?;
+        head.is_branch().then(|| head.shorthand().ok().map(str::to_string)).flatten()
+    }
+
+    /// Whether the working tree or index differ from HEAD, untracked files included.
+    fn has_uncommitted_changes(&self) -> Result<bool> {
+        let mut opts = git2::StatusOptions::new();
+        opts.include_untracked(true).include_ignored(false);
+        Ok(!self.repo.statuses(Some(&mut opts))?.is_empty())
     }
 
     fn git_diff(&self) -> Result<git2::Diff<'_>> {
-        let mut opts = DiffOptions::new();
-        opts.include_untracked(true)
-            .recurse_untracked_dirs(true)
-            .show_untracked_content(true);
+        let mut opts = worktree_options();
 
         let repo = &self.repo;
         let mut diff = match &self.spec {
@@ -172,10 +166,21 @@ impl DiffSource for GitSource {
             return Ok(Diff::new(read_files(&self.git_diff()?)?));
         };
         let count = stack.layers.len();
+        let current = self.current_branch();
         let mut parts = Vec::with_capacity(count);
         for (i, layer) in stack.layers.iter().enumerate() {
-            let diff = self.merge_base_diff(&layer.base, &layer.branch, &mut DiffOptions::new())?;
             let mut rationale = format!("Layer {} of {count}: {} → {}.", i + 1, layer.base, layer.branch);
+            // The checked-out layer includes what isn't committed yet, so the
+            // review covers everything the stack will carry.
+            let diff = if current.as_deref() == Some(layer.branch.as_str()) && self.has_uncommitted_changes()? {
+                rationale += " Includes uncommitted changes.";
+                let base = self.merge_base(&layer.base, &layer.branch)?;
+                let mut diff = self.repo.diff_tree_to_workdir_with_index(Some(&base), Some(&mut worktree_options()))?;
+                diff.find_similar(None)?;
+                diff
+            } else {
+                self.merge_base_diff(&layer.base, &layer.branch, &mut DiffOptions::new())?
+            };
             if layer.needs_rebase {
                 rationale += " Needs a rebase onto the layer below.";
             }
@@ -188,6 +193,15 @@ impl DiffSource for GitSource {
         // `.git` itself, or `.git/worktrees/<name>` in a linked worktree.
         self.repo.path().join("rrrev").join(format!("{}.json", self.state_key()))
     }
+}
+
+/// Options for diffs against the working tree: untracked files included, in full.
+fn worktree_options() -> DiffOptions {
+    let mut opts = DiffOptions::new();
+    opts.include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .show_untracked_content(true);
+    opts
 }
 
 fn read_files(diff: &git2::Diff) -> Result<Vec<FileDiff>> {
@@ -363,16 +377,23 @@ mod tests {
         };
         assert_eq!(added(0), ["two"]);
         assert_eq!(added(1), ["three"]);
+
+        // Uncommitted work lands in the checked-out layer.
+        repo.set_head("refs/heads/second").unwrap();
+        fs::write(dir.path().join("c.txt"), "c\n").unwrap();
+        let diff = source.load().unwrap();
+        let paths: Vec<_> = diff.files.iter().map(|f| f.path()).collect();
+        assert_eq!(paths, ["a.txt", "a.txt", "b.txt", "c.txt"]);
+        assert_eq!(diff.sections[1].rationale, "Layer 2 of 2: first → second. Includes uncommitted changes.");
+        assert!(!diff.sections[0].rationale.contains("uncommitted"));
     }
 
     #[test]
-    fn plain_ranges_stay_plain_without_stack_metadata() {
+    fn no_stack_metadata_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
         Repository::init(dir.path()).unwrap();
-        let spec = DiffSpec::from_args(Some("main...feat"), false);
-        let source = GitSource::discover(dir.path(), spec.clone()).unwrap().with_stack(false).unwrap();
-        assert_eq!(source.spec, spec);
-        assert!(GitSource::discover(dir.path(), DiffSpec::WorkTree).unwrap().with_stack(true).is_err());
+        let error = GitSource::stack(dir.path()).err().unwrap();
+        assert!(error.to_string().starts_with("the current branch is not part of a stack"));
     }
 
     #[test]
