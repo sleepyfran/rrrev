@@ -2,6 +2,7 @@
 
 pub mod git;
 pub mod stack;
+pub mod words;
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -26,6 +27,8 @@ pub struct Diff {
     /// Runs of files reviewed as one group each, like the layers of a stack;
     /// empty for a plain diff.
     pub sections: Vec<Section>,
+    /// Per file, hunk and line: the byte ranges that changed word by word.
+    words: Vec<Vec<Vec<Vec<Range<usize>>>>>,
 }
 
 /// Consecutive files of a diff that belong together, e.g. one layer's diff.
@@ -53,7 +56,13 @@ impl Diff {
                 });
             }
         }
-        Diff { files, sections: Vec::new() }
+        let words = files.iter().map(|f| f.hunks.iter().map(|h| words::changes(&h.lines)).collect()).collect();
+        Diff { files, sections: Vec::new(), words }
+    }
+
+    /// The byte ranges of a line's content that changed, word by word.
+    pub fn word_changes(&self, file: usize, hunk: usize, line: usize) -> &[Range<usize>] {
+        self.words.get(file).and_then(|f| f.get(hunk)).and_then(|h| h.get(line)).map_or(&[], Vec::as_slice)
     }
 
     /// Builds a diff out of sections, each with its own files, in order.

@@ -20,6 +20,7 @@ pub const SECTIONS: &[Section] = &[
             ("]m / [m", "next / previous comment"),
             ("zt / zz / zb", "scroll the cursor to top / middle / bottom"),
             (":<n>", "go to line n of the file"),
+            ("tinted words", "within a changed line, the words that changed"),
         ],
     },
     Section {
