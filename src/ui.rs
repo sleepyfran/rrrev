@@ -10,7 +10,7 @@ use std::ops::Range;
 
 use crate::anim::{Animator, Popup};
 use crate::app::{
-    App, CommentTarget, Focus, Mode, Progress, Row, View, context_numbers, context_text,
+    Answer, App, CommentTarget, Focus, Mode, Progress, Row, View, context_numbers, context_text,
     find_matches, is_above,
 };
 use crate::diff::{FileStatus, LineKind, scope};
@@ -44,6 +44,20 @@ pub fn render(frame: &mut Frame, app: &mut App, highlighter: &mut Highlighter, a
         main
     };
 
+    // The ask panel docks to the right of a wide diff, or under a narrow one.
+    let (body, ask_area) = match app.ask.open {
+        true if body.width >= ASK_DOCK_RIGHT_FROM => {
+            let width = (body.width * 2 / 5).clamp(36, 72);
+            let [body, ask] = Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(body);
+            (body, Some((ask, true)))
+        }
+        true => {
+            let [body, ask] = Layout::vertical([Constraint::Percentage(55), Constraint::Min(0)]).areas(body);
+            (body, Some((ask, false)))
+        }
+        false => (body, None),
+    };
+
     // The comment box covers the bottom of the diff, so rows scroll above it
     // and the commented line stays in sight.
     let comment_box = comment_box_area(app, body);
@@ -58,6 +72,9 @@ pub fn render(frame: &mut Frame, app: &mut App, highlighter: &mut Highlighter, a
     let rows = render_body(frame, rows_area, app, highlighter, scroll);
     anim.glint_rows(frame.buffer_mut(), &rows);
     anim.slide(frame.buffer_mut(), rows_area);
+    if let Some((area, docked_right)) = ask_area {
+        render_ask_panel(frame, area, app, docked_right);
+    }
     let cursor = comment_box.map(|area| render_comment_box(frame, area, app));
     if let Some(unroll) = anim.popup(frame.buffer_mut(), Popup::Comment, comment_box, None)
         && let Some((x, y)) = cursor
@@ -83,6 +100,9 @@ pub fn render(frame: &mut Frame, app: &mut App, highlighter: &mut Highlighter, a
     let help = app.help_scroll.is_some().then(|| render_help(frame, frame.area(), app));
     anim.popup(frame.buffer_mut(), Popup::Help, help, Some(&under));
 }
+
+/// From this many columns the ask panel docks at the diff's right.
+const ASK_DOCK_RIGHT_FROM: u16 = 110;
 
 /// Greys out everything drawn so far, so a pop-up drawn on top stands out.
 /// Done with plain colours rather than the dim attribute, which many
@@ -181,8 +201,13 @@ fn render_title(frame: &mut Frame, area: Rect, app: &App) {
         Some(job) => format!("{} organizing… {}s · ", spinner(job.started), job.started.elapsed().as_secs()),
         None => String::new(),
     };
+    // The panel shows its own spinner; this one is for when it's hidden.
+    let asking = match app.ask.running.filter(|_| !app.ask.open) {
+        Some(job) => format!("{} asking… · ", spinner(job.started)),
+        None => String::new(),
+    };
     let right = format!(
-        "{organizing}{comments}{}/{} hunks reviewed{done} ",
+        "{organizing}{asking}{comments}{}/{} hunks reviewed{done} ",
         progress.reviewed, progress.total
     );
     // In a narrow pane the status on the right matters more than the title.
@@ -720,6 +745,105 @@ fn render_breadcrumbs(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
+/// Questions about the code and their answers, with the question being
+/// typed at the bottom. The latest exchange shows from its question down,
+/// and `C-e` / `C-y` scroll from there.
+fn render_ask_panel(frame: &mut Frame, area: Rect, app: &mut App, docked_right: bool) {
+    let typing = matches!(app.mode, Mode::Ask { .. });
+    let border = if typing { Style::new().fg(Color::Magenta) } else { Style::new().fg(Color::DarkGray) };
+    // Docked right it's set off by a line on its left; under the diff, on top.
+    let borders = if docked_right { Borders::LEFT } else { Borders::TOP };
+    let hint = if typing { " Enter ask · Alt-Enter newline · Esc cancel " } else { " a ask · C-e/C-y scroll · A/Esc hide " };
+    let block = Block::new()
+        .borders(borders)
+        .border_style(border)
+        .title(Span::styled(" Ask Claude ", Style::new().fg(Color::Magenta).bold()))
+        .title(Span::raw("· reads the whole repository ").dim())
+        .title_bottom(Line::from(hint).dim());
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+    let inner = Rect { x: inner.x + 1, width: inner.width.saturating_sub(1), ..inner };
+    let width = inner.width as usize;
+
+    // The question being typed, at the bottom.
+    let mut conversation_area = inner;
+    if let Mode::Ask { target, input } = &app.mode {
+        let (lines, (x, y)) = wrap_input(input.text(), input.cursor(), width.saturating_sub(2).max(1));
+        let shown = lines.len().clamp(1, MAX_COMMENT_BOX_LINES as usize);
+        let height = (shown as u16 + 3).min(inner.height);
+        let box_area = Rect { y: inner.bottom() - height, height, ..inner };
+        conversation_area.height -= height;
+        let location = format!("{}{}", target.location, target.scopes.last().map_or(String::new(), |s| format!(" {s}")));
+        let input_block = Block::bordered()
+            .border_style(Style::new().fg(Color::Magenta))
+            .title(Span::styled(truncate_right(&format!(" {location} "), width.saturating_sub(2)), Style::new().fg(Color::Cyan)));
+        let field = input_block.inner(box_area);
+        frame.render_widget(input_block, box_area);
+        let skip = (y + 1).saturating_sub(field.height as usize);
+        let placeholder = input.text().is_empty();
+        let text: Vec<Line> = if placeholder {
+            vec![Line::from("Ask what a line does, why it changed, who calls it…").dim()]
+        } else {
+            lines.into_iter().skip(skip).map(Line::from).collect()
+        };
+        frame.render_widget(Paragraph::new(text), field);
+        frame.set_cursor_position((field.x + x as u16, field.y + (y - skip) as u16));
+    }
+
+    let mut lines: Vec<Line> = Vec::new();
+    let mut latest = 0;
+    for entry in &app.ask.entries {
+        if !lines.is_empty() {
+            lines.push(Line::default());
+        }
+        latest = lines.len();
+        lines.push(Line::from(Span::styled(truncate_right(&entry.location, width), Style::new().fg(Color::Cyan))));
+        for text in wrap_words(&entry.question, width.saturating_sub(2)) {
+            lines.push(Line::from(vec![Span::styled("│ ", Style::new().fg(Color::Magenta)), Span::raw(text).bold()]));
+        }
+        match &entry.answer {
+            Answer::Pending => {
+                let elapsed = app.ask.running.map_or(0, |job| job.started.elapsed().as_secs());
+                let started = app.ask.running.map_or_else(std::time::Instant::now, |job| job.started);
+                lines.push(Line::from(format!("{} reading the code… {elapsed}s", spinner(started))).dim());
+            }
+            Answer::Done(text) => {
+                for paragraph in text.lines() {
+                    if paragraph.trim().is_empty() {
+                        lines.push(Line::default());
+                        continue;
+                    }
+                    // Keep code and list indentation; wrap the rest.
+                    let indent: String = paragraph.chars().take_while(|c| c.is_whitespace()).collect();
+                    let room = width.saturating_sub(indent.chars().count()).max(8);
+                    for piece in wrap_words(paragraph, room) {
+                        lines.push(Line::from(format!("{indent}{piece}")));
+                    }
+                }
+            }
+            Answer::Failed(error) => {
+                for piece in wrap_words(&format!("error: {error}"), width) {
+                    lines.push(Line::from(Span::styled(piece, Style::new().fg(Color::Red))));
+                }
+            }
+            Answer::Cancelled => lines.push(Line::from("cancelled").dim().italic()),
+        }
+    }
+    if lines.is_empty() {
+        for text in wrap_words("Point at a line, a selection or a hunk and press a to ask about it.", width) {
+            lines.push(Line::from(text).dim());
+        }
+    }
+    let height = conversation_area.height as usize;
+    // Everything fits: show it all. Otherwise from the latest question.
+    let base = if lines.len() <= height { 0 } else { latest.min(lines.len() - height) };
+    let max_scroll = lines.len().saturating_sub(height + base);
+    app.ask.scroll = app.ask.scroll.min(max_scroll);
+    let first = base + app.ask.scroll;
+    frame.render_widget(Paragraph::new(lines).scroll((first as u16, 0)), conversation_area);
+}
+
 const MAX_COMMENT_BOX_LINES: u16 = 8;
 
 fn comment_box_area(app: &App, body: Rect) -> Option<Rect> {
@@ -808,6 +932,7 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
     let mode = match (&app.mode, app.focus) {
         (Mode::Visual { .. }, _) => " VISUAL ",
         (Mode::Comment { .. }, _) => " COMMENT ",
+        (Mode::Ask { .. }, _) => " ASK ",
         (_, Focus::Sidebar) => " FILES ",
         _ => " NORMAL ",
     };
@@ -854,13 +979,13 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
         }
         None => {
             let hints = match app.mode {
-                Mode::Visual { .. } => " c comment on selection  Esc cancel ",
+                Mode::Visual { .. } => " c comment  a ask  Esc cancel ",
                 // The boxes list their own keys.
-                Mode::Comment { .. } => " ",
+                Mode::Comment { .. } | Mode::Ask { .. } => " ",
                 _ if matches!(app.current_row(), Some(Row::Note { .. })) => {
-                    " c comment with this  dd dismiss "
+                    " c comment with this  dd dismiss  a ask about it "
                 }
-                _ => " ? help  r review  c comment  [e ]e ze context  ]u unreviewed  q quit ",
+                _ => " ? help  r review  c comment  a ask  [e ]e ze context  ]u unreviewed  q quit ",
             };
             let hints = if fits(&left, hints) { hints } else { " " };
             (hints.to_string(), Style::new().dim())

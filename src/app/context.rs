@@ -2,7 +2,7 @@
 //! whole function it's in, straight from the file's text on disk.
 
 use super::{App, Row};
-use crate::diff::{Diff, DiffLine, Hunk, Side, scope};
+use crate::diff::{Diff, DiffLine, Hunk, LineKind, Side, scope};
 
 /// Lines `[e` / `]e` add each time.
 pub const EXPAND_STEP: usize = 20;
@@ -203,12 +203,21 @@ pub fn context_text(diff: &Diff, file: usize, no: u32) -> Option<&str> {
     source.get((no as usize).checked_sub(1)?).map(String::as_str)
 }
 
+/// The sign a line gets when quoted in a comment or prompt.
+pub fn sign(kind: LineKind) -> char {
+    match kind {
+        LineKind::Added => '+',
+        LineKind::Removed => '-',
+        LineKind::Context | LineKind::NoNewline => ' ',
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::test_support::*;
     use super::*;
     use crate::app::Action;
-    use crate::diff::{Diff, FileDiff, FileStatus, HunkId, LineKind, Sources};
+    use crate::diff::{Diff, FileDiff, FileStatus, HunkId, Sources};
 
     /// A 60-line file `f.rs` with one function around lines 20-40 and two
     /// hunks changing lines 25 and 50.
