@@ -101,6 +101,7 @@ impl App {
             Row::Line { file, hunk, line } => self.line(file, hunk, line).content.clone(),
             Row::Context { file, no, .. } => super::context_text(&self.diff, file, no)?.to_string(),
             Row::Comment { id, line, .. } => self.review.comment(id)?.text.lines().nth(line)?.to_string(),
+            Row::Note { note, .. } => self.notes.get(note)?.text.clone(),
         })
     }
 

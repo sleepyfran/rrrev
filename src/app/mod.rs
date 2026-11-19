@@ -9,6 +9,7 @@ mod context;
 mod marks;
 mod mode;
 mod navigation;
+mod notes;
 mod plan;
 mod search;
 mod view;
@@ -20,9 +21,10 @@ pub use action::{Action, Effect};
 pub use context::{context_numbers, context_text, is_above};
 pub use marks::Progress;
 pub use mode::{CommentTarget, Focus, Mode, View};
+pub use notes::PlacedNote;
 pub use plan::Job;
 pub use search::find_matches;
-pub use view::Row;
+pub use view::{NOTE_LABEL, Row};
 
 use std::collections::HashMap;
 
@@ -71,6 +73,8 @@ pub struct App {
     pub help_scroll: Option<usize>,
     /// Extra lines of the file shown around hunks, by `(file, hunk)`.
     pub expanded: HashMap<(usize, usize), context::Expansion>,
+    /// The AI's notes from the plan, placed on the diff.
+    pub notes: Vec<PlacedNote>,
     pub should_quit: bool,
 }
 
@@ -109,6 +113,7 @@ impl App {
             highlight_search: false,
             help_scroll: None,
             expanded: HashMap::new(),
+            notes: Vec::new(),
             should_quit: false,
         };
         // Generated files and files already reviewed start out of the way.
@@ -129,6 +134,7 @@ impl App {
         if !app.plan.is_empty() {
             app.view = View::Plan;
         }
+        app.place_notes();
         app.open_page(0, 0);
         app
     }

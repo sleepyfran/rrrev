@@ -334,7 +334,7 @@ impl Animator {
                     Row::Hunk { file, hunk } | Row::Line { file, hunk, .. } | Row::Context { file, hunk, .. } => {
                         glint.hunks.contains(&(file, hunk))
                     }
-                    Row::Group { .. } | Row::Comment { .. } => false,
+                    Row::Group { .. } | Row::Comment { .. } | Row::Note { .. } => false,
                 };
                 if hit {
                     sweep(buf, rect, t);

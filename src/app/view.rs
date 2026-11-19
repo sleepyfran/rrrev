@@ -18,6 +18,8 @@ pub enum Row {
     Context { file: usize, hunk: usize, no: u32 },
     /// One line of a comment's text, shown under the code it's about.
     Comment { file: usize, id: u64, line: usize },
+    /// An agent note (an index into `App::notes`), under the code it's about.
+    Note { file: usize, hunk: usize, note: usize },
 }
 
 impl Row {
@@ -28,14 +30,17 @@ impl Row {
             | Row::Hunk { file, .. }
             | Row::Line { file, .. }
             | Row::Context { file, .. }
-            | Row::Comment { file, .. } => Some(file),
+            | Row::Comment { file, .. }
+            | Row::Note { file, .. } => Some(file),
         }
     }
 
     pub fn hunk(self) -> Option<usize> {
         match self {
             Row::Group { .. } | Row::File { .. } | Row::Comment { .. } => None,
-            Row::Hunk { hunk, .. } | Row::Line { hunk, .. } | Row::Context { hunk, .. } => Some(hunk),
+            Row::Hunk { hunk, .. } | Row::Line { hunk, .. } | Row::Context { hunk, .. } | Row::Note { hunk, .. } => {
+                Some(hunk)
+            }
         }
     }
 
@@ -128,8 +133,8 @@ impl App {
         rows
     }
 
-    /// A hunk's header and lines, with each comment under the line it ends
-    /// on, between any extra context shown above and below.
+    /// A hunk's header and lines, with each comment and agent note under the
+    /// line it ends on, between any extra context shown above and below.
     fn push_hunk_rows(&self, rows: &mut Vec<Row>, file: usize, hunk: usize) {
         let h = &self.diff.files[file].hunks[hunk];
         let last = h.lines.len().saturating_sub(1);
@@ -140,6 +145,8 @@ impl App {
             rows.push(Row::Line { file, hunk, line });
             let here = self.review.comments().iter().filter(|c| c.hunk == h.id && c.end.min(last) == line);
             rows.extend(here.flat_map(|c| comment_rows(file, c)));
+            let notes = self.notes.iter().enumerate().filter(|(_, n)| (n.file, n.hunk, n.line) == (file, hunk, line));
+            rows.extend(notes.map(|(note, _)| Row::Note { file, hunk, note }));
         }
         rows.extend(below.into_iter().map(|no| Row::Context { file, hunk, no }));
     }
@@ -322,6 +329,10 @@ impl App {
                 let label = if line == 0 { self.outdated_label(comment).chars().count() } else { 0 };
                 (self.comment_column(), label + comment.text.lines().nth(line).unwrap_or("").chars().count())
             }
+            Row::Note { note, .. } => {
+                let Some(note) = self.notes.get(note) else { return 1 };
+                (self.comment_column(), NOTE_LABEL.chars().count() + note.text.chars().count())
+            }
             Row::Group { .. } | Row::File { .. } | Row::Hunk { .. } => return 1,
         };
         wrapped_height(text, self.text_room(column))
@@ -333,6 +344,9 @@ impl App {
         self.viewport_width.saturating_sub(column)
     }
 }
+
+/// Leads an agent note's text.
+pub const NOTE_LABEL: &str = "Claude: ";
 
 /// Columns a group header line gives to its `▌ ` bar, plus one spare.
 const GROUP_HEADER_INDENT: usize = 3;

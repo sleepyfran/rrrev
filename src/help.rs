@@ -17,7 +17,7 @@ pub const SECTIONS: &[Section] = &[
             ("]c / [c   } / {", "next / previous hunk"),
             ("]f / [f", "next / previous file, or plan group"),
             ("]u / [u", "next / previous unreviewed hunk"),
-            ("]m / [m", "next / previous comment"),
+            ("]m / [m", "next / previous comment or AI note"),
             ("zt / zz / zb", "scroll the cursor to top / middle / bottom"),
             (":<n>", "go to line n of the file"),
         ],
@@ -55,6 +55,7 @@ pub const SECTIONS: &[Section] = &[
             ("C", "write the comment in $EDITOR"),
             ("dd", "delete the comment under the cursor"),
             ("in the box", "Enter save · Alt-Enter newline · C-o $EDITOR · Esc cancel"),
+            ("c / dd on a ◆ note", "turn the AI's note into a comment / dismiss it"),
         ],
     },
     Section {
@@ -71,7 +72,7 @@ pub const SECTIONS: &[Section] = &[
     Section {
         title: "Commands",
         entries: &[
-            (":organize", "plan the review with AI, in the background"),
+            (":organize", "plan the review with AI, in the background, with notes on what to check"),
             (":organize cancel", "stop a running plan"),
             (":organize clear", "drop the plan (a stack goes back to its layers)"),
             (":export [md|json] [path]", "write the comments to a file"),
