@@ -14,6 +14,8 @@ pub enum Row {
     File { file: usize },
     Hunk { file: usize, hunk: usize },
     Line { file: usize, hunk: usize, line: usize },
+    /// Line `no` of the file's text, shown as extra context next to a hunk.
+    Context { file: usize, hunk: usize, no: u32 },
     /// One line of a comment's text, shown under the code it's about.
     Comment { file: usize, id: u64, line: usize },
 }
@@ -25,6 +27,7 @@ impl Row {
             Row::File { file }
             | Row::Hunk { file, .. }
             | Row::Line { file, .. }
+            | Row::Context { file, .. }
             | Row::Comment { file, .. } => Some(file),
         }
     }
@@ -32,7 +35,7 @@ impl Row {
     pub fn hunk(self) -> Option<usize> {
         match self {
             Row::Group { .. } | Row::File { .. } | Row::Comment { .. } => None,
-            Row::Hunk { hunk, .. } | Row::Line { hunk, .. } => Some(hunk),
+            Row::Hunk { hunk, .. } | Row::Line { hunk, .. } | Row::Context { hunk, .. } => Some(hunk),
         }
     }
 
@@ -125,16 +128,20 @@ impl App {
         rows
     }
 
-    /// A hunk's header and lines, with each comment under the line it ends on.
+    /// A hunk's header and lines, with each comment under the line it ends
+    /// on, between any extra context shown above and below.
     fn push_hunk_rows(&self, rows: &mut Vec<Row>, file: usize, hunk: usize) {
         let h = &self.diff.files[file].hunks[hunk];
         let last = h.lines.len().saturating_sub(1);
+        let (above, below) = self.context_lines(file, hunk);
         rows.push(Row::Hunk { file, hunk });
+        rows.extend(above.into_iter().map(|no| Row::Context { file, hunk, no }));
         for line in 0..h.lines.len() {
             rows.push(Row::Line { file, hunk, line });
             let here = self.review.comments().iter().filter(|c| c.hunk == h.id && c.end.min(last) == line);
             rows.extend(here.flat_map(|c| comment_rows(file, c)));
         }
+        rows.extend(below.into_iter().map(|no| Row::Context { file, hunk, no }));
     }
 
     pub(super) fn open_page(&mut self, page: usize, cursor: usize) {
@@ -305,6 +312,10 @@ impl App {
         let (column, text) = match row {
             Row::Line { file, hunk, line } => {
                 (self.code_column(), self.line(file, hunk, line).content.replace('\t', "    ").chars().count())
+            }
+            Row::Context { file, no, .. } => {
+                let text = super::context_text(&self.diff, file, no).unwrap_or("");
+                (self.code_column(), text.replace('\t', "    ").chars().count())
             }
             Row::Comment { id, line, .. } => {
                 let Some(comment) = self.review.comment(id) else { return 1 };

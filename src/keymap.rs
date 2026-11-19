@@ -54,6 +54,8 @@ impl KeyHandler {
             (Some('['), KeyCode::Char('u')) => Action::PrevUnreviewed(n),
             (Some(']'), KeyCode::Char('m')) => Action::NextComment(n),
             (Some('['), KeyCode::Char('m')) => Action::PrevComment(n),
+            (Some('['), KeyCode::Char('e')) => Action::ExpandAbove(n),
+            (Some(']'), KeyCode::Char('e')) => Action::ExpandBelow(n),
             (Some('d'), KeyCode::Char('d')) => Action::DeleteComment,
             (Some('z'), KeyCode::Char('a')) => Action::ToggleFold,
             (Some('z'), KeyCode::Char('o')) => Action::OpenFold,
@@ -63,6 +65,8 @@ impl KeyHandler {
             (Some('z'), KeyCode::Char('t')) => Action::ScrollCursorTop,
             (Some('z'), KeyCode::Char('z')) => Action::ScrollCursorCenter,
             (Some('z'), KeyCode::Char('b')) => Action::ScrollCursorBottom,
+            (Some('z'), KeyCode::Char('e')) => Action::ExpandScope,
+            (Some('z'), KeyCode::Char('E')) => Action::ResetContext,
             (Some(_), _) => return None,
 
             (None, KeyCode::Char('c')) if ctrl => Action::Quit,
@@ -159,6 +163,10 @@ mod tests {
         assert_eq!(press(&mut h, "N"), Some(Action::SearchPrev(1)));
         assert_eq!(press(&mut h, "/"), Some(Action::StartSearch));
         assert_eq!(press(&mut h, "?"), Some(Action::ToggleHelp));
+        assert_eq!(press(&mut h, "2[e"), Some(Action::ExpandAbove(2)));
+        assert_eq!(press(&mut h, "]e"), Some(Action::ExpandBelow(1)));
+        assert_eq!(press(&mut h, "ze"), Some(Action::ExpandScope));
+        assert_eq!(press(&mut h, "zE"), Some(Action::ResetContext));
     }
 
     #[test]

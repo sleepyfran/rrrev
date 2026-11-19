@@ -20,6 +20,15 @@ pub const SECTIONS: &[Section] = &[
             ("]m / [m", "next / previous comment"),
             ("zt / zz / zb", "scroll the cursor to top / middle / bottom"),
             (":<n>", "go to line n of the file"),
+        ],
+    },
+    Section {
+        title: "Reading around a change",
+        entries: &[
+            ("[e / ]e", "20 more lines of the file above / below the hunk (counts work: 3[e)"),
+            ("ze", "the whole function, impl or class the hunk is in"),
+            ("zE", "back to the hunks as git shows them"),
+            ("breadcrumbs", "the line above the diff shows the file and the definitions around the cursor"),
             ("tinted words", "within a changed line, the words that changed"),
         ],
     },

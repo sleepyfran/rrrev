@@ -40,7 +40,7 @@ impl App {
     /// this page: the whole group, or the file's hunks.
     pub(super) fn toggle_reviewed(&mut self) {
         match self.current_row() {
-            Some(Row::Hunk { file, hunk } | Row::Line { file, hunk, .. }) => {
+            Some(Row::Hunk { file, hunk } | Row::Line { file, hunk, .. } | Row::Context { file, hunk, .. }) => {
                 let reviewed = self.is_reviewed(file, hunk);
                 self.review.set_reviewed(&self.hunk(file, hunk).id.clone(), !reviewed);
             }
