@@ -1,6 +1,6 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::{Action, VerdictAction};
+use crate::app::{Action, VerdictAction, View};
 use crate::input::InputAction;
 
 /// Turns key presses into actions, handling vim-style counts (`5j`) and
@@ -46,6 +46,11 @@ impl KeyHandler {
                 return None;
             }
             (Some('g'), KeyCode::Char('g')) => Action::Top,
+            (Some('g'), KeyCode::Char('s')) => Action::ShowView(View::Stack),
+            (Some('g'), KeyCode::Char('p')) => Action::ShowView(View::Plan),
+            (Some('g'), KeyCode::Char('f')) => Action::ShowView(View::Files),
+            (Some(']'), KeyCode::Char('s')) => Action::NextLayer(n),
+            (Some('['), KeyCode::Char('s')) => Action::PrevLayer(n),
             (Some(']'), KeyCode::Char('c')) => Action::NextHunk(n),
             (Some('['), KeyCode::Char('c')) => Action::PrevHunk(n),
             (Some(']'), KeyCode::Char('f')) => Action::NextFile(n),
@@ -90,7 +95,6 @@ impl KeyHandler {
             (None, KeyCode::Char('s')) => Action::ToggleSidebar,
             (None, KeyCode::Char('r')) => Action::ToggleReviewed,
             (None, KeyCode::Char('R')) => Action::TogglePageReviewed,
-            (None, KeyCode::Char('p')) => Action::ToggleView,
             (None, KeyCode::Char('V' | 'v')) => Action::StartVisual,
             (None, KeyCode::Char('c')) => Action::StartComment,
             (None, KeyCode::Char('C')) => Action::CommentInEditor,
@@ -194,6 +198,11 @@ mod tests {
         assert_eq!(press(&mut h, "a"), Some(Action::Ask));
         assert_eq!(press(&mut h, "Y"), Some(Action::CopyForAgent));
         assert_eq!(press(&mut h, "S"), Some(Action::ToggleVerdict));
+        assert_eq!(press(&mut h, "gs"), Some(Action::ShowView(View::Stack)));
+        assert_eq!(press(&mut h, "gf"), Some(Action::ShowView(View::Files)));
+        assert_eq!(press(&mut h, "2]s"), Some(Action::NextLayer(2)));
+        assert_eq!(press(&mut h, "[s"), Some(Action::PrevLayer(1)));
+        assert_eq!(press(&mut h, "p"), None);
     }
 
     #[test]

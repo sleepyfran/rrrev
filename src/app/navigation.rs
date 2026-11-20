@@ -36,7 +36,7 @@ impl App {
         self.jump_in_file(target.map(|(idx, _)| idx), "First hunk in this file");
     }
 
-    /// `]f`: the next file, or plan group. At the last one, stays put
+    /// `]f`: the next file, plan group, or stack page. At the last one, stays put
     /// rather than jumping back to the top.
     pub(super) fn next_page(&mut self, n: usize) {
         let last = self.page_count().saturating_sub(1);
@@ -58,7 +58,7 @@ impl App {
     fn page_noun(&self) -> &'static str {
         match self.view {
             View::Files => "file",
-            View::Plan => "group",
+            View::Plan | View::Stack => "group",
         }
     }
 

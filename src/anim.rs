@@ -352,7 +352,7 @@ impl Animator {
             for &(idx, rect) in entries {
                 let hit = match app.view {
                     View::Files => glint.hunks.iter().any(|&(f, _)| f == idx),
-                    View::Plan => app.plan[idx].hunks.iter().any(|h| glint.hunks.contains(h)),
+                    View::Plan | View::Stack => app.pages()[idx].hunks.iter().any(|h| glint.hunks.contains(h)),
                 };
                 if hit {
                     sweep(buf, rect, t);

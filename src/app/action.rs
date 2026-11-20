@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use super::View;
 use crate::ask::AskRequest;
 use crate::export::Format;
 use crate::organizer::OrganizeRequest;
@@ -31,7 +32,11 @@ pub enum Action {
     ToggleReviewed,
     /// `R`: everything on the current page, a file or a plan group.
     TogglePageReviewed,
-    ToggleView,
+    /// `gs` / `gp` / `gf`: the stack's layers, the plan, or the files.
+    ShowView(View),
+    /// `]s` / `[s`: the next / previous stack layer.
+    NextLayer(usize),
+    PrevLayer(usize),
     StartVisual,
     StartComment,
     CommentInEditor,

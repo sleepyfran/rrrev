@@ -1,7 +1,7 @@
 //! What the diff pane shows: one page at a time (a file, or a group of the
 //! review plan), folds, focus and scrolling.
 
-use super::{App, Focus, Mode, View};
+use super::{App, Focus, Mode, StackPlace, View};
 use crate::review::Comment;
 use crate::text::{wrapped_height, wrap_words};
 
@@ -56,7 +56,7 @@ impl App {
         self.viewport_height = height;
         if width != self.viewport_width {
             self.viewport_width = width;
-            if self.view == View::Plan {
+            if self.view != View::Files {
                 self.rebuild_rows();
             }
         }
@@ -66,22 +66,61 @@ impl App {
     /// A group's header as shown, line by line: its title, then its rationale,
     /// word-wrapped to the pane. `true` marks title lines.
     pub fn group_header(&self, group: usize) -> Vec<(bool, String)> {
-        let page = &self.plan[group];
+        let page = &self.pages()[group];
         // Room left after the `▌ ` bar; unwrapped until the UI reports a width.
         let width = match self.viewport_width {
             0 => usize::MAX,
             w => w.saturating_sub(GROUP_HEADER_INDENT).max(1),
         };
-        let title = format!("{}/{} {}", group + 1, self.plan.len(), page.title);
+        let title = match page.place {
+            None => format!("{}/{} {}", group + 1, self.pages().len(), page.title),
+            Some(place) => {
+                let (layers, layer) = (self.diff.sections.len(), &self.diff.sections[place.layer].title);
+                let layer = format!("{}/{layers} {layer}", place.layer + 1);
+                match place.group {
+                    None => layer,
+                    Some((i, count)) => format!("{layer} · {}/{count} {}", i + 1, page.title),
+                }
+            }
+        };
         let title = wrap_words(&title, width).into_iter().map(|line| (true, line));
         let rationale = wrap_words(&page.rationale, width).into_iter().map(|line| (false, line));
         title.chain(rationale).collect()
     }
 
+    /// A page's name on one line: a stack group's says which layer it's in.
+    pub fn page_label(&self, page: usize) -> String {
+        let Some(p) = self.pages().get(page) else { return String::new() };
+        match p.place {
+            Some(StackPlace { layer, group: Some(_) }) => {
+                format!("{} › {}", self.diff.sections[layer].title, p.title)
+            }
+            _ => p.title.clone(),
+        }
+    }
+
+    /// Where the page sits, for the status line: `layer 2/3 · group 1/4`.
+    pub fn page_position(&self) -> String {
+        match self.view {
+            View::Files => format!("file {}/{}", self.page + 1, self.diff.files.len()),
+            View::Plan => format!("group {}/{}", self.page + 1, self.plan.len()),
+            View::Stack => match self.stack.get(self.page).and_then(|p| p.place) {
+                Some(place) => {
+                    let layer = format!("layer {}/{}", place.layer + 1, self.diff.sections.len());
+                    match place.group {
+                        Some((i, count)) => format!("{layer} · group {}/{count}", i + 1),
+                        None => layer,
+                    }
+                }
+                None => String::new(),
+            },
+        }
+    }
+
     pub(super) fn page_count(&self) -> usize {
         match self.view {
             View::Files => self.diff.files.len(),
-            View::Plan => self.plan.len(),
+            View::Plan | View::Stack => self.pages().len(),
         }
     }
 
@@ -89,14 +128,14 @@ impl App {
     pub(super) fn page_hunks(&self, page: usize) -> Vec<(usize, usize)> {
         match self.view {
             View::Files => (0..self.diff.files[page].hunks.len()).map(|h| (page, h)).collect(),
-            View::Plan => self.plan[page].hunks.clone(),
+            View::Plan | View::Stack => self.pages()[page].hunks.clone(),
         }
     }
 
     pub(super) fn page_rows(&self, page: usize) -> Vec<Row> {
         match self.view {
             View::Files => self.file_rows(page),
-            View::Plan => self.group_rows(page),
+            View::Plan | View::Stack => self.group_rows(page),
         }
     }
 
@@ -121,7 +160,7 @@ impl App {
         let header = self.group_header(group).len();
         let mut rows: Vec<Row> = (0..header).map(|line| Row::Group { group, line }).collect();
         let mut previous = None;
-        for &(file, hunk) in &self.plan[group].hunks {
+        for &(file, hunk) in &self.pages()[group].hunks {
             if previous != Some(file) {
                 rows.push(Row::File { file });
                 previous = Some(file);

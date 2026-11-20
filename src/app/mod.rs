@@ -26,7 +26,7 @@ pub use marks::Progress;
 pub use mode::{AskTarget, CommentTarget, Focus, Mode, View};
 pub use notes::PlacedNote;
 pub use verdict::LineStats;
-pub use plan::Job;
+pub use plan::{Job, StackPlace};
 pub use search::find_matches;
 pub use view::{NOTE_LABEL, Row};
 
@@ -41,9 +41,13 @@ pub struct App {
     pub diff: Diff,
     pub review: ReviewState,
     pub view: View,
-    /// The plan placed on this diff; empty until there is one.
+    /// The organizer's plan placed on a plain diff; empty until there is one,
+    /// and always in a stack, whose layers hold their own plans.
     pub plan: Vec<plan::PlanPage>,
-    /// What the diff pane shows: a file index, or a plan group index.
+    /// A stack's pages, layer by layer, each layer's split into its plan's
+    /// groups once organized; empty for a plain diff.
+    pub stack: Vec<plan::PlanPage>,
+    /// What the diff pane shows: a file index, or an index into `pages()`.
     pub page: usize,
     /// Rows of the current page.
     pub rows: Vec<Row>,
@@ -67,6 +71,8 @@ pub struct App {
     pub effect: Option<Effect>,
     /// The organizer run in progress, if any.
     pub organizing: Option<Job>,
+    /// The stack layer that run is planning; `None` for a plain diff.
+    organizing_layer: Option<usize>,
     /// Id for the next organizer run.
     next_job: u64,
     /// The last `/` query, kept for `n` / `N`.
@@ -101,6 +107,7 @@ impl App {
             review,
             view: View::Files,
             plan: Vec::new(),
+            stack: Vec::new(),
             page: 0,
             rows: Vec::new(),
             collapsed: Vec::new(),
@@ -116,6 +123,7 @@ impl App {
             message: None,
             effect: None,
             organizing: None,
+            organizing_layer: None,
             next_job: 0,
             search: None,
             highlight_search: false,
@@ -130,18 +138,15 @@ impl App {
         app.collapsed = (0..app.diff.files.len())
             .map(|f| app.diff.files[f].looks_generated() || app.file_progress(f).is_complete())
             .collect();
-        // A review that has a plan picks up in it; a stack without one
-        // follows its layers.
-        if let Some(saved) = app.review.plan() {
-            app.plan = plan::resolve(saved, &app.diff);
-            if app.plan.is_empty() {
-                app.message = Some("Saved plan is for another diff: :organize to replan".to_string());
-            }
+        // A stack follows its layers, each in its plan's groups once
+        // organized; a review that has a plan picks up in it.
+        app.place_plan();
+        if !app.is_stack() && app.plan.is_empty() && app.review.plan().is_some() {
+            app.message = Some("Saved plan is for another diff: :organize to replan".to_string());
         }
-        if app.plan.is_empty() {
-            app.plan = plan::sections(&app.diff);
-        }
-        if !app.plan.is_empty() {
+        if !app.stack.is_empty() {
+            app.view = View::Stack;
+        } else if !app.plan.is_empty() {
             app.view = View::Plan;
         }
         app.place_notes();
@@ -208,7 +213,9 @@ impl App {
             Action::CloseAllFolds => self.set_all_folds(true),
             Action::ToggleReviewed => self.toggle_reviewed(),
             Action::TogglePageReviewed => self.toggle_page_reviewed(),
-            Action::ToggleView => self.toggle_view(),
+            Action::ShowView(view) => self.show_view(view),
+            Action::NextLayer(n) => self.jump_layer(n, true),
+            Action::PrevLayer(n) => self.jump_layer(n, false),
             Action::StartVisual => self.toggle_visual(),
             Action::StartComment => self.start_comment(false),
             Action::CommentInEditor => self.start_comment(true),
@@ -297,7 +304,7 @@ impl App {
     pub fn current_file(&self) -> Option<usize> {
         match self.view {
             View::Files => (self.page < self.diff.files.len()).then_some(self.page),
-            View::Plan => self.current_row().and_then(Row::file),
+            View::Stack | View::Plan => self.current_row().and_then(Row::file),
         }
     }
 
@@ -341,7 +348,8 @@ mod tests {
             Action::NextFile(1),
             Action::NextUnreviewed(1),
             Action::TogglePageReviewed,
-            Action::ToggleView,
+            Action::ShowView(View::Plan),
+            Action::NextLayer(1),
             Action::StartComment,
             Action::NextComment(1),
         ] {

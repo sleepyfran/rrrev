@@ -101,7 +101,7 @@ mod tests {
             ],
         };
         app.finish_organize(job, Ok(plan));
-        app.update(Action::ToggleView);
+        app.update(Action::ShowView(crate::app::View::Files));
         app
     }
 

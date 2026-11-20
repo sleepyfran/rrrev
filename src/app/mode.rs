@@ -6,11 +6,13 @@ pub enum Focus {
     Sidebar,
 }
 
-/// How the diff is paged: a file at a time, or a plan group at a time.
+/// How the diff is paged: a stack layer (or a group of one) at a time, a
+/// plan group at a time, or a file at a time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
-    Files,
+    Stack,
     Plan,
+    Files,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

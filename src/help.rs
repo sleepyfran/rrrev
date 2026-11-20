@@ -15,7 +15,7 @@ pub const SECTIONS: &[Section] = &[
             ("C-d / C-u", "half a page down / up"),
             ("gg / G", "top / bottom of the page"),
             ("]c / [c   } / {", "next / previous hunk"),
-            ("]f / [f", "next / previous file, or plan group"),
+            ("]f / [f", "next / previous file, plan group or stack page"),
             ("]u / [u", "next / previous unreviewed hunk"),
             ("]m / [m", "next / previous comment or AI note"),
             ("zt / zz / zb", "scroll the cursor to top / middle / bottom"),
@@ -84,7 +84,17 @@ pub const SECTIONS: &[Section] = &[
             ("Enter", "on a file header, toggle its fold"),
             ("Tab   h / l", "focus the sidebar / the diff; on a narrow screen, open / close it as a pop-up"),
             ("s", "show / hide the sidebar (the pop-up on a narrow screen)"),
-            ("p", "switch between the plan and the files"),
+            ("gp / gf", "the plan / the files"),
+        ],
+    },
+    Section {
+        title: "Stacks (rrrev stack)",
+        entries: &[
+            ("gs", "the stack: each layer against the one below, in its plan's groups once organized"),
+            ("]s / [s", "next / previous layer, in the stack or the files (counts work: 2]s)"),
+            (":organize", "in a stack, plans only the layer under the cursor; the others keep theirs"),
+            (":organize clear", "drop that layer's plan, back to its hunks"),
+            (":organize clear all", "drop every layer's plan"),
         ],
     },
     Section {
@@ -92,7 +102,7 @@ pub const SECTIONS: &[Section] = &[
         entries: &[
             (":organize", "plan the review with AI, in the background, with notes on what to check"),
             (":organize cancel", "stop a running plan"),
-            (":organize clear", "drop the plan (a stack goes back to its layers)"),
+            (":organize clear [all]", "drop the plan (in a stack, the layer's; all: every layer's)"),
             (":export [md|json] [path]", "write the comments to a file"),
             (":w / :q", "save / quit"),
             ("?", "this help"),

@@ -4,6 +4,7 @@
 pub mod claude;
 
 use std::collections::HashSet;
+use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -80,6 +81,21 @@ impl Plan {
             .collect();
         Plan { groups, notes }
     }
+
+    /// Whether any group or note is about one of `hunks`.
+    pub fn covers(&self, hunks: &HashSet<&HunkId>) -> bool {
+        self.groups.iter().flat_map(|g| &g.hunks).chain(self.notes.iter().map(|n| &n.hunk)).any(|id| hunks.contains(id))
+    }
+
+    /// Drops everything about `hunks`, and groups left empty: what replanning
+    /// one stack layer does to the others' plan.
+    pub fn forget(&mut self, hunks: &HashSet<&HunkId>) {
+        for group in &mut self.groups {
+            group.hunks.retain(|id| !hunks.contains(id));
+        }
+        self.groups.retain(|group| !group.hunks.is_empty());
+        self.notes.retain(|note| !hunks.contains(&note.hunk));
+    }
 }
 
 /// The diff as the organizer sees it.
@@ -104,9 +120,14 @@ pub struct HunkSummary {
 const MAX_LINES_PER_HUNK: usize = 80;
 
 impl OrganizeRequest {
+    #[cfg(test)]
     pub fn from_diff(title: &str, diff: &Diff) -> Self {
-        let hunks = diff
-            .files
+        Self::from_files(title, diff, 0..diff.files.len())
+    }
+
+    /// The hunks of `files` only, like one layer of a stack.
+    pub fn from_files(title: &str, diff: &Diff, files: Range<usize>) -> Self {
+        let hunks = diff.files[files]
             .iter()
             .flat_map(|file| {
                 let generated = file.looks_generated();

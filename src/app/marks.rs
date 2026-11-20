@@ -28,7 +28,13 @@ impl App {
     }
 
     pub fn group_progress(&self, group: usize) -> Progress {
-        self.hunks_progress(&self.plan[group].hunks)
+        self.hunks_progress(&self.pages()[group].hunks)
+    }
+
+    pub fn layer_progress(&self, layer: usize) -> Progress {
+        let files = self.diff.sections[layer].files.clone();
+        let hunks: Vec<_> = files.flat_map(|f| (0..self.diff.files[f].hunks.len()).map(move |h| (f, h))).collect();
+        self.hunks_progress(&hunks)
     }
 
     pub fn progress(&self) -> Progress {

@@ -272,6 +272,7 @@ fn render_sidebar(frame: &mut Frame, area: Rect, app: &App, popup: bool) -> (Rec
     match app.view {
         View::Files => render_files_sidebar(frame, area, app, popup),
         View::Plan => render_plan_sidebar(frame, area, app, popup),
+        View::Stack => render_stack_sidebar(frame, area, app, popup),
     }
 }
 
@@ -338,6 +339,68 @@ fn render_plan_sidebar(frame: &mut Frame, area: Rect, app: &App, popup: bool) ->
             Span::raw(count).dim(),
         ]);
         entries.push((idx, sidebar_row(frame, inner, offset, line, idx == app.page, focused)));
+    }
+    (outer, entries)
+}
+
+/// The stack, a line per layer. A layer the organizer planned lists its
+/// groups under it, and those are the pages; any other layer is one itself.
+fn render_stack_sidebar(frame: &mut Frame, area: Rect, app: &App, popup: bool) -> (Rect, Vec<(usize, Rect)>) {
+    enum Item {
+        /// The layer's line, and the page it is when it isn't planned.
+        Layer { layer: usize, page: Option<usize> },
+        Group { page: usize, index: usize },
+    }
+    let mut items = Vec::new();
+    for (page, p) in app.stack.iter().enumerate() {
+        let Some(place) = p.place else { continue };
+        if place.group.is_none_or(|(index, _)| index == 0) {
+            items.push(Item::Layer { layer: place.layer, page: place.group.is_none().then_some(page) });
+        }
+        if let Some((index, _)) = place.group {
+            items.push(Item::Group { page, index });
+        }
+    }
+    let (outer, inner) = sidebar_frame(frame, area, app, "Stack", items.len(), popup);
+    let focused = app.focus == Focus::Sidebar;
+    let height = inner.height as usize;
+    let page_of = |item: &Item| match *item {
+        Item::Layer { page, .. } => page,
+        Item::Group { page, .. } => Some(page),
+    };
+    let selected = items.iter().position(|item| page_of(item) == Some(app.page));
+    let current_layer = app.current_layer();
+    let width = inner.width as usize;
+    let mut entries = Vec::new();
+    for (offset, item) in items.iter().skip(sidebar_start(selected, height)).take(height).enumerate() {
+        let (indent, number, progress, title, style) = match *item {
+            Item::Layer { layer, .. } => {
+                let style = if current_layer == Some(layer) { Style::new().bold() } else { Style::new() };
+                (0, layer + 1, app.layer_progress(layer), app.diff.sections[layer].title.as_str(), style)
+            }
+            Item::Group { page, index } => {
+                (3, index + 1, app.group_progress(page), app.stack[page].title.as_str(), Style::new())
+            }
+        };
+        let count = format!(" {}/{}", progress.reviewed, progress.total);
+        let number = format!("{}{number:>2}", " ".repeat(indent));
+        let title_width = width.saturating_sub(number.len() + 3 + count.len());
+        let title = truncate_right(title, title_width);
+        let pad = title_width.saturating_sub(title.chars().count());
+        let line = Line::from(vec![
+            Span::raw(number).dim(),
+            Span::raw(" "),
+            progress_mark(progress),
+            Span::raw(" "),
+            Span::styled(title, style),
+            Span::raw(" ".repeat(pad)),
+            Span::raw(count).dim(),
+        ]);
+        let page = page_of(item);
+        let rect = sidebar_row(frame, inner, offset, line, page == Some(app.page), focused);
+        if let Some(page) = page {
+            entries.push((page, rect));
+        }
     }
     (outer, entries)
 }
@@ -467,7 +530,7 @@ fn row_line(app: &App, row: Row) -> Line<'static> {
             if line == 0 {
                 let progress = app.group_progress(group);
                 spans.push(if progress.is_complete() {
-                    let next = if group + 1 < app.plan.len() { " · ]f next step" } else { "" };
+                    let next = if group + 1 < app.pages().len() { " · ]f next step" } else { "" };
                     Span::styled(format!("  ✓ {0} of {0} · all good{next}", progress.total), Style::new().fg(Color::Green))
                 } else {
                     Span::raw(format!("  {} of {} hunks", progress.reviewed, progress.total)).dim()
@@ -717,7 +780,7 @@ fn note_line(app: &App, note: usize) -> Vec<Line<'static>> {
 fn render_breadcrumbs(frame: &mut Frame, area: Rect, app: &App) {
     let Some(row) = app.current_row() else { return };
     let Some(file) = row.file() else {
-        let title = app.plan.get(app.page).map_or(String::new(), |p| p.title.clone());
+        let title = app.page_label(app.page);
         frame.render_widget(Paragraph::new(Line::from(Span::raw(format!(" {title}")).dim())), area);
         return;
     };
@@ -1089,7 +1152,7 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
     if let Some(row) = app.current_row() {
         let mut location = match row.file() {
             Some(file) => app.diff.files[file].display_path(),
-            None => app.plan.get(app.page).map_or(String::new(), |p| p.title.clone()),
+            None => app.page_label(app.page),
         };
         if let Row::Line { file, hunk, line } = row {
             let l = app.line(file, hunk, line);
@@ -1101,10 +1164,7 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
             location.push_str(&format!(":{no}"));
         }
         parts.push(location);
-        parts.push(match app.view {
-            View::Files => format!("file {}/{}", app.page + 1, app.diff.files.len()),
-            View::Plan => format!("group {}/{}", app.page + 1, app.plan.len()),
-        });
+        parts.push(app.page_position());
         if let (Some(file), Some(hunk)) = (row.file(), row.hunk()) {
             parts.push(format!("hunk {}/{}", hunk + 1, app.diff.files[file].hunks.len()));
         }
