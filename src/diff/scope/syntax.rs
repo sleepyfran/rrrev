@@ -14,7 +14,7 @@ const MAX_LABEL_ROWS: usize = 12;
 /// (from `path`) has a grammar here.
 pub fn outline(path: &str, source: &[String]) -> Option<Vec<Scope>> {
     let lang = &Registry::global().for_path(path)?.name;
-    let grammar = grammar::bundled(lang)?;
+    let grammar = grammar::get(lang)?;
     let query = query::compiled(lang, "scopes", &grammar)?;
     let text = source.join("\n");
     let mut parser = Parser::new();
