@@ -1,5 +1,6 @@
-//! Tree-sitter grammars, by registry name: the ones linked into rrrev, and
-//! the ones `rrrev lang enable` built into the data folder.
+//! Tree-sitter grammars, by registry name. rrrev links none in: `rrrev lang
+//! enable` builds them into the data folder, and they're loaded from there.
+//! Tests link the grammar crates instead, so they run without a build.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -15,7 +16,8 @@ use super::Registry;
 /// first time it's asked for. `None` when it's neither, or the build doesn't
 /// load (`rrrev lang list` says why).
 pub fn get(name: &str) -> Option<Language> {
-    if let Some(language) = bundled(name) {
+    #[cfg(test)]
+    if let Some(language) = linked(name) {
         return Some(language);
     }
     static LOADED: OnceLock<Mutex<HashMap<String, Option<Language>>>> = OnceLock::new();
@@ -72,9 +74,9 @@ pub fn load(path: &Path, symbol: &str) -> Result<Language> {
     Ok(language)
 }
 
-/// Every grammar linked in, for tests to check against the registry.
+/// Every grammar linked into the tests.
 #[cfg(test)]
-pub const BUNDLED: &[&str] = &[
+pub const LINKED: &[&str] = &[
     "rust",
     "python",
     "javascript",
@@ -84,20 +86,17 @@ pub const BUNDLED: &[&str] = &[
     "java",
     "c",
     "cpp",
-    #[cfg(feature = "csharp")]
     "csharp",
     "ruby",
-    #[cfg(feature = "swift")]
     "swift",
-    #[cfg(feature = "kotlin")]
     "kotlin",
     "lua",
-    #[cfg(feature = "fsharp")]
     "fsharp",
 ];
 
-/// The grammar for a registry language, if it's linked in.
-pub fn bundled(name: &str) -> Option<Language> {
+/// The grammar for a registry language, from its crate.
+#[cfg(test)]
+fn linked(name: &str) -> Option<Language> {
     Some(match name {
         "rust" => tree_sitter_rust::LANGUAGE.into(),
         "python" => tree_sitter_python::LANGUAGE.into(),
@@ -108,15 +107,11 @@ pub fn bundled(name: &str) -> Option<Language> {
         "java" => tree_sitter_java::LANGUAGE.into(),
         "c" => tree_sitter_c::LANGUAGE.into(),
         "cpp" => tree_sitter_cpp::LANGUAGE.into(),
-        #[cfg(feature = "csharp")]
         "csharp" => tree_sitter_c_sharp::LANGUAGE.into(),
         "ruby" => tree_sitter_ruby::LANGUAGE.into(),
-        #[cfg(feature = "swift")]
         "swift" => tree_sitter_swift::LANGUAGE.into(),
-        #[cfg(feature = "kotlin")]
         "kotlin" => tree_sitter_kotlin_ng::LANGUAGE.into(),
         "lua" => tree_sitter_lua::LANGUAGE.into(),
-        #[cfg(feature = "fsharp")]
         "fsharp" => tree_sitter_fsharp::LANGUAGE_FSHARP.into(),
         _ => return None,
     })

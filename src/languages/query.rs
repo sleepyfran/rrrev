@@ -81,11 +81,11 @@ mod tests {
     use crate::languages::{Registry, grammar};
 
     #[test]
-    fn every_bundled_grammar_has_a_language_and_queries_that_compile() {
+    fn every_linked_grammar_has_a_language_and_queries_that_compile() {
         let registry = Registry::builtin();
-        for &name in grammar::BUNDLED {
+        for &name in grammar::LINKED {
             assert!(registry.get(name).is_some(), "{name} isn't in languages.toml");
-            let grammar = grammar::bundled(name).unwrap();
+            let grammar = grammar::get(name).unwrap();
             for kind in ["scopes", "highlights"] {
                 let text = source(name, kind).unwrap_or_else(|| panic!("no {name}/{kind}.scm"));
                 if let Err(e) = Query::new(&grammar, &text) {

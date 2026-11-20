@@ -142,8 +142,7 @@ mod tests {
         assert!(parses("src/a.rs"));
         assert!(parses("web/App.tsx"));
         assert!(parses("Gemfile"));
-        // Opt-in grammars only with their feature; indentation otherwise.
-        assert_eq!(parses("lib/Mod.fs"), cfg!(feature = "fsharp"));
+        assert!(parses("lib/Mod.fs"));
         assert!(!parses("README.md"));
         assert!(!parses("Makefile"));
         assert!(!parses("notes.txt"));
@@ -274,7 +273,6 @@ describe(\"thing\", () => {
         assert_eq!(labels("a.cpp", cpp, 5), ["namespace n", "class A", "void run()"]);
     }
 
-    #[cfg(feature = "csharp")]
     #[test]
     fn csharp() {
         let src = "namespace M {\n  [Attr]\n  public class A {\n    public int P { get; set; }\n    public void Run() {\n      Go();\n    }\n  }\n}\n";
@@ -290,7 +288,6 @@ describe(\"thing\", () => {
         assert_eq!(labels("a_spec.rb", src, 10), ["describe \"x\"", "it \"y\""]);
     }
 
-    #[cfg(feature = "swift")]
     #[test]
     fn swift() {
         let src = "protocol P {\n  func x()\n}\nstruct S {\n  init(a: Int) {\n  }\n  func run() -> Int {\n    return 1\n  }\n}\nextension S: P {\n  func x() {}\n}\n";
@@ -299,7 +296,6 @@ describe(\"thing\", () => {
         assert_eq!(labels("a.swift", src, 12), ["extension S: P", "func x()"]);
     }
 
-    #[cfg(feature = "kotlin")]
     #[test]
     fn kotlin() {
         let src = "class A(val x: Int) {\n    fun run(): Int {\n        return 1\n    }\n    companion object {\n        fun go() = 2\n    }\n}\nfun top(\n    a: Int,\n): Int {\n    return a\n}\n";
@@ -318,7 +314,6 @@ describe(\"thing\", () => {
         assert!(labels("a.lua", src, 11).is_empty());
     }
 
-    #[cfg(feature = "fsharp")]
     const FSHARP: &str = "\
 module M
 
@@ -334,7 +329,6 @@ let add a b =
 let value = 3
 ";
 
-    #[cfg(feature = "fsharp")]
     #[test]
     fn fsharp_functions_but_not_values() {
         assert_eq!(labels("a.fs", FSHARP, 5), ["type C(x: int)", "member this.Run(a)"]);
