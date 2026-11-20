@@ -2,6 +2,7 @@
 //! review plan), folds, focus and scrolling.
 
 use super::{App, Focus, Mode, StackPlace, View};
+use crate::diff::LineKind;
 use crate::review::Comment;
 use crate::text::{wrapped_height, wrap_words};
 
@@ -181,7 +182,10 @@ impl App {
         rows.push(Row::Hunk { file, hunk });
         rows.extend(above.into_iter().map(|no| Row::Context { file, hunk, no }));
         for line in 0..h.lines.len() {
-            rows.push(Row::Line { file, hunk, line });
+            // A hidden removal's comments and notes stay, under the line above.
+            if self.show_removals || h.lines[line].kind != LineKind::Removed {
+                rows.push(Row::Line { file, hunk, line });
+            }
             let here = self.review.comments().iter().filter(|c| c.hunk == h.id && c.end.min(last) == line);
             rows.extend(here.flat_map(|c| comment_rows(file, c)));
             let notes = self.notes.iter().enumerate().filter(|(_, n)| (n.file, n.hunk, n.line) == (file, hunk, line));
@@ -233,6 +237,40 @@ impl App {
             }
         };
         self.cursor = kept.unwrap_or_else(fallback);
+    }
+
+    /// `-`: hides or shows removed lines. A cursor on a removal being hidden
+    /// moves to the next row that stays.
+    pub(super) fn toggle_removals(&mut self) {
+        self.show_removals = !self.show_removals;
+        if let Mode::Visual { .. } = self.mode {
+            self.mode = Mode::Normal;
+        }
+        if !self.show_removals {
+            let stays = |row: &Row| !self.is_removal(*row);
+            let next = self.rows[self.cursor.min(self.rows.len())..].iter().position(stays).map(|i| self.cursor + i);
+            let prev = || self.rows[..self.cursor.min(self.rows.len())].iter().rposition(stays);
+            if let Some(idx) = next.or_else(prev) {
+                self.cursor = idx;
+            }
+        }
+        self.rebuild_rows();
+        self.message = Some(if self.show_removals { "Showing removals" } else { "Hiding removals" }.to_string());
+    }
+
+    /// Whether `row` is a removed line.
+    pub fn is_removal(&self, row: Row) -> bool {
+        matches!(row, Row::Line { file, hunk, line } if self.line(file, hunk, line).kind == LineKind::Removed)
+    }
+
+    /// Whether lines were removed right above `line` and nothing took their
+    /// place, so the UI can mark the spot while removals are hidden.
+    pub fn removed_above(&self, file: usize, hunk: usize, line: usize) -> bool {
+        let lines = &self.hunk(file, hunk).lines;
+        line > 0
+            && lines[line].kind != LineKind::Added
+            && lines[line].kind != LineKind::Removed
+            && lines[line - 1].kind == LineKind::Removed
     }
 
     pub(super) fn toggle_fold(&mut self) {
@@ -491,6 +529,31 @@ mod tests {
         assert_eq!(app.rows, [Row::File { file: 1 }]);
         app.update(Action::OpenAllFolds);
         assert_eq!(app.rows.len(), 6);
+    }
+
+    #[test]
+    fn hiding_removals_keeps_the_file_as_it_is_now() {
+        use crate::diff::DiffLine;
+        let mut f = file("a.rs", &[4]);
+        let kinds = [LineKind::Context, LineKind::Removed, LineKind::Added, LineKind::Removed];
+        for (l, kind) in f.hunks[0].lines.iter_mut().zip(kinds) {
+            l.kind = kind;
+        }
+        f.hunks[0].lines.push(DiffLine { kind: LineKind::Context, old_no: Some(9), new_no: Some(9), content: "x".into() });
+        let mut app = app_with(vec![f]);
+        let line = |line| Row::Line { file: 0, hunk: 0, line };
+        // On the first removal: it goes, and the cursor moves to the addition.
+        app.update(Action::Down(3));
+        assert_eq!(app.current_row(), Some(line(1)));
+        app.update(Action::ToggleRemovals);
+        assert_eq!(app.rows[2..], [line(0), line(2), line(4)]);
+        assert_eq!(app.current_row(), Some(line(2)));
+        // The context after the trailing removal marks where it was.
+        assert!(app.removed_above(0, 0, 4));
+        assert!(!app.removed_above(0, 0, 2));
+        app.update(Action::ToggleRemovals);
+        assert_eq!(app.rows.len(), 7);
+        assert_eq!(app.current_row(), Some(line(2)));
     }
 
     #[test]

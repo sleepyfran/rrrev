@@ -58,6 +58,8 @@ pub enum Action {
     ExpandScope,
     /// `zE`: drop all the extra context.
     ResetContext,
+    /// `-`: show / hide removed lines, leaving the file as it is now.
+    ToggleRemovals,
     /// `a`: ask the AI about the line, selection or hunk.
     Ask,
     /// `A`: show / hide the ask panel.

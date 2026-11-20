@@ -30,6 +30,7 @@ pub const SECTIONS: &[Section] = &[
             ("zE", "back to the hunks as git shows them"),
             ("breadcrumbs", "the line above the diff shows the file and the definitions around the cursor"),
             ("tinted words", "within a changed line, the words that changed"),
+            ("-", "hide / show removed lines: the file as it is now, with the additions still marked"),
         ],
     },
     Section {

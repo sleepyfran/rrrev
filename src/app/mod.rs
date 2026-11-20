@@ -85,6 +85,9 @@ pub struct App {
     pub highlight_search: bool,
     /// First line shown of the `?` overlay, while it's open.
     pub help_scroll: Option<usize>,
+    /// Whether removed lines are shown; `-` hides them, leaving the file as
+    /// it is now.
+    pub show_removals: bool,
     /// Extra lines of the file shown around hunks, by `(file, hunk)`.
     pub expanded: HashMap<(usize, usize), context::Expansion>,
     /// The AI's notes from the plan, placed on the diff.
@@ -138,6 +141,7 @@ impl App {
             search: None,
             highlight_search: false,
             help_scroll: None,
+            show_removals: true,
             expanded: HashMap::new(),
             notes: Vec::new(),
             ask: AskPanel::default(),
@@ -251,6 +255,7 @@ impl App {
             Action::ExpandBelow(n) => self.expand(n, false),
             Action::ExpandScope => self.expand_scope(),
             Action::ResetContext => self.reset_context(),
+            Action::ToggleRemovals => self.toggle_removals(),
             Action::Ask => self.start_ask(),
             Action::ToggleAskPanel => self.toggle_ask_panel(),
             Action::PanelDown(n) => self.ask.scroll = self.ask.scroll.saturating_add(n),

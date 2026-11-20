@@ -751,6 +751,8 @@ fn diff_line(app: &App, highlighter: &mut Highlighter, file: usize, hunk: usize,
     };
     let bar = match change {
         Some(color) => Span::styled("▌", Style::new().fg(color)),
+        // With removals hidden, a thin mark where lines went with nothing in their place.
+        None if !app.show_removals && app.removed_above(file, hunk, line) => Span::styled("▔", Style::new().fg(p.red)),
         None => Span::raw(" "),
     };
     let text_style = match l.kind {
@@ -767,7 +769,8 @@ fn diff_line(app: &App, highlighter: &mut Highlighter, file: usize, hunk: usize,
         Span::raw(" "),
     ];
     // Wrapped code continues under itself, with the marker and bar running down.
-    let hang = vec![marker, Span::raw(" ".repeat(2 * w + 2)), bar, Span::raw(" ")];
+    let hang_bar = if change.is_some() { bar.clone() } else { Span::raw(" ") };
+    let hang = vec![marker, Span::raw(" ".repeat(2 * w + 2)), hang_bar, Span::raw(" ")];
     let segments = match highlighter.line(&app.diff, file, hunk, line) {
         [] => vec![(text_style, l.content.clone())],
         segments => segments.to_vec(),
@@ -1276,6 +1279,7 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
                 _ if matches!(app.current_row(), Some(Row::Note { .. })) => {
                     " c comment with this  dd dismiss  a ask about it  y copy "
                 }
+                _ if !app.show_removals => " removals hidden: - to show  ? help  r review  c comment  a ask  q quit ",
                 _ => " ? help  r review  c comment  a ask  [e ]e ze context  S verdict  ]u unreviewed  q quit ",
             };
             let hints = if fits(&left, hints) { hints } else { " " };
