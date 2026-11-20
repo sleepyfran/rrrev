@@ -133,6 +133,19 @@ impl Lsp {
                 Event::Closed { server, why } => self.servers[server].closed(why),
             }
         }
+        // Requests a server took with it when it went away fail, so nothing
+        // waits on them forever.
+        for (index, server) in self.servers.iter_mut().enumerate() {
+            let abandoned = server.take_abandoned();
+            if abandoned.is_empty() {
+                continue;
+            }
+            let why = match &server.state {
+                State::Exited(why) => format!("{} stopped, {why}", server.name),
+                _ => format!("{} stopped", server.name),
+            };
+            replies.extend(abandoned.into_iter().map(|id| Reply { server: index, id, result: Err(why.clone()) }));
+        }
         replies
     }
 
@@ -413,6 +426,37 @@ mod tests {
         drop(fake);
         poll_until(&mut lsp, |lsp, _| matches!(lsp.servers[index].state, State::Exited(_)));
         assert_eq!(lsp.describe(), "fake-ls stopped, it exited");
+    }
+
+    #[test]
+    fn cancelled_requests_are_dropped_and_abandoned_ones_fail() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut lsp = Lsp::new(dir.path(), Registry::global());
+        let (index, mut fake) = connected(&mut lsp, dir.path());
+        let initialize = fake.read(&mut lsp);
+        fake.send(json!({"jsonrpc": "2.0", "id": initialize["id"], "result": {"capabilities": {}}}));
+        poll_until(&mut lsp, |lsp, _| lsp.servers[index].state == State::Ready);
+        assert_eq!(fake.read(&mut lsp)["method"], "initialized");
+
+        // A cancelled request says so to the server, and its answer is dropped.
+        let first = lsp.server(index).request("textDocument/definition", json!({}));
+        assert_eq!(fake.read(&mut lsp)["id"], first);
+        lsp.server(index).cancel(first);
+        let cancel = fake.read(&mut lsp);
+        assert_eq!((cancel["method"].as_str(), &cancel["params"]["id"]), (Some("$/cancelRequest"), &json!(first)));
+        fake.send(json!({"jsonrpc": "2.0", "id": first, "result": null}));
+
+        // One still out when the server goes away fails, once.
+        let second = lsp.server(index).request("textDocument/definition", json!({}));
+        assert_eq!(fake.read(&mut lsp)["id"], second);
+        drop(fake);
+        let mut got = Vec::new();
+        poll_until(&mut lsp, |_, replies| {
+            got.extend(replies.iter().map(|r| (r.id, r.result.clone())));
+            !got.is_empty()
+        });
+        assert_eq!(got, [(second, Err("fake-ls stopped, it exited".to_string()))]);
+        assert!(lsp.poll().is_empty());
     }
 
     #[test]

@@ -43,6 +43,8 @@ pub struct Server {
     next_id: u64,
     /// Requests out, by id: their method.
     pub pending: HashMap<u64, String>,
+    /// Requests that were still out when the connection closed.
+    abandoned: Vec<u64>,
     /// Notifications held until `initialize` is answered.
     queued: Vec<Value>,
     opened: HashSet<PathBuf>,
@@ -120,6 +122,7 @@ impl Server {
             child,
             next_id: 1,
             pending: HashMap::new(),
+            abandoned: Vec::new(),
             queued: Vec::new(),
             opened: HashSet::new(),
             initialize: 0,
@@ -141,6 +144,14 @@ impl Server {
             let _ = self.outgoing.send(message);
         }
         id
+    }
+
+    /// Tells the server rrrev no longer wants the answer to request `id`,
+    /// which won't come back as a reply.
+    pub fn cancel(&mut self, id: u64) {
+        if self.pending.remove(&id).is_some() {
+            self.notify("$/cancelRequest", json!({"id": id}));
+        }
     }
 
     /// Sends a notification, or holds it until the server is initialized.
@@ -265,7 +276,13 @@ impl Server {
             self.state = State::Exited(why);
         }
         self.progress.clear();
-        self.pending.clear();
+        let initialize = self.initialize;
+        self.abandoned.extend(self.pending.drain().map(|(id, _)| id).filter(|&id| id != initialize));
+    }
+
+    /// The requests that went unanswered when the connection closed, once.
+    pub fn take_abandoned(&mut self) -> Vec<u64> {
+        std::mem::take(&mut self.abandoned)
     }
 
     /// What it's doing, for the status line: its longest-running work.

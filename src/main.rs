@@ -241,9 +241,9 @@ fn run(
     let mut asking: Option<Running> = None;
     let mut anim = Animator::from_env();
     let appearance = appearance::Watch::start();
-    // Requests out to language servers, by server and id: what was asked,
-    // and what to say with the answer.
-    let mut asked: HashMap<(usize, u64), (app::GoTo, Option<&'static str>)> = HashMap::new();
+    // The question out to a language server, if any: a new one calls off
+    // the last, so only the latest answer counts.
+    let mut asked: Option<Asked> = None;
     while !app.should_quit {
         terminal.draw(|frame| ui::render(frame, app, &mut highlighter, &mut anim, &keys.pending()))?;
 
@@ -257,10 +257,14 @@ fn run(
             app.finish_organize(job, result);
         }
         for reply in lsp.poll() {
-            if let Some((kind, note)) = asked.remove(&(reply.server, reply.id)) {
-                let targets = reply.result.map(|result| targets(lsp, reply.server, &result));
-                app.finish_go_to(kind, targets, note);
+            let Some(question) = asked.take_if(|a| (a.server, a.id) == (reply.server, reply.id)) else { continue };
+            // An answer that comes after the cursor moved on is dropped,
+            // rather than pulling it back from wherever it went.
+            if !app.still_at(&question.from) {
+                continue;
             }
+            let targets = reply.result.map(|result| targets(lsp, reply.server, &result));
+            app.finish_go_to(question.kind, targets, question.note);
         }
         app.lsp_status = lsp.status();
         while let Ok((job, result)) = answers.try_recv() {
@@ -342,14 +346,18 @@ fn run(
                     app.message = Some(format!("error: could not save the theme: {e:#}"));
                 }
             }
-            Some(Effect::GoTo { kind, spot }) => match ask_go_to(lsp, kind, &spot) {
-                Ok((server, id, note)) => {
-                    asked.insert((server, id), (kind, note));
+            Some(Effect::GoTo { kind, spot }) => {
+                if let Some(old) = asked.take() {
+                    lsp.server(old.server).cancel(old.id);
                 }
-                Err(why) => app.message = Some(why),
-            },
+                match ask_go_to(lsp, kind, &spot) {
+                    Ok((server, id, note)) => asked = Some(Asked { server, id, kind, note, from: app.place() }),
+                    Err(why) => app.message = Some(why),
+                }
+            }
             Some(Effect::Lsp { restart }) => {
                 if restart {
+                    asked = None;
                     lsp.stop_all();
                     open_in_servers(lsp, app);
                 }
@@ -377,6 +385,16 @@ fn run(
         run.stop();
     }
     Ok(())
+}
+
+/// A question out to a language server: which request it is, what it was
+/// for, what to say with the answer, and where the cursor was.
+struct Asked {
+    server: usize,
+    id: u64,
+    kind: app::GoTo,
+    note: Option<&'static str>,
+    from: app::Place,
 }
 
 /// Sends `gd` and its kin's request for `spot`. Returns the server and

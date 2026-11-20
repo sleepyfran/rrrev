@@ -25,7 +25,7 @@ mod view;
 mod test_support;
 
 pub use action::{Action, Effect, GoTo, Spot, VerdictAction};
-pub use goto::Target;
+pub use goto::{Place, Target};
 pub use ask::{Answer, AskPanel};
 pub use column::FindChar;
 pub use comments_menu::{CommentsMenu, DismissCopied};

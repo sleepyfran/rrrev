@@ -30,7 +30,33 @@ pub struct Jump {
     file_view: Option<FileView>,
 }
 
+/// Where the cursor is, to tell whether it moved while a server thought.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Place {
+    page: usize,
+    cursor: usize,
+    column: usize,
+    /// In the file view: its path, line and column.
+    file: Option<(String, usize, usize)>,
+}
+
 impl App {
+    pub fn place(&self) -> Place {
+        Place {
+            page: self.page,
+            cursor: self.cursor,
+            column: self.column,
+            file: self.file_view.as_ref().map(|v| (v.path.clone(), v.caret.line, v.caret.column)),
+        }
+    }
+
+    /// Whether a server's answer to a question asked at `place` still
+    /// applies: the cursor hasn't moved since, and nothing is being typed.
+    /// Moving on is how a question is called off.
+    pub fn still_at(&self, place: &Place) -> bool {
+        !self.is_typing() && self.place() == *place
+    }
+
     /// `gd` and its kin: asks the main loop to ask the server.
     pub(super) fn go_to(&mut self, kind: GoTo) {
         match self.cursor_spot() {
@@ -235,6 +261,20 @@ mod tests {
         assert_eq!(app.line(file, hunk, line).new_no, Some(no));
         assert_eq!(app.column, 4);
         assert_eq!(app.message.as_deref(), Some("1 of 2 places · may be off"));
+    }
+
+    #[test]
+    fn answers_apply_only_where_they_were_asked() {
+        let mut app = sample_app();
+        app.update(Action::Down(2));
+        let asked = app.place();
+        assert!(app.still_at(&asked));
+        app.update(Action::Right(1));
+        assert!(!app.still_at(&asked));
+        app.update(Action::Left(1));
+        assert!(app.still_at(&asked));
+        app.update(Action::StartComment);
+        assert!(!app.still_at(&asked));
     }
 
     #[test]
