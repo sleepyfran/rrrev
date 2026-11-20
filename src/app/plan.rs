@@ -311,11 +311,16 @@ mod tests {
         assert!(app.is_reviewed(1, 0));
         assert!(!app.is_reviewed(0, 1));
         assert!(app.group_progress(0).is_complete());
+        // That was all of b.rs, so it folds.
+        assert!(app.collapsed[1]);
+        assert_eq!(app.rows[2..], [Row::File { file: 1 }]);
         app.update(Action::NextFile(1));
         app.update(Action::Down(3));
         app.update(Action::TogglePageReviewed);
         assert!(app.is_reviewed(0, 1));
         assert!(!app.is_reviewed(0, 0));
+        // a.rs still has a hunk in another group, so it stays open.
+        assert!(!app.collapsed[0]);
     }
 
     #[test]

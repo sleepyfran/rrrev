@@ -1,6 +1,8 @@
 //! Marking hunks as reviewed, and how far along the review is.
 
-use super::{App, Row, View};
+use std::collections::BTreeSet;
+
+use super::{App, Row};
 
 /// Reviewed and total hunk counts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,7 +49,7 @@ impl App {
                 | Row::Note { file, hunk, .. },
             ) => {
                 let reviewed = self.is_reviewed(file, hunk);
-                self.review.set_reviewed(&self.hunk(file, hunk).id.clone(), !reviewed);
+                self.set_hunks_reviewed(&[(file, hunk)], !reviewed);
             }
             Some(Row::Group { .. }) => self.toggle_page_reviewed(),
             Some(Row::File { file }) => {
@@ -74,15 +76,25 @@ impl App {
     }
 
     /// Marks the rest of a partly reviewed set; only a fully reviewed set
-    /// gets unmarked. In the files view the file also folds when done, and
-    /// unfolds when unmarked.
+    /// gets unmarked.
     fn toggle_hunks_reviewed(&mut self, hunks: &[(usize, usize)]) {
         let reviewed = !self.hunks_progress(hunks).is_complete();
+        self.set_hunks_reviewed(hunks, reviewed);
+    }
+
+    /// Marks or unmarks `hunks`. A file this finishes folds out of the way,
+    /// and one it un-finishes unfolds again.
+    fn set_hunks_reviewed(&mut self, hunks: &[(usize, usize)], reviewed: bool) {
+        let files: BTreeSet<usize> = hunks.iter().map(|&(f, _)| f).collect();
+        let was_complete: Vec<bool> = files.iter().map(|&f| self.file_progress(f).is_complete()).collect();
         for &(file, hunk) in hunks {
             self.review.set_reviewed(&self.hunk(file, hunk).id.clone(), reviewed);
         }
-        if self.view == View::Files {
-            self.collapsed[self.page] = reviewed;
+        for (&file, was) in files.iter().zip(was_complete) {
+            let complete = self.file_progress(file).is_complete();
+            if complete != was {
+                self.collapsed[file] = complete;
+            }
         }
         self.rebuild_rows();
     }
@@ -123,6 +135,22 @@ mod tests {
         app.update(Action::ToggleReviewed);
         assert_eq!(app.file_progress(0).reviewed, 0);
         assert!(!app.collapsed[0]);
+    }
+
+    #[test]
+    fn reviewing_the_last_hunk_folds_the_file() {
+        let mut app = sample_app();
+        app.update(Action::Down(1));
+        app.update(Action::ToggleReviewed);
+        assert!(!app.collapsed[0]);
+
+        // The second hunk's first line: the last one left in a.rs.
+        app.update(Action::Down(5));
+        assert_eq!(app.current_row(), Some(Row::Line { file: 0, hunk: 1, line: 0 }));
+        app.update(Action::ToggleReviewed);
+        assert!(app.collapsed[0]);
+        assert_eq!(app.rows, [Row::File { file: 0 }]);
+        assert_eq!(app.cursor, 0);
     }
 
     #[test]
