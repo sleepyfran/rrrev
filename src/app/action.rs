@@ -98,6 +98,10 @@ pub enum Action {
     /// `gd` / `gy` / `gi`: ask the language server where the symbol under
     /// the cursor is defined.
     GoTo(GoTo),
+    /// `gr`: every reference to the symbol under the cursor.
+    References,
+    /// `K`: what the language server says about the symbol under the cursor.
+    Hover,
     /// `C-o`: back to where the cursor jumped from.
     JumpBack,
     Cancel,
@@ -161,6 +165,10 @@ pub enum Effect {
     /// Ask the language server for `spot`'s definition, then call
     /// `finish_go_to`.
     GoTo { kind: GoTo, spot: Spot },
+    /// Ask for `spot`'s references, then call `finish_references`.
+    References { spot: Spot },
+    /// Ask about `spot`, then call `finish_hover`.
+    Hover { spot: Spot },
 }
 
 /// What `gd` and its kin look for.

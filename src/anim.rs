@@ -74,6 +74,8 @@ pub enum Popup {
     Verdict,
     Theme,
     Comments,
+    References,
+    Hover,
     Confirm,
 }
 
@@ -83,7 +85,14 @@ impl Popup {
     fn anchor(self) -> Anchor {
         match self {
             Popup::Comment => Anchor::Bottom,
-            Popup::Help | Popup::Sidebar | Popup::Verdict | Popup::Theme | Popup::Comments | Popup::Confirm => {
+            Popup::Help
+            | Popup::Sidebar
+            | Popup::Verdict
+            | Popup::Theme
+            | Popup::Comments
+            | Popup::References
+            | Popup::Hover
+            | Popup::Confirm => {
                 Anchor::Center
             },
         }

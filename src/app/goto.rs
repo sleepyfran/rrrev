@@ -67,7 +67,7 @@ impl App {
 
     /// The code under the cursor, as the language server sees it: only the
     /// new side, which is what's on disk.
-    fn cursor_spot(&self) -> Result<Spot, &'static str> {
+    pub(super) fn cursor_spot(&self) -> Result<Spot, &'static str> {
         const OLD: &str = "Removed lines aren't in the code the language server sees";
         if let Some(view) = &self.file_view {
             if view.side == Side::Old {
@@ -122,31 +122,36 @@ impl App {
         self.message = message;
     }
 
+    /// Where the diff shows a target's line, as a page and row.
+    pub(super) fn shown_at(&self, target: &Target) -> Option<(usize, usize)> {
+        let file = self.diff.files.iter().position(|f| f.new_path.as_deref() == Some(target.path.as_str()))?;
+        let no = target.line as u32 + 1;
+        let shown = |row: &Row| match *row {
+            Row::Line { file: f, hunk, line } => {
+                let l = self.line(f, hunk, line);
+                f == file && l.kind != LineKind::Removed && l.new_no == Some(no)
+            }
+            Row::Context { file: f, no: n, .. } => {
+                f == file && n == no && matches!(self.diff.context_source(f), Some((_, Side::New)))
+            }
+            _ => false,
+        };
+        self.stops(shown, |_| false).first().copied()
+    }
+
     /// Its line in the diff when the diff shows it, else the file view.
-    fn go_to_target(&mut self, target: &Target) {
+    pub(super) fn go_to_target(&mut self, target: &Target) {
         let column = target.lines.get(target.line).map_or(0, |l| {
             l.get(..target.column).map_or(l.chars().count(), |before| before.chars().count())
         });
-        let file = self.diff.files.iter().position(|f| f.new_path.as_deref() == Some(target.path.as_str()));
-        if let Some(file) = file {
-            let no = target.line as u32 + 1;
-            let shown = |row: &Row| match *row {
-                Row::Line { file: f, hunk, line } => {
-                    f == file && self.line(f, hunk, line).kind != LineKind::Removed && self.line(f, hunk, line).new_no == Some(no)
-                }
-                Row::Context { file: f, no: n, .. } => {
-                    f == file && n == no && matches!(self.diff.context_source(f), Some((_, Side::New)))
-                }
-                _ => false,
-            };
-            if let Some(&(page, row)) = self.stops(shown, |_| false).first() {
-                self.file_view = None;
-                self.open_page(page, row);
-                self.column = column;
-                self.scroll = row.saturating_sub(self.viewport_height / 2);
-                return;
-            }
+        if let Some((page, row)) = self.shown_at(target) {
+            self.file_view = None;
+            self.open_page(page, row);
+            self.column = column;
+            self.scroll = row.saturating_sub(self.viewport_height / 2);
+            return;
         }
+        let file = self.diff.files.iter().position(|f| f.new_path.as_deref() == Some(target.path.as_str()));
         let marks = match file {
             Some(file) => marks(&self.diff.files[file], Side::New, target.lines.len()),
             None => vec![None; target.lines.len()],
@@ -157,7 +162,7 @@ impl App {
         self.file_view = Some(view);
     }
 
-    fn here(&self) -> Jump {
+    pub(super) fn here(&self) -> Jump {
         Jump {
             page: self.page,
             cursor: self.cursor,
