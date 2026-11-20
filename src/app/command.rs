@@ -40,6 +40,7 @@ impl App {
             "export" => self.export_command(&args),
             "organize" => self.organize_command(&args),
             "ask" => self.ask_command(&args),
+            "comments" => self.open_comments_menu(),
             "verdict" => self.show_verdict = true,
             "theme" | "colorscheme" | "colo" => self.theme_command(&args),
             _ => match name.parse::<u32>() {

@@ -94,7 +94,7 @@ pub fn render(frame: &mut Frame, app: &mut App, highlighter: &mut Highlighter, a
     render_status(frame, status, app, pending);
 
     let sidebar_popup = app.compact && app.focus == Focus::Sidebar;
-    if sidebar_popup || app.help_scroll.is_some() || app.show_verdict {
+    if sidebar_popup || app.help_scroll.is_some() || app.show_verdict || app.comments_menu.is_some() {
         dim_backdrop(frame, &app.palette);
     }
     // What the pop-ups cover, to show around them as they unroll.
@@ -107,12 +107,133 @@ pub fn render(frame: &mut Frame, app: &mut App, highlighter: &mut Highlighter, a
     anim.popup(frame.buffer_mut(), Popup::Sidebar, sidebar, Some(&under));
     let verdict = app.show_verdict.then(|| render_verdict(frame, frame.area(), app));
     anim.popup(frame.buffer_mut(), Popup::Verdict, verdict, Some(&under));
+    let comments = app.comments_menu.is_some().then(|| render_comments_menu(frame, frame.area(), app));
+    anim.popup(frame.buffer_mut(), Popup::Comments, comments, Some(&under));
     let help = app.help_scroll.is_some().then(|| render_help(frame, frame.area(), app));
     anim.popup(frame.buffer_mut(), Popup::Help, help, Some(&under));
     // The picker leaves the screen bright, to show each theme on the diff.
     let under = frame.buffer_mut().clone();
     let picker = app.theme_picker.is_some().then(|| render_theme_picker(frame, main, app));
     anim.popup(frame.buffer_mut(), Popup::Theme, picker, Some(&under));
+    // The question goes over whatever asked it.
+    let under = frame.buffer_mut().clone();
+    let confirm = app.dismiss_prompt.is_some().then(|| render_dismiss_prompt(frame, frame.area(), app));
+    anim.popup(frame.buffer_mut(), Popup::Confirm, confirm, Some(&under));
+}
+
+/// The list of every comment, centred over the screen: where each is, and
+/// the first line of what it says. Returns where it was drawn.
+fn render_comments_menu(frame: &mut Frame, area: Rect, app: &App) -> Rect {
+    let p = app.palette;
+    let Some(menu) = app.comments_menu else { return Rect::default() };
+    let comments = app.listed_comments();
+    let width = 96.min(area.width.saturating_sub(4));
+    let inner_width = width.saturating_sub(2) as usize;
+    let locations: Vec<String> = comments
+        .iter()
+        .map(|c| {
+            let range = |(a, b): (u32, u32)| if a == b { a.to_string() } else { format!("{a}-{b}") };
+            match (c.new_lines, c.old_lines) {
+                (Some(new), _) => format!("{}:{}", c.path, range(new)),
+                (None, Some(old)) => format!("{}:-{}", c.path, range(old)),
+                (None, None) => c.path.clone(),
+            }
+        })
+        .collect();
+    // Locations get up to half the width; the text has the rest.
+    let location_width = locations.iter().map(|l| l.chars().count()).max().unwrap_or(0).min(inner_width / 2);
+    let text_width = inner_width.saturating_sub(3 + location_width + 2);
+
+    let lines: Vec<Line> = comments
+        .iter()
+        .zip(&locations)
+        .enumerate()
+        .map(|(i, (comment, location))| {
+            let selected = i == menu.selected;
+            let armed = menu.armed == Some(comment.id);
+            let outdated = app.is_outdated(comment);
+            let mut text = comment.text.lines().next().unwrap_or("").to_string();
+            if comment.text.lines().nth(1).is_some() {
+                text.push_str(" …");
+            }
+            let text = truncate_right(&text, text_width.saturating_sub(if outdated { 11 } else { 0 }));
+            let mut spans = vec![
+                match (armed, selected) {
+                    (true, _) => Span::styled(" ✗ ", Style::new().fg(p.red).bold()),
+                    (false, true) => Span::styled(" ▸ ", Style::new().fg(p.yellow)),
+                    (false, false) => Span::raw("   "),
+                },
+                Span::styled(
+                    format!("{:<location_width$}  ", truncate_right(location, location_width)),
+                    Style::new().fg(p.cyan),
+                ),
+                Span::raw(text),
+            ];
+            if outdated {
+                spans.push(Span::styled(" (outdated)", Style::new().fg(p.muted)));
+            }
+            let line = Line::from(spans);
+            match (armed, selected) {
+                (true, _) => line.style(Style::new().fg(p.red).bg(p.cursor).bold().crossed_out()),
+                (false, true) => line.style(Style::new().bg(p.cursor).bold()),
+                (false, false) => line,
+            }
+        })
+        .collect();
+
+    let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(2));
+    let rect = centered(area, width, height);
+    let title = format!(" Comments ({}) ", comments.len());
+    let footer = match menu.armed {
+        Some(_) => Line::from(vec![
+            Span::raw(" j/k move · Enter go to · ").dim(),
+            Span::styled("dd confirm deletion", Style::new().fg(p.red).bold()),
+            Span::raw(" · Y copy all · Esc close ").dim(),
+        ]),
+        None => Line::from(" j/k move · Enter go to · dd dismiss · Y copy all · Esc close ").dim(),
+    };
+    let block = Block::bordered()
+        .border_type(BorderType::Thick)
+        .border_style(Style::new().fg(p.yellow).bold())
+        .title(Span::styled(title, Style::new().bold()))
+        .title_bottom(footer);
+    let inner = block.inner(rect);
+    let scroll = (menu.selected + 1).saturating_sub(inner.height as usize);
+    clear(frame, rect, &p);
+    frame.render_widget(block, rect);
+    frame.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), inner);
+    rect
+}
+
+/// After `Y`: whether to dismiss the comments just copied. Returns where it
+/// was drawn.
+fn render_dismiss_prompt(frame: &mut Frame, area: Rect, app: &App) -> Rect {
+    let p = app.palette;
+    let n = app.dismiss_prompt.as_ref().map_or(0, |d| d.ids.len());
+    let what = if n == 1 { "the comment".to_string() } else { format!("all {n} comments") };
+    let lines = vec![
+        Line::default(),
+        Line::from(format!("  Copied {what}. Dismiss {} now?  ", if n == 1 { "it" } else { "them" })).bold(),
+        Line::default(),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled(" y ", Style::new().fg(p.on_accent).bg(p.green).bold()),
+            Span::raw(" dismiss   "),
+            Span::styled(" n ", Style::new().fg(p.on_accent).bg(p.muted).bold()),
+            Span::raw(" keep them"),
+        ]),
+    ];
+    let width = (lines.iter().map(Line::width).max().unwrap_or(0) as u16 + 2).min(area.width);
+    let rect = centered(area, width, lines.len() as u16 + 3);
+    let block = Block::bordered()
+        .border_type(BorderType::Thick)
+        .border_style(Style::new().fg(p.yellow).bold())
+        .title(Span::styled(" Copied ", Style::new().bold()));
+    let inner = block.inner(rect);
+    clear(frame, rect, &p);
+    frame.render_widget(block, rect);
+    frame.render_widget(Paragraph::new(lines), inner);
+    rect
 }
 
 /// Blanks `area` for a pop-up, on the theme's background.
@@ -1228,6 +1349,8 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
         (Mode::Ask { .. }, _) => " ASK ",
         (Mode::VerdictMessage { .. }, _) => " VERDICT ",
         _ if app.show_verdict => " VERDICT ",
+        _ if app.dismiss_prompt.is_some() => " COPIED ",
+        _ if app.comments_menu.is_some() => " COMMENTS ",
         _ if app.theme_picker.is_some() => " THEME ",
         (_, Focus::Sidebar) => " FILES ",
         _ => " NORMAL ",
@@ -1275,7 +1398,8 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
                 Mode::Visual { .. } => " c comment  a ask  y copy  Esc cancel ",
                 // The boxes list their own keys.
                 Mode::Comment { .. } | Mode::Ask { .. } | Mode::VerdictMessage { .. } => " ",
-                _ if app.show_verdict || app.theme_picker.is_some() => " ",
+                _ if app.show_verdict || app.theme_picker.is_some() || app.comments_menu.is_some() => " ",
+                _ if app.dismiss_prompt.is_some() => " ",
                 _ if matches!(app.current_row(), Some(Row::Note { .. })) => {
                     " c comment with this  dd dismiss  a ask about it  y copy "
                 }
@@ -1321,6 +1445,53 @@ mod tests {
         }
         // doom-nord's background, away from the bars and the picker.
         assert_eq!(buffer[(2, 10)].bg, Color::Rgb(0x2E, 0x34, 0x40));
+    }
+
+    #[test]
+    fn draws_the_comments_list_and_the_dismiss_prompt() {
+        use crate::app::Action;
+        use crate::review::{Comment, ReviewState};
+        use crate::theme::Theme;
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut review = ReviewState::default();
+        review.add_comment(Comment {
+            id: 0,
+            hunk: Default::default(),
+            path: "src/lib.rs".into(),
+            start: 0,
+            end: 0,
+            old_lines: None,
+            new_lines: Some((4, 6)),
+            code: Vec::new(),
+            text: "why the lock?\nsecond line".into(),
+        });
+        let mut app = App::new(String::new(), crate::diff::Diff::new(Vec::new()), review);
+        let mut highlighter = Highlighter::new(Theme::terminal(), crate::appearance::Appearance::Dark);
+        let mut anim = Animator::new(false);
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        let mut screen = |app: &mut App| {
+            terminal.draw(|frame| render(frame, app, &mut highlighter, &mut anim, "")).unwrap();
+            terminal.backend().buffer().content().iter().map(|c| c.symbol()).collect::<String>()
+        };
+
+        app.update(Action::ListComments);
+        let shown = screen(&mut app);
+        assert!(shown.contains("Comments (1)"));
+        assert!(shown.contains("src/lib.rs:4-6"));
+        assert!(shown.contains("why the lock? …"));
+        assert!(shown.contains("(outdated)"));
+        assert!(shown.contains("dd dismiss"));
+
+        app.update(Action::DeleteComment);
+        let shown = screen(&mut app);
+        assert!(shown.contains(" ✗ src/lib.rs"));
+        assert!(shown.contains("dd confirm deletion"));
+        app.update(Action::Down(1));
+        assert!(screen(&mut app).contains("dd dismiss"));
+
+        app.update(Action::CopyForAgent);
+        assert!(screen(&mut app).contains("Copied the comment. Dismiss it now?"));
     }
 
     #[test]

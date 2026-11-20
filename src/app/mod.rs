@@ -6,6 +6,7 @@ mod action;
 mod ask;
 mod command;
 mod comments;
+mod comments_menu;
 mod context;
 mod marks;
 mod mode;
@@ -22,6 +23,7 @@ mod test_support;
 
 pub use action::{Action, Effect, VerdictAction};
 pub use ask::{Answer, AskPanel};
+pub use comments_menu::{CommentsMenu, DismissCopied};
 pub use context::{context_numbers, context_text, is_above};
 pub use marks::Progress;
 pub use mode::{AskTarget, CommentTarget, Focus, Mode, View};
@@ -102,6 +104,10 @@ pub struct App {
     /// The colours of the theme's variant for `appearance`, kept alongside them.
     pub palette: Palette,
     pub theme_picker: Option<ThemePicker>,
+    /// The list of every comment, while it's open.
+    pub comments_menu: Option<CommentsMenu>,
+    /// The question after `Y`, while it waits for an answer.
+    pub dismiss_prompt: Option<DismissCopied>,
     pub should_quit: bool,
 }
 
@@ -150,6 +156,8 @@ impl App {
             appearance: Appearance::Dark,
             palette: Theme::terminal().palette(Appearance::Dark),
             theme_picker: None,
+            comments_menu: None,
+            dismiss_prompt: None,
             should_quit: false,
         };
         // Generated files and files already reviewed start out of the way.
@@ -190,8 +198,17 @@ impl App {
             self.update_help(action);
             return;
         }
+        if self.dismiss_prompt.is_some() {
+            // Answered through `answer_dismiss_copied`; nothing else gets through.
+            return;
+        }
         if self.theme_picker.is_some() {
             self.update_theme_picker(action);
+            return;
+        }
+        if self.comments_menu.is_some() {
+            self.update_comments_menu(action);
+            self.scroll_into_view();
             return;
         }
         if self.show_verdict {
@@ -262,6 +279,7 @@ impl App {
             Action::PanelUp(n) => self.ask.scroll = self.ask.scroll.saturating_sub(n),
             Action::Yank => self.yank(),
             Action::CopyForAgent => self.copy_for_agent(),
+            Action::ListComments => self.open_comments_menu(),
             Action::ToggleVerdict => self.show_verdict = true,
             Action::PickTheme => self.open_theme_picker(),
             Action::Select => {

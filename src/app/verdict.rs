@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use super::context::sign;
-use super::{App, Effect, Mode, Row, VerdictAction};
+use super::{App, DismissCopied, Effect, Mode, Row, VerdictAction};
 use crate::diff::LineKind;
 use crate::export::{self, Format};
 use crate::input::{InputAction, TextInput};
@@ -128,6 +128,9 @@ impl App {
         let n = export.comments.len();
         self.effect = Some(Effect::Copy { text: export::agent_brief(&export) });
         self.message = Some(format!("Copied {n} comment{} for an agent", if n == 1 { "" } else { "s" }));
+        // Handed over, they may well be done with: offer to clear them.
+        let ids = self.review.comments().iter().map(|c| c.id).collect();
+        self.dismiss_prompt = Some(DismissCopied { ids });
     }
 
     /// `y`: the selected lines, the line or comment under the cursor.

@@ -49,6 +49,7 @@ impl KeyHandler {
             (Some('g'), KeyCode::Char('s')) => Action::ShowView(View::Stack),
             (Some('g'), KeyCode::Char('p')) => Action::ShowView(View::Plan),
             (Some('g'), KeyCode::Char('f')) => Action::ShowView(View::Files),
+            (Some('g'), KeyCode::Char('c')) => Action::ListComments,
             (Some(']'), KeyCode::Char('s')) => Action::NextLayer(n),
             (Some('['), KeyCode::Char('s')) => Action::PrevLayer(n),
             (Some(']'), KeyCode::Char('c')) => Action::NextHunk(n),
@@ -133,6 +134,17 @@ pub fn verdict_action(key: KeyEvent) -> Option<VerdictAction> {
     })
 }
 
+/// Keys for a yes / no question: `Some(true)` for yes.
+pub fn confirm_action(key: KeyEvent) -> Option<bool> {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::Char('c') if ctrl => Some(false),
+        KeyCode::Char('y' | 'Y') | KeyCode::Enter => Some(true),
+        KeyCode::Char('n' | 'N' | 'q') | KeyCode::Esc => Some(false),
+        _ => None,
+    }
+}
+
 /// Keys for the comment box and the `:` line, readline-style.
 pub fn input_action(key: KeyEvent) -> Option<InputAction> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -204,6 +216,7 @@ mod tests {
         assert_eq!(press(&mut h, "-"), Some(Action::ToggleRemovals));
         assert_eq!(press(&mut h, "gs"), Some(Action::ShowView(View::Stack)));
         assert_eq!(press(&mut h, "gf"), Some(Action::ShowView(View::Files)));
+        assert_eq!(press(&mut h, "gc"), Some(Action::ListComments));
         assert_eq!(press(&mut h, "2]s"), Some(Action::NextLayer(2)));
         assert_eq!(press(&mut h, "[s"), Some(Action::PrevLayer(1)));
         assert_eq!(press(&mut h, "p"), None);

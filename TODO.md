@@ -34,7 +34,7 @@
 - [ ] Files with no hunks (binary, empty, mode-only changes) can't be marked as reviewed and don't count toward progress. Needs a file-level id.
 - [ ] Comments are anchored by hunk id plus line indices within the hunk. If only the hunk's context lines change, the id stays the same but the indices can shift, so a comment can show under a neighboring line.
 - [ ] Comments on a file that has left the diff aren't shown anywhere in the UI (they're still saved and exported).
-- [ ] `:comments` list of every comment, to jump to or delete from.
+- [x] `:comments` list of every comment, to jump to or delete from.
 - [ ] `]u` searches after the cursor, so when the cursor already sits on an unreviewed stop, the first `]u` moves past it.
 
 ## Deferred on purpose

@@ -71,6 +71,8 @@ pub enum Action {
     Yank,
     /// `Y`: copy every comment, as `path:line` and its text, for an agent.
     CopyForAgent,
+    /// `gc` / `:comments`: the list of every comment.
+    ListComments,
     /// `S`: the summary of the review, and its verdict.
     ToggleVerdict,
     /// `T`: the theme picker.

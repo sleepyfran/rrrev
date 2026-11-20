@@ -207,7 +207,11 @@ fn run(
             && let Event::Key(key) = event::read()?
             && key.kind == KeyEventKind::Press
         {
-            if app.is_typing() {
+            if app.dismiss_prompt.is_some() {
+                if let Some(dismiss) = keymap::confirm_action(key) {
+                    app.answer_dismiss_copied(dismiss);
+                }
+            } else if app.is_typing() {
                 if let Some(action) = keymap::input_action(key) {
                     app.update_input(action);
                 }
@@ -275,6 +279,8 @@ fn run(
             Some(Effect::Copy { text }) => {
                 if let Err(e) = clipboard::copy(&text) {
                     app.message = Some(format!("error: could not copy: {e:#}"));
+                    // Nothing was handed over, so nothing to dismiss.
+                    app.dismiss_prompt = None;
                 }
             }
             None => {}
