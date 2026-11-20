@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use super::View;
+use super::column::FindChar;
 use crate::ask::AskRequest;
 use crate::export::Format;
 use crate::organizer::OrganizeRequest;
@@ -10,6 +11,23 @@ use crate::theme::Theme;
 pub enum Action {
     Down(usize),
     Up(usize),
+    /// `h` / `l`: along the line, on code rows.
+    Left(usize),
+    Right(usize),
+    /// `w` / `W`: to the next word's (or WORD's) start.
+    WordForward { n: usize, big: bool },
+    /// `b` / `B`: back to a word's start.
+    WordBackward { n: usize, big: bool },
+    /// `e` / `E`: to a word's end.
+    WordEnd { n: usize, big: bool },
+    /// `0`: the start of the line.
+    LineStart,
+    /// `^`: the line's first non-blank character.
+    FirstNonBlank,
+    /// `$`: the end of the line.
+    LineEnd,
+    /// `f` / `F` / `t` and a character.
+    FindChar { n: usize, find: FindChar },
     HalfPageDown,
     HalfPageUp,
     Top,
@@ -48,7 +66,6 @@ pub enum Action {
     SearchPrev(usize),
     ToggleHelp,
     ToggleFocus,
-    FocusSidebar,
     FocusDiff,
     ToggleSidebar,
     /// `[e` / `]e`: more of the file above / below the hunk, in steps.
@@ -80,6 +97,24 @@ pub enum Action {
     Select,
     Cancel,
     Quit,
+}
+
+impl Action {
+    /// Motions along a line, which mean nothing in the sidebar.
+    pub fn is_horizontal(self) -> bool {
+        matches!(
+            self,
+            Action::Left(_)
+                | Action::Right(_)
+                | Action::WordForward { .. }
+                | Action::WordBackward { .. }
+                | Action::WordEnd { .. }
+                | Action::LineStart
+                | Action::FirstNonBlank
+                | Action::LineEnd
+                | Action::FindChar { .. }
+        )
+    }
 }
 
 /// Keys on the verdict page.

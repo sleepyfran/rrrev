@@ -667,7 +667,11 @@ fn render_body(frame: &mut Frame, area: Rect, app: &App, highlighter: &mut Highl
         if y >= area.bottom() {
             break;
         }
-        let lines = row_lines(app, *row, highlighter);
+        // The cursor's character on a code row, unless lines are selected.
+        let at = (idx == app.cursor && app.focus == Focus::Diff && selection.is_none())
+            .then(|| app.cursor_bytes())
+            .flatten();
+        let lines = row_lines(app, *row, highlighter, at);
         let row_area = Rect { y, height: (lines.len() as u16).min(area.bottom() - y), ..area };
         y += row_area.height;
         let mut paragraph = Paragraph::new(lines);
@@ -694,15 +698,15 @@ fn is_commented(app: &App, file: usize, hunk: usize, line: usize) -> bool {
 
 /// A row as drawn: one line, or several for a diff line or comment that
 /// wraps (as many as `App::row_height` counts).
-fn row_lines(app: &App, row: Row, highlighter: &mut Highlighter) -> Vec<Line<'static>> {
+fn row_lines(app: &App, row: Row, highlighter: &mut Highlighter, at: Option<Range<usize>>) -> Vec<Line<'static>> {
     match row {
         // Reviewed hunks fade out so what's left to read stands out.
-        Row::Line { file, hunk, line } if app.is_reviewed(file, hunk) => diff_line(app, highlighter, file, hunk, line)
+        Row::Line { file, hunk, line } if app.is_reviewed(file, hunk) => diff_line(app, highlighter, file, hunk, line, at)
             .into_iter()
             .map(|l| l.patch_style(Style::new().dim()))
             .collect(),
-        Row::Line { file, hunk, line } => diff_line(app, highlighter, file, hunk, line),
-        Row::Context { file, hunk, no } => context_line(app, highlighter, file, hunk, no),
+        Row::Line { file, hunk, line } => diff_line(app, highlighter, file, hunk, line, at),
+        Row::Context { file, hunk, no } => context_line(app, highlighter, file, hunk, no, at),
         Row::Comment { id, line, .. } => comment_line(app, id, line),
         Row::Note { note, .. } => note_line(app, note),
         row => vec![row_line(app, row)],
@@ -860,7 +864,14 @@ fn comment_line(app: &App, id: u64, line: usize) -> Vec<Line<'static>> {
     }
 }
 
-fn diff_line(app: &App, highlighter: &mut Highlighter, file: usize, hunk: usize, line: usize) -> Vec<Line<'static>> {
+fn diff_line(
+    app: &App,
+    highlighter: &mut Highlighter,
+    file: usize,
+    hunk: usize,
+    line: usize,
+    at: Option<Range<usize>>,
+) -> Vec<Line<'static>> {
     let p = app.palette;
     let l = app.line(file, hunk, line);
     let w = app.gutter_width;
@@ -910,6 +921,7 @@ fn diff_line(app: &App, highlighter: &mut Highlighter, file: usize, hunk: usize,
     // What changed within the line, word by word, gets a tint behind it.
     let changes = app.diff.word_changes(file, hunk, line);
     let segments = emphasize(segments, changes, highlighter.emphasis(l.kind));
+    let segments = with_cursor(segments, at);
     let segments = segments.into_iter().map(|(style, text)| (style, text.replace('\t', "    "))).collect();
     hanging(app, gutter, hang, highlighted(segments, app))
 }
@@ -945,7 +957,14 @@ fn emphasize(segments: Vec<Segment>, ranges: &[Range<usize>], style: Style) -> V
 
 /// A line of the file shown as extra context next to a hunk: numbered on
 /// both sides, with a dotted bar to tell it from the diff's own lines.
-fn context_line(app: &App, highlighter: &mut Highlighter, file: usize, hunk: usize, no: u32) -> Vec<Line<'static>> {
+fn context_line(
+    app: &App,
+    highlighter: &mut Highlighter,
+    file: usize,
+    hunk: usize,
+    no: u32,
+    at: Option<Range<usize>>,
+) -> Vec<Line<'static>> {
     let p = app.palette;
     let Some((_, side)) = app.diff.context_source(file) else { return vec![Line::default()] };
     let h = app.hunk(file, hunk);
@@ -968,8 +987,21 @@ fn context_line(app: &App, highlighter: &mut Highlighter, file: usize, hunk: usi
         [] => vec![(Style::new(), text.to_string())],
         segments => segments.to_vec(),
     };
+    let segments = with_cursor(segments, at);
     let segments = segments.into_iter().map(|(style, text)| (style, text.replace('\t', "    "))).collect();
     hanging(app, gutter, hang, highlighted(segments, app))
+}
+
+/// Draws the cursor's character (bytes `at` of the line) reversed; on an
+/// empty line, a reversed blank after it.
+fn with_cursor(mut segments: Vec<Segment>, at: Option<Range<usize>>) -> Vec<Segment> {
+    let Some(at) = at else { return segments };
+    let style = Style::new().add_modifier(Modifier::REVERSED);
+    if at.is_empty() {
+        segments.push((style, " ".to_string()));
+        return segments;
+    }
+    emphasize(segments, &[at], style)
 }
 
 /// An agent note, set out like a comment but in the AI's colour.

@@ -4,6 +4,7 @@
 
 mod action;
 mod ask;
+mod column;
 mod command;
 mod comments;
 mod comments_menu;
@@ -23,6 +24,7 @@ mod test_support;
 
 pub use action::{Action, Effect, VerdictAction};
 pub use ask::{Answer, AskPanel};
+pub use column::FindChar;
 pub use comments_menu::{CommentsMenu, DismissCopied};
 pub use context::{context_numbers, context_text, is_above};
 pub use marks::Progress;
@@ -60,6 +62,8 @@ pub struct App {
     /// Per file: whether its hunks are folded away.
     pub collapsed: Vec<bool>,
     pub cursor: usize,
+    /// The column the cursor wants on code rows; see `column.rs`.
+    pub column: usize,
     /// Index of the first visible row.
     pub scroll: usize,
     pub viewport_height: usize,
@@ -131,6 +135,7 @@ impl App {
             rows: Vec::new(),
             collapsed: Vec::new(),
             cursor: 0,
+            column: 0,
             scroll: 0,
             viewport_height: 0,
             viewport_width: 0,
@@ -225,11 +230,21 @@ impl App {
         }
         let action = match self.focus {
             Focus::Diff => action,
+            Focus::Sidebar if action.is_horizontal() => return,
             Focus::Sidebar => navigation::sidebar_action(action, self.compact),
         };
         match action {
             Action::Down(n) => self.move_by(n as isize),
             Action::Up(n) => self.move_by(-(n as isize)),
+            Action::Left(n) => self.move_column(-(n as isize)),
+            Action::Right(n) => self.move_column(n as isize),
+            Action::WordForward { n, big } => self.word_forward(n, big),
+            Action::WordBackward { n, big } => self.word_backward(n, big),
+            Action::WordEnd { n, big } => self.word_end(n, big),
+            Action::LineStart => self.line_start(false),
+            Action::FirstNonBlank => self.line_start(true),
+            Action::LineEnd => self.line_end(),
+            Action::FindChar { n, find } => self.find_char(n, find),
             Action::HalfPageDown => self.move_by(self.half_page()),
             Action::HalfPageUp => self.move_by(-self.half_page()),
             Action::Top => self.cursor = 0,
@@ -268,7 +283,6 @@ impl App {
             Action::SearchPrev(n) => self.search_next(n, false),
             Action::ToggleHelp => self.help_scroll = Some(0),
             Action::ToggleFocus => self.toggle_focus(),
-            Action::FocusSidebar => self.focus_sidebar(),
             Action::FocusDiff => self.focus = Focus::Diff,
             Action::ToggleSidebar => self.toggle_sidebar(),
             Action::ExpandAbove(n) => self.expand(n, true),

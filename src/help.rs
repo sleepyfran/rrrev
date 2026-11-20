@@ -11,7 +11,11 @@ pub const SECTIONS: &[Section] = &[
     Section {
         title: "Moving",
         entries: &[
-            ("j / k", "line down / up (counts work: 5j)"),
+            ("j / k", "line down / up (counts work: 5j); the column stays where you put it"),
+            ("h / l", "character left / right, on code lines"),
+            ("w / b / e", "next word / back to a word's start / to a word's end, on to the next line; W / B / E for WORDs"),
+            ("0 / ^ / $", "start of the line / first non-blank / end"),
+            ("f / F / t", "to the next / previous character typed, or just before the next (counts work: 2f()"),
             ("C-d / C-u", "half a page down / up"),
             ("gg / G", "top / bottom of the page"),
             ("]c / [c   } / {", "next / previous hunk"),
@@ -84,7 +88,7 @@ pub const SECTIONS: &[Section] = &[
             ("za / zo / zc", "toggle / open / close the file's fold"),
             ("zR / zM", "open / close every fold"),
             ("Enter", "on a file header, toggle its fold"),
-            ("Tab   h / l", "focus the sidebar / the diff; on a narrow screen, open / close it as a pop-up"),
+            ("Tab", "focus the sidebar / the diff; on a narrow screen, open / close it as a pop-up"),
             ("s", "show / hide the sidebar (the pop-up on a narrow screen)"),
             ("gp / gf", "the plan / the files"),
             ("T   :theme", "pick a colour theme, shown as you move; Enter keeps it, Esc goes back. Its dark or light variant follows the OS"),

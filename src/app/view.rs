@@ -314,11 +314,6 @@ impl App {
         }
     }
 
-    pub(super) fn focus_sidebar(&mut self) {
-        if self.sidebar_available() {
-            self.focus = Focus::Sidebar;
-        }
-    }
 
     /// `s`: shows or hides the docked sidebar; on a narrow screen, opens or
     /// closes the pop-up instead.
@@ -482,7 +477,7 @@ mod tests {
     #[test]
     fn hiding_the_sidebar_returns_focus_to_the_diff() {
         let mut app = sample_app();
-        app.update(Action::FocusSidebar);
+        app.update(Action::ToggleFocus);
         app.update(Action::ToggleSidebar);
         assert_eq!(app.focus, Focus::Diff);
         app.update(Action::ToggleFocus);
