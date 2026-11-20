@@ -42,6 +42,9 @@ pub struct StackPlace {
     pub group: Option<(usize, usize)>,
 }
 
+/// The last group's title: hunks the plan doesn't cover.
+pub(super) const UNPLANNED: &str = "Not in the plan";
+
 /// Places a saved plan on the current diff. Hunks it doesn't mention (new
 /// since it was made, or left out) go in a last group, so none go unseen.
 /// A plan with none of the diff's hunks was made for another diff and
@@ -81,7 +84,7 @@ fn resolve_in(plan: &Plan, diff: &Diff, files: Range<usize>) -> Vec<PlanPage> {
     rest.sort();
     if !rest.is_empty() {
         pages.push(PlanPage {
-            title: "Not in the plan".to_string(),
+            title: UNPLANNED.to_string(),
             rationale: "Hunks the plan doesn't cover: new since it was made, or left out.".to_string(),
             hunks: rest,
             place: None,
@@ -175,6 +178,39 @@ impl App {
                 Err(())
             }
         }
+    }
+
+    /// Keeps hunks edited since the saved plan was made in their groups,
+    /// saving the plan if that changes it. Returns how many it kept.
+    pub(super) fn follow_plan(&mut self) -> usize {
+        let Some(saved) = self.review.plan() else { return 0 };
+        let mut plan = saved.clone();
+        let followed = plan.follow(&self.diff);
+        // Plans saved before anchors were kept get them now.
+        plan.anchor(&self.diff);
+        if self.review.plan() != Some(&plan) {
+            self.review.set_plan(plan);
+        }
+        followed
+    }
+
+    /// What opening on a saved plan has to say: hunks edited since it was
+    /// made that stayed in their groups, and hunks it doesn't cover.
+    pub(super) fn plan_status(&self, followed: usize) -> Option<String> {
+        let unplanned: usize =
+            self.plan.iter().chain(&self.stack).filter(|p| p.title == UNPLANNED).map(|p| p.hunks.len()).sum();
+        let mut parts = Vec::new();
+        match followed {
+            0 => {}
+            1 => parts.push("1 hunk edited since the plan stays in its group".to_string()),
+            n => parts.push(format!("{n} hunks edited since the plan stay in their groups")),
+        }
+        match unplanned {
+            0 => {}
+            1 => parts.push(format!("1 hunk isn't in the plan: see “{UNPLANNED}”")),
+            n => parts.push(format!("{n} hunks aren't in the plan: see “{UNPLANNED}”")),
+        }
+        (!parts.is_empty()).then(|| parts.join(" · "))
     }
 
     /// Rebuilds the plan and stack pages from the saved plan.
@@ -317,6 +353,8 @@ impl App {
             }
             None => plan,
         };
+        let mut plan = plan;
+        plan.anchor(&self.diff);
         self.review.set_plan(plan);
         self.place_notes();
         self.place_plan();
@@ -836,5 +874,53 @@ mod tests {
         let files = vec![file("a.rs", &[3, 2]), file("b.rs", &[4]), file("c.rs", &[1])];
         let reopened = App::new(String::new(), Diff::new(files), app.review);
         assert_eq!(reopened.plan.last().unwrap().hunks, [(0, 0), (2, 0)]);
+    }
+
+    #[test]
+    fn edited_hunks_stay_in_their_groups() {
+        let before = Diff::new(vec![file_at("a.rs", &[(10, "one"), (50, "two")]), file_at("b.rs", &[(5, "three")])]);
+        let id = |diff: &Diff, f: usize, h: usize| diff.files[f].hunks[h].id.clone();
+        let mut plan = Plan {
+            groups: vec![group("First", vec![id(&before, 0, 1)]), group("Then", vec![id(&before, 1, 0), id(&before, 0, 0)])],
+            notes: vec![crate::organizer::AgentNote { hunk: id(&before, 0, 1), line: Some(50), text: "Look".into() }],
+            ..Plan::default()
+        };
+        plan.anchor(&before);
+        let mut review = ReviewState::default();
+        review.set_plan(plan);
+
+        // a.rs's second hunk is edited, and c.rs is new.
+        let after = Diff::new(vec![
+            file_at("a.rs", &[(10, "one"), (50, "two, edited")]),
+            file_at("b.rs", &[(5, "three")]),
+            file_at("c.rs", &[(1, "four")]),
+        ]);
+        let edited = id(&after, 0, 1);
+        let app = App::new(String::new(), after, review);
+        assert_eq!(titles(&app.plan), ["First", "Then", UNPLANNED]);
+        assert_eq!(app.plan[0].hunks, [(0, 1)]);
+        assert_eq!(app.plan[2].hunks, [(2, 0)]);
+        assert_eq!(
+            app.message.as_deref(),
+            Some("1 hunk edited since the plan stays in its group · 1 hunk isn't in the plan: see “Not in the plan”")
+        );
+        // Saved, so the next edit is followed from here.
+        let saved = app.review.plan().unwrap();
+        assert_eq!(saved.groups[0].hunks, std::slice::from_ref(&edited));
+        assert_eq!(saved.notes[0].hunk, edited);
+        assert_eq!(saved.notes[0].line, Some(50));
+        assert!(saved.anchors.contains_key(&edited));
+    }
+
+    #[test]
+    fn plans_saved_without_anchors_get_them() {
+        let app = organized_app();
+        let mut plan = app.review.plan().unwrap().clone();
+        plan.anchors.clear();
+        let mut review = ReviewState::default();
+        review.set_plan(plan);
+        let reopened = App::new(String::new(), app.diff.clone(), review);
+        assert_eq!(reopened.review.plan().unwrap().anchors.len(), 2);
+        assert_eq!(reopened.message.as_deref(), Some("1 hunk isn't in the plan: see “Not in the plan”"));
     }
 }

@@ -33,6 +33,27 @@ pub fn file(path: &str, hunk_sizes: &[usize]) -> FileDiff {
     }
 }
 
+/// One added line per hunk, at `(line, content)`: hunks with their own
+/// place in the file, for following them across edits.
+pub fn file_at(path: &str, hunks: &[(u32, &str)]) -> FileDiff {
+    let hunk = |&(no, content): &(u32, &str)| Hunk {
+        id: Default::default(),
+        header: format!("@@ -{no},0 +{no},1 @@"),
+        old_start: no,
+        old_lines: 0,
+        new_start: no,
+        new_lines: 1,
+        lines: vec![DiffLine { kind: LineKind::Added, old_no: None, new_no: Some(no), content: content.into() }],
+    };
+    FileDiff {
+        old_path: Some(path.into()),
+        new_path: Some(path.into()),
+        status: FileStatus::Modified,
+        is_binary: false,
+        hunks: hunks.iter().map(hunk).collect(),
+    }
+}
+
 pub fn app_with(files: Vec<FileDiff>) -> App {
     App::new(String::new(), Diff::new(files), ReviewState::default())
 }

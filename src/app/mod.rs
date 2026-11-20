@@ -166,9 +166,12 @@ impl App {
             .collect();
         // A stack follows its layers, each in its plan's groups once
         // organized; a review that has a plan picks up in it.
+        let followed = app.follow_plan();
         app.place_plan();
         if !app.is_stack() && app.plan.is_empty() && app.review.plan().is_some() {
             app.message = Some("Saved plan is for another diff: :organize to replan".to_string());
+        } else {
+            app.message = app.plan_status(followed);
         }
         if !app.stack.is_empty() {
             app.view = View::Stack;

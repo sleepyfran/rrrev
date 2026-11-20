@@ -3,7 +3,7 @@
 
 pub mod claude;
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::diff::{Diff, HunkId, LineKind};
+use crate::diff::{Diff, Hunk, HunkId, LineKind};
 
 /// Something that can plan a review. The `claude` CLI is the only one today.
 /// Runs on a background thread, so it may block, but should give up soon
@@ -41,6 +41,33 @@ pub struct Plan {
     /// next to the code it's about.
     #[serde(default)]
     pub notes: Vec<AgentNote>,
+    /// Where each planned hunk sat when last seen, so the plan can follow a
+    /// hunk whose id changed because it was edited.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub anchors: BTreeMap<HunkId, Anchor>,
+}
+
+/// A hunk's file and line ranges: enough to find it again after an edit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Anchor {
+    pub path: String,
+    /// `(start, lines)` on the old side.
+    pub old: (u32, u32),
+    /// `(start, lines)` on the new side.
+    pub new: (u32, u32),
+}
+
+impl Anchor {
+    fn of(path: &str, hunk: &Hunk) -> Self {
+        Anchor { path: path.to_string(), old: (hunk.old_start, hunk.old_lines), new: (hunk.new_start, hunk.new_lines) }
+    }
+}
+
+/// Whether two `(start, lines)` ranges share a line; an empty range (a pure
+/// insertion or deletion) counts as the line it sits at.
+fn overlaps(a: (u32, u32), b: (u32, u32)) -> bool {
+    let end = |(start, lines): (u32, u32)| start + lines.max(1);
+    a.0 < end(b) && b.0 < end(a)
 }
 
 /// A remark from the AI on one hunk: a subtle behaviour change, a risk,
@@ -79,7 +106,80 @@ impl Plan {
             })
             .filter(|group| !group.hunks.is_empty())
             .collect();
-        Plan { groups, notes }
+        Plan { groups, notes, anchors: BTreeMap::new() }
+    }
+
+    /// Remembers where each planned hunk sits in `diff`. Anchors of hunks
+    /// not in it are kept, for [`Plan::follow`].
+    pub fn anchor(&mut self, diff: &Diff) {
+        let ids: HashSet<&HunkId> = self.groups.iter().flat_map(|g| &g.hunks).collect();
+        for file in &diff.files {
+            for hunk in file.hunks.iter().filter(|h| ids.contains(&h.id)) {
+                self.anchors.insert(hunk.id.clone(), Anchor::of(file.path(), hunk));
+            }
+        }
+        self.anchors.retain(|id, _| ids.contains(id));
+    }
+
+    /// Follows hunks edited since the plan was made. Editing a hunk changes
+    /// its id, which would drop it from its group; instead, a planned id no
+    /// longer in `diff` gives way to the hunks now where it was (same file,
+    /// overlapping lines, old side first) that the plan doesn't hold yet.
+    /// A plan with none of the diff's hunks was made for another diff and
+    /// is left alone. Returns how many planned hunks were followed.
+    pub fn follow(&mut self, diff: &Diff) -> usize {
+        let current: HashMap<&HunkId, &Hunk> = diff.files.iter().flat_map(|f| &f.hunks).map(|h| (&h.id, h)).collect();
+        let mut claimed: HashSet<HunkId> =
+            self.groups.iter().flat_map(|g| &g.hunks).filter(|id| current.contains_key(id)).cloned().collect();
+        if claimed.is_empty() {
+            return 0;
+        }
+        let mut moved: HashMap<HunkId, HunkId> = HashMap::new();
+        for group in &mut self.groups {
+            let mut hunks = Vec::with_capacity(group.hunks.len());
+            for id in group.hunks.drain(..) {
+                let anchor = self.anchors.get(&id);
+                let found: Vec<&Hunk> = match anchor.filter(|_| !current.contains_key(&id)) {
+                    Some(anchor) => {
+                        let free: Vec<&Hunk> = diff
+                            .files
+                            .iter()
+                            .filter(|f| f.path() == anchor.path)
+                            .flat_map(|f| &f.hunks)
+                            .filter(|h| !claimed.contains(&h.id))
+                            .collect();
+                        let on = |side: fn(&Hunk) -> (u32, u32), at: (u32, u32)| -> Vec<&Hunk> {
+                            free.iter().copied().filter(|h| overlaps(side(h), at)).collect()
+                        };
+                        let old = on(|h| (h.old_start, h.old_lines), anchor.old);
+                        if old.is_empty() { on(|h| (h.new_start, h.new_lines), anchor.new) } else { old }
+                    }
+                    None => Vec::new(),
+                };
+                if found.is_empty() {
+                    // Still in the diff, or nowhere to be found: kept as is,
+                    // in case it comes back.
+                    hunks.push(id);
+                    continue;
+                }
+                moved.insert(id, found[0].id.clone());
+                for hunk in found {
+                    claimed.insert(hunk.id.clone());
+                    hunks.push(hunk.id.clone());
+                }
+            }
+            group.hunks = hunks;
+        }
+        for note in &mut self.notes {
+            let Some(to) = moved.get(&note.hunk) else { continue };
+            note.hunk = to.clone();
+            // The line it was about may have moved; then it goes under the hunk.
+            let hunk = current[to];
+            let inside = |line: u32| line >= hunk.new_start && line < hunk.new_start + hunk.new_lines;
+            note.line = note.line.filter(|&line| inside(line));
+        }
+        self.anchor(diff);
+        moved.len()
     }
 
     /// Whether any group or note is about one of `hunks`.
@@ -95,6 +195,7 @@ impl Plan {
         }
         self.groups.retain(|group| !group.hunks.is_empty());
         self.notes.retain(|note| !hunks.contains(&note.hunk));
+        self.anchors.retain(|id, _| !hunks.contains(id));
     }
 }
 
@@ -250,6 +351,7 @@ mod tests {
                 group("second", vec![one.clone(), two.clone()]),
             ],
             notes: vec![note(&one, "look"), note(&bogus, "gone"), note(&two, "  ")],
+            ..Plan::default()
         };
         let known: HashSet<&HunkId> = [&one, &two].into();
         let clean = plan.sanitize(&known);
@@ -257,5 +359,76 @@ mod tests {
         assert_eq!(clean.groups.len(), 2);
         assert_eq!(clean.groups[0].hunks, [two]);
         assert_eq!(clean.groups[1].hunks, [one]);
+    }
+
+    fn at(path: &str, hunks: &[(u32, u32, &str)]) -> FileDiff {
+        FileDiff {
+            old_path: Some(path.to_string()),
+            new_path: Some(path.to_string()),
+            status: FileStatus::Modified,
+            is_binary: false,
+            hunks: hunks
+                .iter()
+                .map(|&(start, lines, content)| Hunk {
+                    id: HunkId::default(),
+                    header: String::new(),
+                    old_start: start,
+                    old_lines: lines,
+                    new_start: start,
+                    new_lines: lines,
+                    lines: vec![DiffLine { kind: LineKind::Added, old_no: None, new_no: Some(start), content: content.into() }],
+                })
+                .collect(),
+        }
+    }
+
+    fn planned(diff: &Diff, groups: &[&[(usize, usize)]]) -> Plan {
+        let groups = groups
+            .iter()
+            .map(|hunks| PlanGroup {
+                title: String::new(),
+                rationale: String::new(),
+                hunks: hunks.iter().map(|&(f, h)| diff.files[f].hunks[h].id.clone()).collect(),
+            })
+            .collect();
+        let mut plan = Plan { groups, ..Plan::default() };
+        plan.anchor(diff);
+        plan
+    }
+
+    fn ids(diff: &Diff, hunks: &[(usize, usize)]) -> Vec<HunkId> {
+        hunks.iter().map(|&(f, h)| diff.files[f].hunks[h].id.clone()).collect()
+    }
+
+    #[test]
+    fn an_edited_hunk_split_in_two_keeps_both_halves_in_its_group() {
+        let before = Diff::new(vec![at("a.rs", &[(10, 20, "big")]), at("b.rs", &[(1, 1, "b")])]);
+        let mut plan = planned(&before, &[&[(1, 0)], &[(0, 0)]]);
+        let after = Diff::new(vec![at("a.rs", &[(8, 4, "top"), (25, 2, "bottom"), (40, 1, "new")]), at("b.rs", &[(1, 1, "b")])]);
+        assert_eq!(plan.follow(&after), 1);
+        assert_eq!(plan.groups[0].hunks, ids(&after, &[(1, 0)]));
+        assert_eq!(plan.groups[1].hunks, ids(&after, &[(0, 0), (0, 1)]));
+        assert_eq!(plan.anchors.len(), 3);
+    }
+
+    #[test]
+    fn a_hunk_the_plan_holds_is_not_taken_by_an_edited_neighbour() {
+        let before = Diff::new(vec![at("a.rs", &[(10, 5, "one"), (14, 5, "two")])]);
+        let mut plan = planned(&before, &[&[(0, 1)], &[(0, 0)]]);
+        // The first is edited; the second, which it overlaps, is still there.
+        let after = Diff::new(vec![at("a.rs", &[(10, 5, "one, edited"), (14, 5, "two")])]);
+        assert_eq!(plan.follow(&after), 1);
+        assert_eq!(plan.groups[0].hunks, ids(&after, &[(0, 1)]));
+        assert_eq!(plan.groups[1].hunks, ids(&after, &[(0, 0)]));
+    }
+
+    #[test]
+    fn a_plan_for_another_diff_is_not_followed() {
+        let before = Diff::new(vec![at("a.rs", &[(10, 5, "one")])]);
+        let mut plan = planned(&before, &[&[(0, 0)]]);
+        let saved = plan.clone();
+        let other = Diff::new(vec![at("a.rs", &[(10, 5, "something else")])]);
+        assert_eq!(plan.follow(&other), 0);
+        assert_eq!(plan, saved);
     }
 }

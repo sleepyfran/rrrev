@@ -99,6 +99,7 @@ mod tests {
                 AgentNote { hunk: id(0, 0), line: Some(2), text: "Check the\n bound.".into() },
                 AgentNote { hunk: id(0, 1), line: None, text: "Easy to miss.".into() },
             ],
+            ..Plan::default()
         };
         app.finish_organize(job, Ok(plan));
         app.update(Action::ShowView(crate::app::View::Files));

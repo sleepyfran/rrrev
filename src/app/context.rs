@@ -1,7 +1,7 @@
 //! Reading past a hunk's edges: more of the file above or below it, or the
 //! whole function it's in, straight from the file's text on disk.
 
-use super::{App, Row};
+use super::{App, Row, View};
 use crate::diff::{Diff, DiffLine, Hunk, LineKind, Side};
 
 /// Lines `[e` / `]e` add each time.
@@ -92,8 +92,53 @@ impl App {
         let next = self.expansion(file, hunk + 1).above;
         (
             above_room.saturating_sub(e.above + previous),
-            if hunk + 1 < self.diff.files[file].hunks.len() { 0 } else { below_room.saturating_sub(e.below + next) },
+            // The gap to the next hunk is its to show, unless it's on another page.
+            if hunk + 1 < self.diff.files[file].hunks.len() && self.neighbour_elsewhere(file, hunk, false).is_none() {
+                0
+            } else {
+                below_room.saturating_sub(e.below + next)
+            },
         )
+    }
+
+    /// The hunk next to `hunk` in its file, above or below, and the page it's
+    /// on, when that's not the current page. It bounds the context `hunk` can
+    /// show, so what's past that point is out of sight here.
+    pub fn neighbour_elsewhere(&self, file: usize, hunk: usize, above: bool) -> Option<(usize, usize)> {
+        if self.view == View::Files {
+            return None;
+        }
+        let neighbour = if above { hunk.checked_sub(1)? } else { hunk + 1 };
+        if neighbour >= self.diff.files[file].hunks.len() {
+            return None;
+        }
+        let pages = self.pages();
+        if pages.get(self.page).is_some_and(|p| p.hunks.contains(&(file, neighbour))) {
+            return None;
+        }
+        let page = pages.iter().position(|p| p.hunks.contains(&(file, neighbour)))?;
+        Some((neighbour, page))
+    }
+
+    /// Where the hunk past `hunk`'s context is, when it's on another page:
+    /// `lines 121-135 in group 6 “Not in the plan”`.
+    pub fn elsewhere(&self, file: usize, hunk: usize, above: bool) -> Option<String> {
+        let (neighbour, page) = self.neighbour_elsewhere(file, hunk, above)?;
+        let (_, side) = self.diff.context_source(file)?;
+        let (first, last) = span(self.hunk(file, neighbour), side);
+        let lines = if first >= last { format!("line {first}") } else { format!("lines {first}-{last}") };
+        let place = match self.view {
+            View::Plan => format!("group {} “{}”", page + 1, self.pages()[page].title),
+            View::Stack | View::Files => format!("“{}”", self.page_label(page)),
+        };
+        Some(format!("{lines} in {place}"))
+    }
+
+    /// The status line's word on context cut short by a hunk on another page.
+    fn wall_message(&self, file: usize, hunk: usize, above: bool) -> Option<String> {
+        let at = self.elsewhere(file, hunk, above)?;
+        let word = if above { "above" } else { "below" };
+        Some(format!("Next {word}: {at} · gf shows it in the file"))
     }
 
     /// `[e` / `]e`: `n` steps more context above or below the cursor's hunk.
@@ -112,15 +157,20 @@ impl App {
         let mut e = self.expansion(file, hunk);
         let add = steps.saturating_mul(EXPAND_STEP);
         let before = e;
-        if above {
-            e.above = e.above.saturating_add(add).min(above_room.saturating_sub(previous));
+        let (wanted, room) = if above {
+            (e.above.saturating_add(add), above_room.saturating_sub(previous))
         } else {
-            e.below = e.below.saturating_add(add).min(below_room.saturating_sub(next));
-        }
+            (e.below.saturating_add(add), below_room.saturating_sub(next))
+        };
+        if above { e.above = wanted.min(room) } else { e.below = wanted.min(room) }
+        let wall = (wanted > room).then(|| self.wall_message(file, hunk, above)).flatten();
         if e == before {
-            self.message = Some(format!("Nothing more {} this hunk", if above { "above" } else { "below" }));
+            self.message = Some(
+                wall.unwrap_or_else(|| format!("Nothing more {} this hunk", if above { "above" } else { "below" })),
+            );
             return;
         }
+        self.message = wall;
         self.set_expansion(file, hunk, e);
     }
 
@@ -147,11 +197,20 @@ impl App {
         let previous = hunk.checked_sub(1).map_or(0, |h| self.expansion(file, h).below);
         let next = self.expansion(file, hunk + 1).above;
         let e = self.expansion(file, hunk);
-        let want = Expansion {
-            above: (first.saturating_sub(scope.line) as usize).max(e.above).min(above_room.saturating_sub(previous)),
-            below: (scope.end.saturating_sub(last) as usize).max(e.below).min(below_room.saturating_sub(next)),
-        };
-        self.message = Some(format!("Showing {} (lines {}-{})", scope.label, scope.line, scope.end));
+        let (up, down) = (first.saturating_sub(scope.line) as usize, scope.end.saturating_sub(last) as usize);
+        let (up_room, down_room) = (above_room.saturating_sub(previous), below_room.saturating_sub(next));
+        let want = Expansion { above: up.max(e.above).min(up_room), below: down.max(e.below).min(down_room) };
+        let mut message = format!("Showing {} (lines {}-{})", scope.label, scope.line, scope.end);
+        // Cut short by a hunk on another page: say where the rest is.
+        let walls: Vec<String> = [(true, up > up_room), (false, down > down_room)]
+            .into_iter()
+            .filter(|&(_, cut)| cut)
+            .filter_map(|(above, _)| self.elsewhere(file, hunk, above))
+            .collect();
+        if !walls.is_empty() {
+            message += &format!(" · next: {} · gf shows it in the file", walls.join(" and "));
+        }
+        self.message = Some(message);
         if want != e {
             self.set_expansion(file, hunk, want);
         }
@@ -231,6 +290,11 @@ mod tests {
     /// A 60-line file `f.rs` with one function around lines 20-40 and two
     /// hunks changing lines 25 and 50.
     pub fn sourced_app() -> App {
+        sourced_with(&[25, 50], crate::review::ReviewState::default())
+    }
+
+    /// [`sourced_app`]'s file with hunks changing `changes`.
+    fn sourced_with(changes: &[u32], review: crate::review::ReviewState) -> App {
         let mut text: Vec<String> = (1..=60).map(|i| format!("line{i}")).collect();
         text[19] = "fn work() {".into();
         for line in &mut text[20..39] {
@@ -254,11 +318,26 @@ mod tests {
             new_path: Some("f.rs".into()),
             status: FileStatus::Modified,
             is_binary: false,
-            hunks: vec![changed(25), changed(50)],
+            hunks: changes.iter().map(|&no| changed(no)).collect(),
         };
         let sources = vec![Sources { old: None, new: Some(std::sync::Arc::new(text)) }];
         let diff = Diff::new(vec![file]).with_sources(sources);
-        App::new(String::new(), diff, crate::review::ReviewState::default())
+        App::new(String::new(), diff, review)
+    }
+
+    /// [`sourced_with`], planned with the second hunk first and the first
+    /// one in a later group, the cursor on the second's header.
+    fn split_plan(changes: &[u32]) -> App {
+        use crate::organizer::{Plan, PlanGroup};
+        let app = sourced_with(changes, Default::default());
+        let id = |h: usize| app.diff.files[0].hunks[h].id.clone();
+        let group = |title: &str, h: usize| PlanGroup { title: title.into(), rationale: String::new(), hunks: vec![id(h)] };
+        let mut review = crate::review::ReviewState::default();
+        review.set_plan(Plan { groups: vec![group("Later", 1), group("Earlier", 0)], ..Plan::default() });
+        let mut app = sourced_with(changes, review);
+        assert_eq!(app.view, View::Plan);
+        app.cursor = app.rows.iter().position(|r| *r == Row::Hunk { file: 0, hunk: 1 }).unwrap();
+        app
     }
 
     fn context_rows(app: &App) -> Vec<u32> {
@@ -389,5 +468,41 @@ mod tests {
         assert_eq!(context_numbers(&hunk, Side::New, 20, false), (Some(15), Some(20)));
         assert_eq!(context_numbers(&hunk, Side::Old, 15, false), (Some(15), Some(20)));
         assert_eq!(context_numbers(&hunk, Side::New, 1, true), (None, Some(1)));
+    }
+
+    #[test]
+    fn context_cut_short_by_a_hunk_on_another_page_says_where_it_is() {
+        let mut app = split_plan(&[25, 50]);
+        app.update(Action::ExpandAbove(1));
+        assert_eq!(app.message, None);
+        app.update(Action::ExpandAbove(1));
+        assert_eq!(app.expansion(0, 1).above, 24);
+        let wall = "Next above: line 25 in group 2 “Earlier” · gf shows it in the file";
+        assert_eq!(app.message.as_deref(), Some(wall));
+        app.update(Action::ExpandAbove(1));
+        assert_eq!(app.message.as_deref(), Some(wall));
+        assert_eq!(app.hidden_around(0, 1).0, 0);
+        assert_eq!(app.elsewhere(0, 1, true).as_deref(), Some("line 25 in group 2 “Earlier”"));
+
+        // From the other page, the gap below is the earlier hunk's to show,
+        // since the hunk past it isn't there.
+        app.update(Action::NextFile(1));
+        assert_eq!(app.page, 1);
+        assert_eq!(app.hidden_around(0, 0), (24, 0));
+        app.expanded.clear();
+        assert_eq!(app.hidden_around(0, 0), (24, 24));
+
+        // In the files view both are there, so nothing is said.
+        app.update(Action::ShowView(View::Files));
+        assert_eq!(app.elsewhere(0, 0, false), None);
+    }
+
+    #[test]
+    fn ze_says_where_the_rest_of_the_function_is() {
+        let mut app = split_plan(&[22, 30]);
+        app.update(Action::ExpandScope);
+        assert_eq!(app.expansion(0, 1).above, 7);
+        let message = app.message.clone().unwrap();
+        assert!(message.ends_with(" · next: line 22 in group 2 “Earlier” · gf shows it in the file"), "{message}");
     }
 }

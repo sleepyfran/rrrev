@@ -774,8 +774,19 @@ fn row_line(app: &App, row: Row) -> Line<'static> {
             if below > 0 {
                 hidden.push(format!("]e {below} below"));
             }
+            if above > 0 || below > 0 {
+                hidden.push("ze function".to_string());
+            }
+            // A neighbouring hunk on another page: what's past it is there.
+            for (gap, near) in [(above, true), (below, false)] {
+                if gap == 0
+                    && let Some(at) = app.elsewhere(file, hunk, near)
+                {
+                    hidden.push(format!("{} {at} · gf", if near { "↑" } else { "↓" }));
+                }
+            }
             if !hidden.is_empty() && app.diff.context_source(file).is_some() {
-                spans.push(Span::raw(format!("  ⋯ {} · ze function", hidden.join(" · "))).dim());
+                spans.push(Span::raw(format!("  ⋯ {}", hidden.join(" · "))).dim());
             }
             let line = Line::from(spans);
             if reviewed { line.patch_style(Style::new().dim()) } else { line }
