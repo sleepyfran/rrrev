@@ -551,7 +551,7 @@ fn render_body(frame: &mut Frame, area: Rect, app: &App, highlighter: &mut Highl
         y += row_area.height;
         let mut paragraph = Paragraph::new(lines);
         let selected = match (*row, selection) {
-            (Row::Line { hunk, line, .. }, Some((_, h, start, end))) => hunk == h && (start..=end).contains(&line),
+            (Row::Line { file, hunk, line }, Some((f, h, start, end))) => (file, hunk) == (f, h) && (start..=end).contains(&line),
             _ => false,
         };
         if selected {

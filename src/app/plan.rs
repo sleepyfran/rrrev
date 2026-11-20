@@ -695,6 +695,24 @@ mod tests {
     }
 
     #[test]
+    fn a_selection_stays_in_its_file_when_a_group_has_several() {
+        let mut app = sample_app();
+        // Both files' first hunks share an index on one page.
+        organize_with(&mut app, &[("Both", &[(0, 0), (1, 0)])]);
+        app.update(Action::Top);
+        let first = app.rows.iter().position(|r| *r == Row::Line { file: 0, hunk: 0, line: 1 }).unwrap();
+        let other = app.rows.iter().position(|r| *r == Row::Line { file: 1, hunk: 0, line: 3 }).unwrap();
+        app.cursor = first;
+        app.update(Action::StartVisual);
+        app.cursor = other;
+        assert_eq!(app.selection(), Some((0, 0, 1, 2)));
+
+        comment(&mut app, "range");
+        let c = &app.review.comments()[0];
+        assert_eq!((c.path.as_str(), c.start, c.end), ("a.rs", 1, 2));
+    }
+
+    #[test]
     fn a_stack_opens_layer_by_layer() {
         let app = stacked_app();
         assert_eq!(app.view, View::Stack);

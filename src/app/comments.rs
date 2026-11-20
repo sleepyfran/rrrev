@@ -24,7 +24,7 @@ impl App {
         let lines: Vec<usize> = self.rows[lo..=hi]
             .iter()
             .filter_map(|row| match *row {
-                Row::Line { hunk: h, line, .. } if h == hunk => Some(line),
+                Row::Line { file: f, hunk: h, line } if (f, h) == (file, hunk) => Some(line),
                 _ => None,
             })
             .collect();
