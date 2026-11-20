@@ -80,6 +80,11 @@ pub enum Popup {
 }
 
 impl Popup {
+    /// How many there are; `Confirm` is the last.
+    const COUNT: usize = Popup::Confirm as usize + 1;
+}
+
+impl Popup {
     /// The comment box rises from the status line; the others open from
     /// their middle.
     fn anchor(self) -> Anchor {
@@ -163,7 +168,7 @@ pub struct Animator {
     now: Instant,
     /// Whether anything moved this frame, so the next one comes soon.
     busy: bool,
-    popups: [PopupState; 7],
+    popups: [PopupState; Popup::COUNT],
     page: Option<(View, usize)>,
     /// Columns the diff is pushed aside by, while a new page slides in.
     slide: Option<Tween>,
