@@ -14,6 +14,7 @@ use std::time::Duration;
 use serde_json::Value;
 
 use crate::languages::Registry;
+pub use server::Encoding;
 use server::{Server, State};
 
 /// What the reader threads send the main loop.
@@ -22,15 +23,12 @@ pub enum Event {
     Closed { server: usize, why: String },
 }
 
-/// A finished request: the server it went to, its id and method, and the
-/// result or the server's error message.
-// Read by go to definition and references, next in the stack.
-#[allow(dead_code)]
+/// A finished request: the server it went to, its id, and the result or
+/// the server's error message.
 #[derive(Debug)]
 pub struct Reply {
     pub server: usize,
     pub id: u64,
-    pub method: String,
     pub result: Result<Value, String>,
 }
 
@@ -113,6 +111,10 @@ impl Lsp {
     }
 
     #[allow(dead_code)]
+    pub fn workdir(&self) -> &Path {
+        &self.workdir
+    }
+
     pub fn server(&mut self, index: usize) -> &mut Server {
         &mut self.servers[index]
     }
@@ -124,8 +126,8 @@ impl Lsp {
         while let Ok(event) = self.incoming.try_recv() {
             match event {
                 Event::Message { server, message } => {
-                    if let Some((id, method, result)) = self.servers[server].receive(message) {
-                        replies.push(Reply { server, id, method, result });
+                    if let Some((id, _, result)) = self.servers[server].receive(message) {
+                        replies.push(Reply { server, id, result });
                     }
                 }
                 Event::Closed { server, why } => self.servers[server].closed(why),
@@ -212,6 +214,54 @@ pub fn language_id(name: &str) -> &str {
     }
 }
 
+/// The LSP column of byte `byte` in `line`, counted in `encoding`'s units.
+pub fn to_character(line: &str, byte: usize, encoding: Encoding) -> u32 {
+    let before = line.get(..byte.min(line.len())).unwrap_or(line);
+    (match encoding {
+        Encoding::Utf8 => before.len(),
+        Encoding::Utf16 => before.encode_utf16().count(),
+    }) as u32
+}
+
+/// The byte in `line` at LSP column `character`, counted in `encoding`'s
+/// units; the line's end when it's past it.
+pub fn to_byte(line: &str, character: u32, encoding: Encoding) -> usize {
+    let character = character as usize;
+    match encoding {
+        Encoding::Utf8 => (0..=character.min(line.len())).rev().find(|&i| line.is_char_boundary(i)).unwrap_or(0),
+        Encoding::Utf16 => {
+            let mut units = 0;
+            for (i, c) in line.char_indices() {
+                if units >= character {
+                    return i;
+                }
+                units += c.len_utf16();
+            }
+            line.len()
+        }
+    }
+}
+
+/// The places in a `definition`-style answer, which may be a `Location`,
+/// a list of them, or a list of `LocationLink`s: each one's path, line and
+/// character.
+pub fn locations(result: &Value) -> Vec<(PathBuf, u32, u32)> {
+    let items: Vec<&Value> = match result {
+        Value::Array(items) => items.iter().collect(),
+        Value::Null => Vec::new(),
+        one => vec![one],
+    };
+    items
+        .into_iter()
+        .filter_map(|item| {
+            let uri = item.get("targetUri").or_else(|| item.get("uri"))?.as_str()?;
+            let range = item.get("targetSelectionRange").or_else(|| item.get("range"))?;
+            let start = &range["start"];
+            Some((path_from_uri(uri)?, start["line"].as_u64()? as u32, start["character"].as_u64()? as u32))
+        })
+        .collect()
+}
+
 /// A `file://` URI for an absolute path.
 pub fn uri(path: &Path) -> String {
     let mut out = String::from("file://");
@@ -226,7 +276,6 @@ pub fn uri(path: &Path) -> String {
 }
 
 /// The path in a `file://` URI.
-#[allow(dead_code)]
 pub fn path_from_uri(uri: &str) -> Option<PathBuf> {
     let encoded = uri.strip_prefix("file://")?.as_bytes();
     let mut bytes = Vec::with_capacity(encoded.len());
@@ -355,10 +404,10 @@ mod tests {
         fake.send(json!({"jsonrpc": "2.0", "id": id, "result": {"contents": "x"}}));
         let mut got = None;
         poll_until(&mut lsp, |_, replies| {
-            got = replies.first().map(|r| (r.id, r.method.clone(), r.result.clone()));
+            got = replies.first().map(|r| (r.id, r.result.clone()));
             got.is_some()
         });
-        assert_eq!(got, Some((id, "textDocument/hover".to_string(), Ok(json!({"contents": "x"})))));
+        assert_eq!(got, Some((id, Ok(json!({"contents": "x"})))));
 
         // A server that goes away says so.
         drop(fake);
@@ -406,6 +455,28 @@ mod tests {
         assert_eq!(roots("x/y.cs", &["*.csproj"]), dir.path());
         assert_eq!(roots("crates/a/src/lib.rs", &["go.mod"]), dir.path());
         assert!(glob("*.csproj", "App.csproj") && !glob("*.csproj", "App.cs") && glob("a*b*c", "aXbYc"));
+    }
+
+    #[test]
+    fn converts_columns() {
+        let line = "let ñ = \"😀\"; x";
+        let x = line.find('x').unwrap();
+        assert_eq!(to_character(line, x, Encoding::Utf8), x as u32);
+        assert_eq!(to_character(line, x, Encoding::Utf16), 14);
+        assert_eq!(to_byte(line, 14, Encoding::Utf16), x);
+        assert_eq!(to_byte(line, x as u32, Encoding::Utf8), x);
+        assert_eq!(to_byte(line, 99, Encoding::Utf16), line.len());
+        assert_eq!(to_byte(line, 5, Encoding::Utf8), 4, "inside ñ, back to its start");
+    }
+
+    #[test]
+    fn reads_every_shape_of_location() {
+        let at = |uri: &str| json!({"uri": uri, "range": {"start": {"line": 3, "character": 4}, "end": {}}});
+        assert_eq!(locations(&at("file:///a.rs")), [(PathBuf::from("/a.rs"), 3, 4)]);
+        assert_eq!(locations(&json!([at("file:///a.rs"), at("file:///b.rs")])).len(), 2);
+        let link = json!([{"targetUri": "file:///c.rs", "targetRange": {}, "targetSelectionRange": {"start": {"line": 1, "character": 2}}}]);
+        assert_eq!(locations(&link), [(PathBuf::from("/c.rs"), 1, 2)]);
+        assert!(locations(&Value::Null).is_empty());
     }
 
     #[test]

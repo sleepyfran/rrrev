@@ -133,7 +133,13 @@ impl Server {
         let id = self.next_id;
         self.next_id += 1;
         self.pending.insert(id, method.to_string());
-        let _ = self.outgoing.send(json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
+        let message = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
+        // Only `initialize` may go before the server has answered it.
+        if self.state == State::Starting && method != "initialize" {
+            self.queued.push(message);
+        } else {
+            let _ = self.outgoing.send(message);
+        }
         id
     }
 

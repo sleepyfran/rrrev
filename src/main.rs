@@ -18,6 +18,7 @@ mod text;
 mod theme;
 mod ui;
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::stdout;
 use std::path::{Path, PathBuf};
@@ -240,6 +241,9 @@ fn run(
     let mut asking: Option<Running> = None;
     let mut anim = Animator::from_env();
     let appearance = appearance::Watch::start();
+    // Requests out to language servers, by server and id: what was asked,
+    // and what to say with the answer.
+    let mut asked: HashMap<(usize, u64), (app::GoTo, Option<&'static str>)> = HashMap::new();
     while !app.should_quit {
         terminal.draw(|frame| ui::render(frame, app, &mut highlighter, &mut anim, &keys.pending()))?;
 
@@ -252,8 +256,12 @@ fn run(
             }
             app.finish_organize(job, result);
         }
-        // Replies to rrrev's own requests come with go to definition.
-        let _ = lsp.poll();
+        for reply in lsp.poll() {
+            if let Some((kind, note)) = asked.remove(&(reply.server, reply.id)) {
+                let targets = reply.result.map(|result| targets(lsp, reply.server, &result));
+                app.finish_go_to(kind, targets, note);
+            }
+        }
         app.lsp_status = lsp.status();
         while let Ok((job, result)) = answers.try_recv() {
             if asking.as_ref().is_some_and(|r| r.job == job) {
@@ -334,6 +342,12 @@ fn run(
                     app.message = Some(format!("error: could not save the theme: {e:#}"));
                 }
             }
+            Some(Effect::GoTo { kind, spot }) => match ask_go_to(lsp, kind, &spot) {
+                Ok((server, id, note)) => {
+                    asked.insert((server, id), (kind, note));
+                }
+                Err(why) => app.message = Some(why),
+            },
             Some(Effect::Lsp { restart }) => {
                 if restart {
                     lsp.stop_all();
@@ -363,6 +377,49 @@ fn run(
         run.stop();
     }
     Ok(())
+}
+
+/// Sends `gd` and its kin's request for `spot`. Returns the server and
+/// request id, and a note for when the code on disk isn't what's shown.
+fn ask_go_to(lsp: &mut lsp::Lsp, kind: app::GoTo, spot: &app::Spot) -> Result<(usize, u64, Option<&'static str>), String> {
+    let Some(index) = lsp.server_for(&spot.path) else {
+        return Err(format!("No language server for {}: {}", spot.path, lsp.describe()));
+    };
+    lsp.open(&spot.path);
+    let full = lsp.workdir().join(&spot.path);
+    let on_disk = fs::read_to_string(&full).ok().and_then(|text| text.lines().nth(spot.line as usize).map(str::to_string));
+    let note = (on_disk.as_deref() != Some(spot.text.as_str()))
+        .then_some("may be off: this revision isn't the one checked out");
+    let server = lsp.server(index);
+    let character = lsp::to_character(&spot.text, spot.column, server.encoding);
+    let params = serde_json::json!({
+        "textDocument": {"uri": lsp::uri(&full)},
+        "position": {"line": spot.line, "character": character},
+    });
+    let id = server.request(kind.method(), params);
+    Ok((index, id, note))
+}
+
+/// The places in a server's answer, with each file's text read from disk.
+fn targets(lsp: &mut lsp::Lsp, server: usize, result: &serde_json::Value) -> Vec<app::Target> {
+    let encoding = lsp.server(server).encoding;
+    let workdir = lsp.workdir().to_path_buf();
+    let mut files: HashMap<PathBuf, Option<diff::Source>> = HashMap::new();
+    lsp::locations(result)
+        .into_iter()
+        .filter_map(|(path, line, character)| {
+            let lines = files
+                .entry(path.clone())
+                .or_insert_with(|| {
+                    let text = fs::read_to_string(&path).ok()?;
+                    Some(Arc::new(text.lines().map(str::to_string).collect()))
+                })
+                .clone()?;
+            let column = lines.get(line as usize).map_or(0, |l| lsp::to_byte(l, character, encoding));
+            let shown = path.strip_prefix(&workdir).unwrap_or(&path).to_string_lossy().into_owned();
+            Some(app::Target { path: shown, line: line as usize, column, lines })
+        })
+        .collect()
 }
 
 /// Tells the language servers about every file in the diff that's still
