@@ -10,6 +10,7 @@ mod help;
 mod highlight;
 mod input;
 mod keymap;
+mod languages;
 mod organizer;
 mod review;
 mod text;
@@ -108,6 +109,8 @@ enum Mode {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    // A broken languages.toml should say so before the screen is taken over.
+    languages::Registry::install(languages::Registry::load()?);
     let source = match cli.command {
         Some(Mode::Last { count }) => GitSource::discover(".", DiffSpec::Last(count))?,
         Some(Mode::Commit { commit }) => GitSource::discover(".", DiffSpec::Commit(commit))?,

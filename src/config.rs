@@ -11,11 +11,16 @@ use serde_json::{Map, Value};
 use crate::theme::Theme;
 
 pub fn path() -> Option<PathBuf> {
+    Some(dir()?.join("config.json"))
+}
+
+/// `$XDG_CONFIG_HOME/rrrev`, where everything rrrev reads from lives.
+pub fn dir() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
-    Some(base.join("rrrev").join("config.json"))
+    Some(base.join("rrrev"))
 }
 
 /// The theme to start with: `RRREV_THEME` when it names one, then the

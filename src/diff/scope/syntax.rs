@@ -5,6 +5,7 @@
 use tree_sitter::{Language, Node, Parser};
 
 use super::{Scope, shorten};
+use crate::languages::Registry;
 
 /// The languages with a grammar, picked by file name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,32 +62,33 @@ impl Lang {
         Lang::FSharp,
     ];
 
+    /// The language of a file, from the registry, if it has a grammar here.
     fn from_path(path: &str) -> Option<Lang> {
-        let name = path.rsplit('/').next().unwrap_or(path);
-        if matches!(name, "Gemfile" | "Rakefile") {
-            return Some(Lang::Ruby);
-        }
-        let (_, ext) = name.rsplit_once('.')?;
-        Some(match ext {
-            "rs" => Lang::Rust,
-            "py" | "pyi" => Lang::Python,
-            "js" | "mjs" | "cjs" | "jsx" => Lang::JavaScript,
-            "ts" | "mts" | "cts" => Lang::TypeScript,
+        Lang::from_name(&Registry::global().for_path(path)?.name)
+    }
+
+    /// The grammar linked in for a registry language, by its name.
+    fn from_name(name: &str) -> Option<Lang> {
+        Some(match name {
+            "rust" => Lang::Rust,
+            "python" => Lang::Python,
+            "javascript" => Lang::JavaScript,
+            "typescript" => Lang::TypeScript,
             "tsx" => Lang::Tsx,
             "go" => Lang::Go,
             "java" => Lang::Java,
-            "c" | "h" => Lang::C,
-            "cc" | "cpp" | "cxx" | "c++" | "hpp" | "hh" | "hxx" => Lang::Cpp,
+            "c" => Lang::C,
+            "cpp" => Lang::Cpp,
             #[cfg(feature = "csharp")]
-            "cs" => Lang::CSharp,
-            "rb" | "rake" | "gemspec" => Lang::Ruby,
+            "csharp" => Lang::CSharp,
+            "ruby" => Lang::Ruby,
             #[cfg(feature = "swift")]
             "swift" => Lang::Swift,
             #[cfg(feature = "kotlin")]
-            "kt" | "kts" => Lang::Kotlin,
+            "kotlin" => Lang::Kotlin,
             "lua" => Lang::Lua,
             #[cfg(feature = "fsharp")]
-            "fs" | "fsx" => Lang::FSharp,
+            "fsharp" => Lang::FSharp,
             _ => return None,
         })
     }
@@ -385,6 +387,17 @@ mod tests {
             for kind in lang.kinds().iter().chain(lang.special_kinds()) {
                 assert_ne!(grammar.id_for_node_kind(kind, true), 0, "{lang:?} has no `{kind}` nodes");
             }
+        }
+    }
+
+    #[test]
+    fn every_grammar_has_a_registry_entry() {
+        let registry = Registry::builtin();
+        for &lang in Lang::ALL {
+            assert!(
+                registry.iter().any(|l| Lang::from_name(&l.name) == Some(lang)),
+                "{lang:?} isn't in languages.toml"
+            );
         }
     }
 
