@@ -73,7 +73,7 @@ pub const SECTIONS: &[Section] = &[
             ("S   :verdict", "what you went through, and your verdict"),
             ("on the verdict page", "a approve · r request changes · c comment · m message · x clear · e export"),
             ("Y", "copy every comment as `path:line` and what you wrote, to paste into an agent"),
-            ("y", "copy the line, selection, hunk or comment (through the terminal: OSC 52)"),
+            ("y", "copy the line, selection, hunk or comment"),
         ],
     },
     Section {

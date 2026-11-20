@@ -37,6 +37,6 @@
 
 ## Deferred on purpose
 
-- [ ] Send comments to an AI agent to apply them: a new `CommentSink` in `src/export.rs`. Until then: `rrrev --export md | claude -p "apply these review comments"`.
+- [ ] Have the app hand comments to an AI agent itself (a new `CommentSink` in `src/export.rs`). Left out so the harness and session stay yours: `Y` copies a brief to paste into one, and `rrrev --export md | claude -p "apply these review comments"` pipes them.
 - [ ] More diff sources behind `DiffSource` (`src/diff/mod.rs`): jj, a diff piped in on stdin (needs keys read from `/dev/tty`).
 - [ ] Let the organizer split large hunks across groups (it works on whole hunks today).

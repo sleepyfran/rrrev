@@ -1,6 +1,7 @@
 mod anim;
 mod app;
 mod ask;
+mod clipboard;
 mod diff;
 mod export;
 mod help;
@@ -257,7 +258,7 @@ fn run(
                 }
             }
             Some(Effect::Copy { text }) => {
-                if let Err(e) = copy_to_clipboard(&text) {
+                if let Err(e) = clipboard::copy(&text) {
                     app.message = Some(format!("error: could not copy: {e:#}"));
                 }
             }
@@ -276,34 +277,6 @@ fn run(
         run.stop();
     }
     Ok(())
-}
-
-/// Puts `text` on the clipboard with the OSC 52 escape, which terminals
-/// (and tmux, with `set-clipboard on`) pass to the system clipboard, over
-/// SSH too.
-fn copy_to_clipboard(text: &str) -> Result<()> {
-    use std::io::Write;
-    let mut out = stdout();
-    write!(out, "\x1b]52;c;{}\x07", base64(text.as_bytes()))?;
-    out.flush()?;
-    Ok(())
-}
-
-/// Standard base64, padded.
-fn base64(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let n = chunk.iter().enumerate().fold(0u32, |n, (i, &b)| n | (u32::from(b) << (16 - 8 * i)));
-        for i in 0..4 {
-            if i <= chunk.len() {
-                out.push(ALPHABET[(n >> (18 - 6 * i)) as usize & 63] as char);
-            } else {
-                out.push('=');
-            }
-        }
-    }
-    out
 }
 
 /// Next to the review state, e.g. `.git/rrrev/worktree-comments.md`, so the
@@ -346,15 +319,6 @@ fn edit_in_editor(terminal: &mut DefaultTerminal, initial: &str) -> Result<Optio
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn encodes_base64() {
-        assert_eq!(base64(b""), "");
-        assert_eq!(base64(b"f"), "Zg==");
-        assert_eq!(base64(b"fo"), "Zm8=");
-        assert_eq!(base64(b"foo"), "Zm9v");
-        assert_eq!(base64("héllo\n".as_bytes()), "aMOpbGxvCg==");
-    }
 
     #[test]
     fn exports_land_next_to_the_state_file() {

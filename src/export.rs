@@ -97,6 +97,14 @@ pub fn agent_brief(export: &Export) -> String {
         for line in lines {
             out += &format!("  {line}\n");
         }
+        // Its lines have moved or gone, so the agent can't read them at
+        // `path:line`; show what was commented on instead.
+        if comment.outdated && !comment.code.is_empty() {
+            out += "\n";
+            for line in fenced_diff(&comment.code).lines() {
+                out += &format!("  {line}\n");
+            }
+        }
     }
     out
 }
@@ -118,18 +126,17 @@ fn markdown(export: &Export) -> String {
     for comment in &export.comments {
         let outdated = if comment.outdated { " (outdated)" } else { "" };
         out += &format!("\n## {}{outdated}\n\n", comment.location());
-        // A fence longer than any backtick run in the code can't be closed early.
-        let longest_run = comment
-            .code
-            .iter()
-            .flat_map(|l| l.split(|c| c != '`'))
-            .map(str::len)
-            .max()
-            .unwrap_or(0);
-        let fence = "`".repeat(longest_run.max(2) + 1);
-        out += &format!("{fence}diff\n{}\n{fence}\n\n{}\n", comment.code.join("\n"), comment.text.trim());
+        out += &format!("{}\n{}\n", fenced_diff(&comment.code), comment.text.trim());
     }
     out
+}
+
+/// `code` in a `diff` code block, ending in a newline.
+fn fenced_diff(code: &[String]) -> String {
+    // A fence longer than any backtick run in the code can't be closed early.
+    let longest_run = code.iter().flat_map(|l| l.split(|c| c != '`')).map(str::len).max().unwrap_or(0);
+    let fence = "`".repeat(longest_run.max(2) + 1);
+    format!("{fence}diff\n{}\n{fence}\n", code.join("\n"))
 }
 
 /// Where exported comments go. A file is the only destination today; handing
@@ -205,7 +212,7 @@ mod tests {
     #[test]
     fn verdicts_lead_the_markdown_and_the_brief() {
         use crate::review::VerdictKind;
-        let mut outdated = exported("b.rs", Some((9, 9)), &[], "Rename\nthis too");
+        let mut outdated = exported("b.rs", Some((9, 9)), &["-let a = 1;", "+let b = 1;"], "Rename\nthis too");
         outdated.outdated = true;
         let export = Export {
             title: "main..feat".into(),
@@ -218,7 +225,8 @@ mod tests {
             agent_brief(&export),
             "Review comments on main..feat to address:\n\nOverall: Close, two nits.\n\n\
              - `a.rs:3-4`: Why two locks?\n\n\
-             - `b.rs:9` (on code that has since changed): Rename\n  this too\n"
+             - `b.rs:9` (on code that has since changed): Rename\n  this too\n\n\
+             \x20 ```diff\n  -let a = 1;\n  +let b = 1;\n  ```\n"
         );
     }
 
