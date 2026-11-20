@@ -186,8 +186,8 @@ impl App {
     fn context_target(&self, file: usize, hunk: usize, no: u32) -> AskTarget {
         let path = self.diff.files[file].path();
         let text = super::context_text(&self.diff, file, no).unwrap_or("");
-        let scopes = self.diff.context_source(file).map_or_else(Vec::new, |(source, _)| {
-            crate::diff::scope::enclosing(source, no).into_iter().map(|s| s.label).collect()
+        let scopes = self.diff.context_source(file).map_or_else(Vec::new, |(_, side)| {
+            self.diff.scopes_at(file, side, no).into_iter().map(|s| s.label).collect()
         });
         let h = self.hunk(file, hunk);
         AskTarget {

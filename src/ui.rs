@@ -13,7 +13,7 @@ use crate::app::{
     Answer, App, CommentTarget, Focus, LineStats, Mode, Progress, Row, View, context_numbers, context_text,
     find_matches, is_above,
 };
-use crate::diff::{FileStatus, LineKind, scope};
+use crate::diff::{FileStatus, LineKind};
 use crate::help;
 use crate::highlight::{Highlighter, Segment};
 use crate::review::VerdictKind;
@@ -873,8 +873,8 @@ fn render_breadcrumbs(frame: &mut Frame, area: Rect, app: &App) {
                 app.diff.scopes(file, hunk, line).into_iter().map(|s| s.label).collect()
             }
         }
-        Row::Context { file, no, .. } => app.diff.context_source(file).map_or_else(Vec::new, |(source, _)| {
-            scope::enclosing(source, no).into_iter().map(|s| s.label).collect()
+        Row::Context { file, no, .. } => app.diff.context_source(file).map_or_else(Vec::new, |(_, side)| {
+            app.diff.scopes_at(file, side, no).into_iter().map(|s| s.label).collect()
         }),
         Row::Group { .. } | Row::File { .. } | Row::Comment { .. } => Vec::new(),
     };

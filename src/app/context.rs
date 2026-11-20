@@ -2,7 +2,7 @@
 //! whole function it's in, straight from the file's text on disk.
 
 use super::{App, Row};
-use crate::diff::{Diff, DiffLine, Hunk, LineKind, Side, scope};
+use crate::diff::{Diff, DiffLine, Hunk, LineKind, Side};
 
 /// Lines `[e` / `]e` add each time.
 pub const EXPAND_STEP: usize = 20;
@@ -35,6 +35,13 @@ pub(super) fn span(hunk: &Hunk, side: Side) -> (u32, u32) {
         (Some(first), Some(last)) => (first, last),
         _ => (start + 1, start),
     }
+}
+
+/// The first and last changed lines a hunk has on `side`, if it has any.
+fn changed_span(hunk: &Hunk, side: Side) -> Option<(u32, u32)> {
+    let mut changed = hunk.lines.iter().filter(|l| l.kind != LineKind::Context).filter_map(|l| number(l, side));
+    let first = changed.next()?;
+    Some((first, changed.next_back().unwrap_or(first)))
 }
 
 /// The old and new line numbers of context line `no` (on `side`) next to
@@ -128,8 +135,10 @@ impl App {
             return;
         };
         let (first, last) = span(self.hunk(file, hunk), side);
-        // The innermost definition that holds the whole hunk.
-        let scope = scope::enclosing(source, first).into_iter().rev().find(|s| s.end >= last);
+        // The innermost definition that holds the hunk's changes: its context
+        // lines can start above the definition, or run past its end.
+        let (from, to) = changed_span(self.hunk(file, hunk), side).unwrap_or((first, last));
+        let scope = self.diff.scopes_at(file, side, from).into_iter().rev().find(|s| s.end >= to);
         let Some(scope) = scope else {
             self.message = Some("This hunk isn't inside a function".to_string());
             return;
@@ -294,6 +303,49 @@ mod tests {
 
         app.update(Action::ResetContext);
         assert!(context_rows(&app).is_empty());
+    }
+
+    #[test]
+    fn shows_the_function_when_the_hunk_starts_above_it() {
+        // `def run(` on line 4 with its arguments split over lines, a body to
+        // line 20, and a hunk changing line 5 whose context starts on line 2.
+        let mut text: Vec<String> = vec!["x = 1".into(), String::new(), String::new(), "def run(".into()];
+        text.extend(["    a,", "    b,", "):"].map(String::from));
+        text.extend((8..=20).map(|i| format!("    y{i} = {i}")));
+        text.extend([String::new(), "z = 3".into()]);
+        let context = |no: u32| DiffLine {
+            kind: LineKind::Context,
+            old_no: Some(no),
+            new_no: Some(no),
+            content: text[no as usize - 1].clone(),
+        };
+        let mut lines: Vec<DiffLine> = (2..=4).map(context).collect();
+        lines.push(DiffLine { kind: LineKind::Removed, old_no: Some(5), new_no: None, content: "    c,".into() });
+        lines.push(DiffLine { kind: LineKind::Added, old_no: None, new_no: Some(5), content: text[4].clone() });
+        lines.extend((6..=8).map(context));
+        let hunk = Hunk {
+            id: HunkId::default(),
+            header: "@@ -2,7 +2,7 @@".into(),
+            old_start: 2,
+            old_lines: 7,
+            new_start: 2,
+            new_lines: 7,
+            lines,
+        };
+        let file = FileDiff {
+            old_path: Some("run.py".into()),
+            new_path: Some("run.py".into()),
+            status: FileStatus::Modified,
+            is_binary: false,
+            hunks: vec![hunk],
+        };
+        let sources = vec![Sources { old: None, new: Some(std::sync::Arc::new(text)) }];
+        let diff = Diff::new(vec![file]).with_sources(sources);
+        let mut app = App::new(String::new(), diff, crate::review::ReviewState::default());
+        app.update(Action::NextHunk(1));
+        app.update(Action::ExpandScope);
+        assert_eq!(app.message.as_deref(), Some("Showing def run(a, b) (lines 4-20)"));
+        assert_eq!(app.expansion(0, 0), Expansion { above: 0, below: 12 });
     }
 
     #[test]

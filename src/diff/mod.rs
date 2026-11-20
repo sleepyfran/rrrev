@@ -8,7 +8,7 @@ pub mod words;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -34,6 +34,9 @@ pub struct Diff {
     pub sources: Vec<Sources>,
     /// Per file, hunk and line: the byte ranges that changed word by word.
     words: Vec<Vec<Vec<Vec<Range<usize>>>>>,
+    /// Per file, the old and new sides' outlines, parsed the first time a
+    /// line's scopes are asked for: `None` for a language with no grammar.
+    outlines: Vec<[OnceLock<Option<Vec<scope::Scope>>>; 2]>,
 }
 
 /// A file's full text, line by line.
@@ -86,12 +89,13 @@ impl Diff {
             }
         }
         let words = files.iter().map(|f| f.hunks.iter().map(|h| words::changes(&h.lines)).collect()).collect();
-        Diff { files, sections: Vec::new(), sources: Vec::new(), words }
+        Diff { files, sections: Vec::new(), sources: Vec::new(), words, outlines: Vec::new() }
     }
 
     /// The same diff, with the files' full text.
     pub fn with_sources(self, sources: Vec<Sources>) -> Self {
-        Diff { sources, ..self }
+        let outlines = sources.iter().map(|_| Default::default()).collect();
+        Diff { sources, outlines, ..self }
     }
 
     /// The byte ranges of a line's content that changed, word by word.
@@ -115,10 +119,41 @@ impl Diff {
     pub fn scopes(&self, file: usize, hunk: usize, line: usize) -> Vec<scope::Scope> {
         let l = &self.files[file].hunks[hunk].lines[line];
         let sources = self.sources.get(file);
-        let new = sources.and_then(|s| s.new.as_ref()).zip(l.new_no);
-        let old = sources.and_then(|s| s.old.as_ref()).zip(l.old_no);
+        let new = sources.and_then(|s| s.new.as_ref()).and(l.new_no).map(|no| (Side::New, no));
+        let old = sources.and_then(|s| s.old.as_ref()).and(l.old_no).map(|no| (Side::Old, no));
         let on_side = if l.kind == LineKind::Removed { old.or(new) } else { new.or(old) };
-        on_side.map_or_else(Vec::new, |(source, no)| scope::enclosing(source, no))
+        on_side.map_or_else(Vec::new, |(side, no)| self.scopes_at(file, side, no))
+    }
+
+    /// The definitions around line `no` of a file's text on `side`,
+    /// outermost first: from a parse when its language has a grammar, from
+    /// indentation otherwise.
+    pub fn scopes_at(&self, file: usize, side: Side, no: u32) -> Vec<scope::Scope> {
+        let sources = self.sources.get(file);
+        let source = match side {
+            Side::Old => sources.and_then(|s| s.old.as_ref()),
+            Side::New => sources.and_then(|s| s.new.as_ref()),
+        };
+        let Some(source) = source else { return Vec::new() };
+        let f = &self.files[file];
+        let path = match side {
+            Side::Old => f.old_path.as_deref(),
+            Side::New => f.new_path.as_deref(),
+        };
+        let parse = || scope::outline(path.unwrap_or(f.path()), source);
+        let uncached;
+        let outline = match self.outlines.get(file) {
+            Some(sides) => sides[side as usize].get_or_init(parse).as_deref(),
+            // Sources set without `with_sources`, as some tests do.
+            None => {
+                uncached = parse();
+                uncached.as_deref()
+            }
+        };
+        match outline {
+            Some(outline) => scope::within(outline, no),
+            None => scope::by_indentation(source, no),
+        }
     }
 
     /// What a hunk is in: the innermost definition around its first changed
