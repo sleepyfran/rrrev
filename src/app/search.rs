@@ -67,6 +67,9 @@ impl App {
             return;
         };
         self.highlight_search = true;
+        if self.search_file_view(&query, n, forward) {
+            return;
+        }
         let stops = self.stops(|row| self.row_matches(*row, &query), |file| self.file_matches(file, &query));
         let Some(&wrapped) = (if forward { stops.first() } else { stops.last() }) else {
             self.message = Some(format!("Pattern not found: {query}"));
