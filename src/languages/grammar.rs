@@ -32,8 +32,13 @@ pub fn get(name: &str) -> Option<Language> {
 }
 
 /// Where built grammars live: `$XDG_DATA_HOME/rrrev/grammars`, by default
-/// `~/.local/share/rrrev/grammars`.
+/// `~/.local/share/rrrev/grammars`. Tests get a folder that's never there,
+/// so the grammars built on the machine running them don't change what
+/// they see.
 pub fn dir() -> Option<PathBuf> {
+    if cfg!(test) {
+        return Some(std::env::temp_dir().join(format!("rrrev-tests-{}/grammars", std::process::id())));
+    }
     Some(super::data_home()?.join("rrrev/grammars"))
 }
 
