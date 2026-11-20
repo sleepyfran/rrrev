@@ -1509,6 +1509,9 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
             parts.push(format!("hunk {}/{}", hunk + 1, app.diff.files[file].hunks.len()));
         }
     }
+    if let Some(status) = &app.lsp_status {
+        parts.push(status.clone());
+    }
     let mut left = parts.join("  ");
     let pending = format!("{pending:>6}");
     let width = area.width as usize;

@@ -11,6 +11,7 @@ mod highlight;
 mod input;
 mod keymap;
 mod languages;
+mod lsp;
 mod organizer;
 mod review;
 mod text;
@@ -187,8 +188,10 @@ fn main() -> Result<()> {
     app.set_appearance(Appearance::detect());
     app.set_theme(config::theme());
     let highlighter = Highlighter::new(app.theme, app.appearance);
+    let mut lsp = lsp::Lsp::new(source.workdir(), languages::Registry::global());
+    open_in_servers(&mut lsp, &app);
     let mut terminal = ratatui::init();
-    let result = run(&mut terminal, &mut app, &state_file, Ai { organizer, assistant }, highlighter);
+    let result = run(&mut terminal, &mut app, &state_file, Ai { organizer, assistant }, highlighter, &mut lsp);
     ratatui::restore();
     result
 }
@@ -228,6 +231,7 @@ fn run(
     state_file: &Path,
     ai: Ai,
     mut highlighter: Highlighter,
+    lsp: &mut lsp::Lsp,
 ) -> Result<()> {
     let mut keys = KeyHandler::default();
     let (plans_tx, plans): (Sender<PlanResult>, Receiver<PlanResult>) = mpsc::channel();
@@ -248,6 +252,9 @@ fn run(
             }
             app.finish_organize(job, result);
         }
+        // Replies to rrrev's own requests come with go to definition.
+        let _ = lsp.poll();
+        app.lsp_status = lsp.status();
         while let Ok((job, result)) = answers.try_recv() {
             if asking.as_ref().is_some_and(|r| r.job == job) {
                 asking = None;
@@ -327,6 +334,13 @@ fn run(
                     app.message = Some(format!("error: could not save the theme: {e:#}"));
                 }
             }
+            Some(Effect::Lsp { restart }) => {
+                if restart {
+                    lsp.stop_all();
+                    open_in_servers(lsp, app);
+                }
+                app.message = Some(lsp.describe());
+            }
             Some(Effect::Copy { text }) => {
                 if let Err(e) = clipboard::copy(&text) {
                     app.message = Some(format!("error: could not copy: {e:#}"));
@@ -349,6 +363,16 @@ fn run(
         run.stop();
     }
     Ok(())
+}
+
+/// Tells the language servers about every file in the diff that's still
+/// there, starting the servers they need.
+fn open_in_servers(lsp: &mut lsp::Lsp, app: &App) {
+    for file in &app.diff.files {
+        if file.new_path.is_some() {
+            lsp.open(file.path());
+        }
+    }
 }
 
 /// Next to the review state, e.g. `.git/rrrev/worktree-comments.md`, so the

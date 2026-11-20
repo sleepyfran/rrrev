@@ -153,4 +153,6 @@ pub enum Effect {
     Copy { text: String },
     /// Keep `theme` for the next session.
     SaveTheme { theme: &'static Theme },
+    /// `:lsp`: say how the language servers are doing, or restart them.
+    Lsp { restart: bool },
 }

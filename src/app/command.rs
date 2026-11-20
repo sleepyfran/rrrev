@@ -43,6 +43,11 @@ impl App {
             "comments" => self.open_comments_menu(),
             "verdict" => self.show_verdict = true,
             "theme" | "colorscheme" | "colo" => self.theme_command(&args),
+            "lsp" => match args.as_slice() {
+                [] => self.effect = Some(Effect::Lsp { restart: false }),
+                ["restart"] => self.effect = Some(Effect::Lsp { restart: true }),
+                _ => self.message = Some("error: usage: :lsp [restart]".to_string()),
+            },
             _ => match name.parse::<u32>() {
                 Ok(line) => self.go_to_line(line),
                 Err(_) => self.message = Some(format!("error: not a command: {name}")),

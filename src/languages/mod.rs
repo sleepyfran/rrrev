@@ -153,7 +153,7 @@ impl Registry {
     /// Adds the entries in `text`: one with a known name changes the fields
     /// it sets, a new name is a new language. A new language needs at least
     /// its extensions or file names.
-    fn merge(mut self, text: &str) -> Result<Self> {
+    pub(crate) fn merge(mut self, text: &str) -> Result<Self> {
         let file: File = toml::from_str(text)?;
         for entry in file.language {
             if let Some(known) = self.languages.iter_mut().find(|l| l.name == entry.name) {

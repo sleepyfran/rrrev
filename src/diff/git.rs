@@ -87,6 +87,11 @@ impl GitSource {
         Ok(Self { repo, spec: DiffSpec::Stack(stack) })
     }
 
+    /// The working folder, which diff paths are relative to.
+    pub fn workdir(&self) -> &Path {
+        self.repo.workdir().unwrap_or(self.repo.path())
+    }
+
     fn tree(&self, rev: &str) -> Result<Tree<'_>> {
         self.repo
             .revparse_single(rev)
