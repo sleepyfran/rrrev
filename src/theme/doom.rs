@@ -342,6 +342,39 @@ pub const TOMORROW_DAY: Doom = {
     }
 };
 
+/// Not a doom theme: base16 Ocean, which the terminal theme's syntax colours
+/// come from, laid out as one so the same mapping applies. Only its faces
+/// are used.
+pub const OCEAN: Doom = ocean(hex(0x2b303b), hex(0xc0c5ce), hex(0x65737e));
+
+/// Ocean's light shade; its accents are darkened to read on white.
+pub const OCEAN_LIGHT: Doom = ocean(hex(0xeff1f5), hex(0x4f5b66), hex(0xa7adba));
+
+const fn ocean(bg: Rgb, fg: Rgb, comments: Rgb) -> Doom {
+    let (red, orange, green, yellow) = (hex(0xbf616a), hex(0xd08770), hex(0xa3be8c), hex(0xebcb8b));
+    let (blue, magenta, cyan) = (hex(0x8fa1b3), hex(0xb48ead), hex(0x96b5b4));
+    Doom {
+        bg, fg, bg_alt: bg, red, orange, green, yellow, blue, magenta, cyan,
+        highlight: blue,
+        region: bg,
+        builtin: cyan,
+        comments,
+        doc_comments: comments,
+        constants: orange,
+        functions: blue,
+        keywords: magenta,
+        methods: blue,
+        operators: cyan,
+        types: yellow,
+        strings: green,
+        variables: red,
+        numbers: orange,
+        vc_modified: orange,
+        vc_added: green,
+        vc_deleted: red,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

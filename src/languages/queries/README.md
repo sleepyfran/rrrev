@@ -15,3 +15,22 @@ What counts as a definition, for breadcrumbs and `ze`. Captures:
   rrrev would find on its own.
 
 Captures starting with `_` are for predicates only.
+
+## `highlights.scm`
+
+Syntax highlighting, with the capture names the grammars' own queries use
+(`@keyword`, `@function.method`, …). A capture without a colour of its own
+takes its parent's: `@function.method.call` falls back to `@function.method`,
+then `@function`. When several patterns capture the same node, the last one
+wins; an inner node is drawn over the one around it.
+
+Each file starts as a copy of the grammar's own `queries/highlights.scm` (all
+MIT), at the commit `languages.toml` pins, with small fixes where its order
+assumed the first pattern wins. Kotlin's grammar ships none, so its file is
+rrrev's own.
+
+## Inheriting
+
+A first line `; inherits: a, b` puts those languages' queries of the same kind
+first. `ecma` and `jsx` are shared by JavaScript, TypeScript and TSX and are
+no language of their own.
