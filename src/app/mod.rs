@@ -13,6 +13,7 @@ mod navigation;
 mod notes;
 mod plan;
 mod search;
+mod theme;
 mod verdict;
 mod view;
 
@@ -28,6 +29,7 @@ pub use notes::PlacedNote;
 pub use verdict::LineStats;
 pub use plan::{Job, StackPlace};
 pub use search::find_matches;
+pub use theme::ThemePicker;
 pub use view::{NOTE_LABEL, Row};
 
 use std::collections::HashMap;
@@ -35,6 +37,8 @@ use std::collections::HashMap;
 use crate::diff::{Diff, DiffLine, Hunk};
 use crate::input::InputAction;
 use crate::review::ReviewState;
+use crate::appearance::Appearance;
+use crate::theme::{Palette, Theme};
 
 pub struct App {
     pub title: String,
@@ -89,6 +93,12 @@ pub struct App {
     pub ask: AskPanel,
     /// Whether the verdict page is open.
     pub show_verdict: bool,
+    pub theme: &'static Theme,
+    /// The OS's dark or light mode, which picks the theme's variant.
+    pub appearance: Appearance,
+    /// The colours of the theme's variant for `appearance`, kept alongside them.
+    pub palette: Palette,
+    pub theme_picker: Option<ThemePicker>,
     pub should_quit: bool,
 }
 
@@ -132,6 +142,10 @@ impl App {
             notes: Vec::new(),
             ask: AskPanel::default(),
             show_verdict: false,
+            theme: Theme::terminal(),
+            appearance: Appearance::Dark,
+            palette: Theme::terminal().palette(Appearance::Dark),
+            theme_picker: None,
             should_quit: false,
         };
         // Generated files and files already reviewed start out of the way.
@@ -170,6 +184,10 @@ impl App {
         self.message = None;
         if self.help_scroll.is_some() {
             self.update_help(action);
+            return;
+        }
+        if self.theme_picker.is_some() {
+            self.update_theme_picker(action);
             return;
         }
         if self.show_verdict {
@@ -240,6 +258,7 @@ impl App {
             Action::Yank => self.yank(),
             Action::CopyForAgent => self.copy_for_agent(),
             Action::ToggleVerdict => self.show_verdict = true,
+            Action::PickTheme => self.open_theme_picker(),
             Action::Select => {
                 if let Some(Row::File { .. }) = self.current_row() {
                     self.toggle_fold();

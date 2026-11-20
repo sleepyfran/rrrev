@@ -4,6 +4,7 @@ use super::View;
 use crate::ask::AskRequest;
 use crate::export::Format;
 use crate::organizer::OrganizeRequest;
+use crate::theme::Theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
@@ -70,6 +71,8 @@ pub enum Action {
     CopyForAgent,
     /// `S`: the summary of the review, and its verdict.
     ToggleVerdict,
+    /// `T`: the theme picker.
+    PickTheme,
     Select,
     Cancel,
     Quit,
@@ -107,4 +110,6 @@ pub enum Effect {
     CancelAsk { job: u64 },
     /// Put `text` on the system clipboard.
     Copy { text: String },
+    /// Keep `theme` for the next session.
+    SaveTheme { theme: &'static Theme },
 }

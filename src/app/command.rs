@@ -41,6 +41,7 @@ impl App {
             "organize" => self.organize_command(&args),
             "ask" => self.ask_command(&args),
             "verdict" => self.show_verdict = true,
+            "theme" | "colorscheme" | "colo" => self.theme_command(&args),
             _ => match name.parse::<u32>() {
                 Ok(line) => self.go_to_line(line),
                 Err(_) => self.message = Some(format!("error: not a command: {name}")),

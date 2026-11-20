@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.8", features = ["derive"] }
+dark-light = { version = "3.0.0", default-features = false }
 git2 = "0.21.0"
 ratatui = "0.30.2"
 serde = { version = "1.0.229", features = ["derive"] }

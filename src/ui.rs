@@ -18,6 +18,7 @@ use crate::help;
 use crate::highlight::{Highlighter, Segment};
 use crate::review::VerdictKind;
 use crate::text::wrap_words;
+use crate::theme::{Palette, THEMES};
 
 /// Below this many columns the sidebar won't dock, as it would leave too
 /// little room for code; it opens as a pop-up instead.
@@ -26,6 +27,10 @@ const COMPACT_BELOW: u16 = 100;
 /// `pending` holds the keys of an unfinished command, e.g. `3]`.
 pub fn render(frame: &mut Frame, app: &mut App, highlighter: &mut Highlighter, anim: &mut Animator, pending: &str) {
     anim.begin(app);
+    highlighter.set_theme(app.theme, app.appearance);
+    // A theme with its own background paints it everywhere first.
+    let area = frame.area();
+    frame.buffer_mut().set_style(area, app.palette.base());
     let [title, main, status] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(0),
@@ -90,7 +95,7 @@ pub fn render(frame: &mut Frame, app: &mut App, highlighter: &mut Highlighter, a
 
     let sidebar_popup = app.compact && app.focus == Focus::Sidebar;
     if sidebar_popup || app.help_scroll.is_some() || app.show_verdict {
-        dim_backdrop(frame);
+        dim_backdrop(frame, &app.palette);
     }
     // What the pop-ups cover, to show around them as they unroll.
     let under = frame.buffer_mut().clone();
@@ -104,6 +109,65 @@ pub fn render(frame: &mut Frame, app: &mut App, highlighter: &mut Highlighter, a
     anim.popup(frame.buffer_mut(), Popup::Verdict, verdict, Some(&under));
     let help = app.help_scroll.is_some().then(|| render_help(frame, frame.area(), app));
     anim.popup(frame.buffer_mut(), Popup::Help, help, Some(&under));
+    // The picker leaves the screen bright, to show each theme on the diff.
+    let under = frame.buffer_mut().clone();
+    let picker = app.theme_picker.is_some().then(|| render_theme_picker(frame, main, app));
+    anim.popup(frame.buffer_mut(), Popup::Theme, picker, Some(&under));
+}
+
+/// Blanks `area` for a pop-up, on the theme's background.
+fn clear(frame: &mut Frame, area: Rect, p: &Palette) {
+    frame.render_widget(Clear, area);
+    frame.buffer_mut().set_style(area, p.base());
+}
+
+/// The theme picker, at the right of `area` so the diff shows each theme as
+/// the cursor moves. Each theme has a swatch of its accents on its own
+/// background, in the variant for the OS's mode. Returns where it was drawn.
+fn render_theme_picker(frame: &mut Frame, area: Rect, app: &App) -> Rect {
+    let p = app.palette;
+    let Some(picker) = app.theme_picker else { return Rect::default() };
+    const SWATCH: usize = 13;
+    let width = 44.min(area.width.saturating_sub(2));
+    let name_width = (width as usize).saturating_sub(2 + 4 + SWATCH + 1);
+
+    let mut lines: Vec<Line> = Vec::new();
+    for (i, theme) in THEMES.iter().enumerate() {
+        let selected = i == picker.selected;
+        // In the variant the OS's mode calls for, as it would be used.
+        let colors = theme.palette(app.appearance);
+        let mut spans = vec![
+            Span::styled(if selected { " ▸ " } else { "   " }, Style::new().fg(p.cyan)),
+            Span::raw(format!("{:<name_width$}", truncate_right(theme.name, name_width))),
+            Span::raw(" "),
+        ];
+        let swatch = Style::new().bg(colors.bg);
+        spans.push(Span::styled(" ", swatch));
+        for accent in [colors.red, colors.yellow, colors.green, colors.cyan, colors.blue, colors.magenta] {
+            spans.push(Span::styled("● ", swatch.fg(accent)));
+        }
+        let line = Line::from(spans);
+        lines.push(if selected { line.style(Style::new().bg(p.cursor).bold()) } else { line });
+    }
+
+    let height = (lines.len() as u16 + 2).min(area.height);
+    let rect = Rect {
+        x: area.right().saturating_sub(width + 1),
+        y: area.y + (area.height - height) / 2,
+        width,
+        height,
+    };
+    let block = Block::bordered()
+        .border_type(BorderType::Thick)
+        .border_style(Style::new().fg(p.cyan).bold())
+        .title(Span::styled(" Theme ", Style::new().bold()))
+        .title_bottom(Line::from(" j/k try · Enter keep · Esc back ").dim());
+    let inner = block.inner(rect);
+    let scroll = (picker.selected + 1).saturating_sub(inner.height as usize);
+    clear(frame, rect, &p);
+    frame.render_widget(block, rect);
+    frame.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), inner);
+    rect
 }
 
 /// From this many columns the ask panel docks at the diff's right.
@@ -113,15 +177,16 @@ const ASK_DOCK_RIGHT_FROM: u16 = 110;
 /// Done with plain colours rather than the dim attribute, which many
 /// terminals barely show; backgrounds go too, so no highlight can leave grey
 /// text on a grey row.
-fn dim_backdrop(frame: &mut Frame) {
+fn dim_backdrop(frame: &mut Frame, p: &Palette) {
     let area = frame.area();
-    let style = Style::new().fg(Color::DarkGray).bg(Color::Reset).remove_modifier(Modifier::BOLD | Modifier::REVERSED);
+    let style = Style::new().fg(p.muted).bg(p.bg).remove_modifier(Modifier::BOLD | Modifier::REVERSED);
     frame.buffer_mut().set_style(area, style);
 }
 
 /// The `?` overlay: every key and command, grouped, centred over the screen.
 /// Returns where it was drawn.
 fn render_help(frame: &mut Frame, area: Rect, app: &mut App) -> Rect {
+    let p = app.palette;
     let width = 100.min(area.width.saturating_sub(4));
     let key_width = help::SECTIONS.iter().flat_map(|s| s.entries).map(|(k, _)| k.chars().count()).max().unwrap_or(0) + 2;
     // Inside the border, after the key column.
@@ -132,12 +197,12 @@ fn render_help(frame: &mut Frame, area: Rect, app: &mut App) -> Rect {
         if !lines.is_empty() {
             lines.push(Line::default());
         }
-        lines.push(Line::from(Span::styled(format!(" {}", section.title), Style::new().fg(Color::Magenta).bold())));
+        lines.push(Line::from(Span::styled(format!(" {}", section.title), Style::new().fg(p.magenta).bold())));
         for (keys, what) in section.entries {
             for (i, text) in wrap_words(what, text_width).into_iter().enumerate() {
                 let keys = if i == 0 { *keys } else { "" };
                 lines.push(Line::from(vec![
-                    Span::styled(format!(" {keys:<key_width$}"), Style::new().fg(Color::Cyan)),
+                    Span::styled(format!(" {keys:<key_width$}"), Style::new().fg(p.cyan)),
                     Span::raw(text),
                 ]));
             }
@@ -148,7 +213,7 @@ fn render_help(frame: &mut Frame, area: Rect, app: &mut App) -> Rect {
     let rect = centered(area, width, height);
     let block = Block::bordered()
         .border_type(BorderType::Thick)
-        .border_style(Style::new().fg(Color::Magenta).bold())
+        .border_style(Style::new().fg(p.magenta).bold())
         .title(Span::styled(" Keys ", Style::new().bold()))
         .title_bottom(Line::from(" j/k scroll · Esc close ").dim());
     let inner = block.inner(rect);
@@ -157,7 +222,7 @@ fn render_help(frame: &mut Frame, area: Rect, app: &mut App) -> Rect {
     let scroll = app.help_scroll.map_or(0, |s| s.min(max_scroll));
     app.help_scroll = Some(scroll);
 
-    frame.render_widget(Clear, rect);
+    clear(frame, rect, &app.palette);
     frame.render_widget(block, rect);
     frame.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), inner);
     rect
@@ -166,6 +231,7 @@ fn render_help(frame: &mut Frame, area: Rect, app: &mut App) -> Rect {
 /// `segments` as spans, with matches of the highlighted search picked out.
 /// A match can span several segments.
 fn highlighted(segments: Vec<Segment>, app: &App) -> Vec<Span<'static>> {
+    let p = app.palette;
     let Some(query) = app.highlighted_search() else {
         return segments.into_iter().map(|(style, text)| Span::styled(text, style)).collect();
     };
@@ -181,7 +247,7 @@ fn highlighted(segments: Vec<Segment>, app: &App) -> Vec<Span<'static>> {
             if from > last {
                 spans.push(Span::styled(text[last..from].to_string(), style));
             }
-            spans.push(Span::styled(text[from..to].to_string(), style.bg(Color::Yellow).fg(Color::Black)));
+            spans.push(Span::styled(text[from..to].to_string(), style.bg(p.yellow).fg(p.on_accent)));
             last = to;
         }
         if last < end {
@@ -193,6 +259,7 @@ fn highlighted(segments: Vec<Segment>, app: &App) -> Vec<Span<'static>> {
 }
 
 fn render_title(frame: &mut Frame, area: Rect, app: &App) {
+    let p = app.palette;
     let files = app.diff.files.len();
     let left = format!(" rrrev ─ {} ─ {files} file{}", app.title, if files == 1 { "" } else { "s" });
     let progress = app.progress();
@@ -223,13 +290,13 @@ fn render_title(frame: &mut Frame, area: Rect, app: &App) {
         left
     };
     let pad = (area.width as usize).saturating_sub(left.chars().count() + right.chars().count());
-    let right_style = if progress.is_complete() { Style::new().fg(Color::Green) } else { Style::new() };
+    let right_style = if progress.is_complete() { Style::new().fg(p.green) } else { Style::new() };
     let line = Line::from(vec![
         Span::raw(left),
         Span::raw(" ".repeat(pad)),
         Span::styled(right, right_style.bold()),
     ]);
-    frame.render_widget(Paragraph::new(line).reversed(), area);
+    frame.render_widget(Paragraph::new(line).style(app.palette.bar()), area);
 }
 
 /// A braille spinner frame for something running since `started`.
@@ -239,23 +306,23 @@ fn spinner(started: std::time::Instant) -> char {
 }
 
 /// `✓` when fully reviewed, `◐` when partly.
-fn progress_mark(progress: Progress) -> Span<'static> {
+fn progress_mark(progress: Progress, p: &Palette) -> Span<'static> {
     if progress.is_complete() {
-        Span::styled("✓", Style::new().fg(Color::Green))
+        Span::styled("✓", Style::new().fg(p.green))
     } else if progress.reviewed > 0 {
-        Span::styled("◐", Style::new().fg(Color::Yellow))
+        Span::styled("◐", Style::new().fg(p.yellow))
     } else {
         Span::raw(" ")
     }
 }
 
-fn status_style(status: FileStatus) -> Style {
+fn status_style(status: FileStatus, p: &Palette) -> Style {
     let color = match status {
-        FileStatus::Added => Color::Green,
-        FileStatus::Deleted => Color::Red,
-        FileStatus::Modified => Color::Yellow,
-        FileStatus::Renamed | FileStatus::Copied => Color::Blue,
-        FileStatus::Other => Color::Magenta,
+        FileStatus::Added => p.green,
+        FileStatus::Deleted => p.red,
+        FileStatus::Modified => p.yellow,
+        FileStatus::Renamed | FileStatus::Copied => p.blue,
+        FileStatus::Other => p.magenta,
     };
     Style::new().fg(color).bold()
 }
@@ -279,15 +346,16 @@ fn render_sidebar(frame: &mut Frame, area: Rect, app: &App, popup: bool) -> (Rec
 /// Draws the sidebar's frame, sized for `entries` when it's a pop-up, and
 /// returns the frame's area and the area inside it.
 fn sidebar_frame(frame: &mut Frame, area: Rect, app: &App, title: &str, entries: usize, popup: bool) -> (Rect, Rect) {
+    let p = app.palette;
     let focused = app.focus == Focus::Sidebar;
-    let border_style = if focused { Style::new().fg(Color::Cyan) } else { Style::new().dim() };
+    let border_style = if focused { Style::new().fg(p.cyan) } else { Style::new().dim() };
     let title = Span::styled(format!(" {title} "), if focused { Style::new().bold() } else { Style::new().dim() });
     let (area, block) = if popup {
         let height = (entries as u16 + 2).clamp(3, area.height.saturating_sub(2));
         let rect = centered(area, 72.min(area.width.saturating_sub(4)), height);
-        frame.render_widget(Clear, rect);
+        clear(frame, rect, &app.palette);
         let hint = Line::from(" j/k move · Enter / Esc close ").dim();
-        let border = Style::new().fg(Color::Cyan).bold();
+        let border = Style::new().fg(p.cyan).bold();
         (rect, Block::bordered().border_type(BorderType::Thick).border_style(border).title(title).title_bottom(hint))
     } else {
         (area, Block::new().borders(Borders::RIGHT).border_style(border_style).title(title))
@@ -298,10 +366,10 @@ fn sidebar_frame(frame: &mut Frame, area: Rect, app: &App, title: &str, entries:
 }
 
 /// Renders one sidebar entry, highlighted when selected, and returns where.
-fn sidebar_row(frame: &mut Frame, inner: Rect, offset: usize, line: Line, selected: bool, focused: bool) -> Rect {
+fn sidebar_row(frame: &mut Frame, p: &Palette, inner: Rect, offset: usize, line: Line, selected: bool, focused: bool) -> Rect {
     let mut paragraph = Paragraph::new(line);
     if selected {
-        let bg = if focused { Color::DarkGray } else { Color::Reset };
+        let bg = if focused { p.cursor } else { p.bg };
         paragraph = paragraph.style(Style::new().bg(bg).add_modifier(Modifier::BOLD));
     }
     let row_area = Rect { y: inner.y + offset as u16, height: 1, ..inner };
@@ -332,13 +400,13 @@ fn render_plan_sidebar(frame: &mut Frame, area: Rect, app: &App, popup: bool) ->
         let line = Line::from(vec![
             Span::raw(number).dim(),
             Span::raw(" "),
-            progress_mark(progress),
+            progress_mark(progress, &app.palette),
             Span::raw(" "),
             Span::raw(title),
             Span::raw(" ".repeat(pad)),
             Span::raw(count).dim(),
         ]);
-        entries.push((idx, sidebar_row(frame, inner, offset, line, idx == app.page, focused)));
+        entries.push((idx, sidebar_row(frame, &app.palette, inner, offset, line, idx == app.page, focused)));
     }
     (outer, entries)
 }
@@ -390,14 +458,14 @@ fn render_stack_sidebar(frame: &mut Frame, area: Rect, app: &App, popup: bool) -
         let line = Line::from(vec![
             Span::raw(number).dim(),
             Span::raw(" "),
-            progress_mark(progress),
+            progress_mark(progress, &app.palette),
             Span::raw(" "),
             Span::styled(title, style),
             Span::raw(" ".repeat(pad)),
             Span::raw(count).dim(),
         ]);
         let page = page_of(item);
-        let rect = sidebar_row(frame, inner, offset, line, page == Some(app.page), focused);
+        let rect = sidebar_row(frame, &app.palette, inner, offset, line, page == Some(app.page), focused);
         if let Some(page) = page {
             entries.push((page, rect));
         }
@@ -414,6 +482,7 @@ fn truncate_right(text: &str, width: usize) -> String {
 }
 
 fn render_files_sidebar(frame: &mut Frame, area: Rect, app: &App, popup: bool) -> (Rect, Vec<(usize, Rect)>) {
+    let p = app.palette;
     let (outer, inner) = sidebar_frame(frame, area, app, "Files", app.diff.files.len(), popup);
     let focused = app.focus == Focus::Sidebar;
     let height = inner.height as usize;
@@ -435,17 +504,17 @@ fn render_files_sidebar(frame: &mut Frame, area: Rect, app: &App, popup: bool) -
         let pad = path_width.saturating_sub(path.chars().count());
 
         let line = Line::from(vec![
-            Span::styled(file.status.label(), status_style(file.status)),
+            Span::styled(file.status.label(), status_style(file.status, &app.palette)),
             Span::raw(" "),
-            progress_mark(app.file_progress(idx)),
+            progress_mark(app.file_progress(idx), &app.palette),
             Span::raw(format!("{fold} ")),
             Span::raw(dir.to_string()).dim(),
             Span::raw(name.to_string()),
             Span::raw(" ".repeat(pad)),
-            Span::styled(format!(" +{added}"), Style::new().fg(Color::Green)),
-            Span::styled(format!(" -{removed}"), Style::new().fg(Color::Red)),
+            Span::styled(format!(" +{added}"), Style::new().fg(p.green)),
+            Span::styled(format!(" -{removed}"), Style::new().fg(p.red)),
         ]);
-        entries.push((idx, sidebar_row(frame, inner, offset, line, Some(idx) == selected, focused)));
+        entries.push((idx, sidebar_row(frame, &app.palette, inner, offset, line, Some(idx) == selected, focused)));
     }
     (outer, entries)
 }
@@ -465,6 +534,7 @@ fn truncate_left(path: &str, width: usize) -> String {
 
 /// Draws the rows from `scroll` on, and returns where each one went.
 fn render_body(frame: &mut Frame, area: Rect, app: &App, highlighter: &mut Highlighter, scroll: usize) -> Vec<(Row, Rect)> {
+    let p = app.palette;
     let mut drawn = Vec::new();
     if app.rows.is_empty() {
         frame.render_widget(Paragraph::new(" No changes to review.").dim(), area);
@@ -485,9 +555,9 @@ fn render_body(frame: &mut Frame, area: Rect, app: &App, highlighter: &mut Highl
             _ => false,
         };
         if selected {
-            paragraph = paragraph.style(Style::new().bg(Color::Blue));
+            paragraph = paragraph.style(Style::new().bg(p.selection));
         } else if idx == app.cursor && app.focus == Focus::Diff {
-            paragraph = paragraph.style(Style::new().bg(Color::DarkGray));
+            paragraph = paragraph.style(Style::new().bg(p.cursor));
         }
         frame.render_widget(paragraph, row_area);
         drawn.push((*row, row_area));
@@ -520,18 +590,19 @@ fn row_lines(app: &App, row: Row, highlighter: &mut Highlighter) -> Vec<Line<'st
 
 /// A row that always fits on one line, cut off at the pane's edge.
 fn row_line(app: &App, row: Row) -> Line<'static> {
+    let p = app.palette;
     match row {
         Row::Group { group, line } => {
             let header = app.group_header(group);
             let Some((is_title, text)) = header.get(line).cloned() else { return Line::default() };
-            let style = if is_title { Style::new().fg(Color::Magenta).bold() } else { Style::new().italic() };
-            let mut spans = vec![Span::styled("▌ ", Style::new().fg(Color::Magenta)), Span::styled(text, style)];
+            let style = if is_title { Style::new().fg(p.magenta).bold() } else { Style::new().italic() };
+            let mut spans = vec![Span::styled("▌ ", Style::new().fg(p.magenta)), Span::styled(text, style)];
             // How far this step is, after its title.
             if line == 0 {
                 let progress = app.group_progress(group);
                 spans.push(if progress.is_complete() {
                     let next = if group + 1 < app.pages().len() { " · ]f next step" } else { "" };
-                    Span::styled(format!("  ✓ {0} of {0} · all good{next}", progress.total), Style::new().fg(Color::Green))
+                    Span::styled(format!("  ✓ {0} of {0} · all good{next}", progress.total), Style::new().fg(p.green))
                 } else {
                     Span::raw(format!("  {} of {} hunks", progress.reviewed, progress.total)).dim()
                 });
@@ -543,11 +614,11 @@ fn row_line(app: &App, row: Row) -> Line<'static> {
             let collapsed = app.collapsed[file];
             let mut spans = vec![
                 Span::raw(if collapsed { "▸" } else { "▾" }),
-                Span::styled(format!(" {} ", f.status.label()), status_style(f.status).reversed()),
+                Span::styled(format!(" {} ", f.status.label()), status_style(f.status, &app.palette).reversed()),
                 Span::raw(" "),
                 Span::styled(f.display_path(), Style::new().bold().add_modifier(Modifier::UNDERLINED)),
                 Span::raw(" "),
-                progress_mark(app.file_progress(file)),
+                progress_mark(app.file_progress(file), &app.palette),
             ];
             if f.is_binary {
                 spans.push(Span::raw(" (binary)").dim());
@@ -567,8 +638,8 @@ fn row_line(app: &App, row: Row) -> Line<'static> {
             };
             let reviewed = app.is_reviewed(file, hunk);
             let mut spans = vec![
-                if reviewed { Span::styled("✓ ", Style::new().fg(Color::Green).bold()) } else { Span::raw("  ") },
-                Span::styled(ranges.to_string(), Style::new().fg(Color::Cyan)),
+                if reviewed { Span::styled("✓ ", Style::new().fg(p.green).bold()) } else { Span::raw("  ") },
+                Span::styled(ranges.to_string(), Style::new().fg(p.cyan)),
             ];
             if let Some(scope) = app.diff.hunk_scope(file, hunk) {
                 spans.push(Span::raw(" "));
@@ -636,18 +707,19 @@ fn wrap_spans(spans: Vec<Span<'static>>, room: usize) -> Vec<Vec<Span<'static>>>
 }
 
 fn comment_line(app: &App, id: u64, line: usize) -> Vec<Line<'static>> {
+    let p = app.palette;
     let Some(comment) = app.review.comment(id) else { return vec![Line::default()] };
     let text = comment.text.lines().nth(line).unwrap_or("").to_string();
     // The `┃` lines up with the change bar, so the text starts past the code's column.
     let indent = Span::raw(" ".repeat(app.code_column() - 2));
     let lead = if line == 0 { "┃ ✎ " } else { "┃   " };
-    let gutter = vec![indent.clone(), Span::styled(lead, Style::new().fg(Color::Yellow))];
-    let hang = vec![indent, Span::styled("┃   ", Style::new().fg(Color::Yellow))];
+    let gutter = vec![indent.clone(), Span::styled(lead, Style::new().fg(p.yellow))];
+    let hang = vec![indent, Span::styled("┃   ", Style::new().fg(p.yellow))];
     let mut spans = Vec::new();
     if line == 0 {
         spans.push(Span::raw(app.outdated_label(comment)).italic());
     }
-    spans.extend(highlighted(vec![(Style::new().fg(Color::Yellow), text)], app));
+    spans.extend(highlighted(vec![(Style::new().fg(p.yellow), text)], app));
     let lines = hanging(app, gutter, hang, spans);
     if app.is_outdated(comment) {
         lines.into_iter().map(|l| l.patch_style(Style::new().dim())).collect()
@@ -657,19 +729,20 @@ fn comment_line(app: &App, id: u64, line: usize) -> Vec<Line<'static>> {
 }
 
 fn diff_line(app: &App, highlighter: &mut Highlighter, file: usize, hunk: usize, line: usize) -> Vec<Line<'static>> {
+    let p = app.palette;
     let l = app.line(file, hunk, line);
     let w = app.gutter_width;
     let no = |n: Option<u32>| n.map_or_else(|| " ".repeat(w), |n| format!("{n:>w$}"));
     let marker = if is_commented(app, file, hunk, line) {
-        Span::styled("┃", Style::new().fg(Color::Yellow))
+        Span::styled("┃", Style::new().fg(p.yellow))
     } else {
         Span::raw(" ")
     };
     // The change shows only in the gutter: a coloured bar, and the changed
     // side's line number in the same colour. The code keeps its syntax colours.
     let change = match l.kind {
-        LineKind::Added => Some(Color::Green),
-        LineKind::Removed => Some(Color::Red),
+        LineKind::Added => Some(p.green),
+        LineKind::Removed => Some(p.red),
         LineKind::Context | LineKind::NoNewline => None,
     };
     let number_style = |side_changed: bool| match change {
@@ -738,12 +811,13 @@ fn emphasize(segments: Vec<Segment>, ranges: &[Range<usize>], style: Style) -> V
 /// A line of the file shown as extra context next to a hunk: numbered on
 /// both sides, with a dotted bar to tell it from the diff's own lines.
 fn context_line(app: &App, highlighter: &mut Highlighter, file: usize, hunk: usize, no: u32) -> Vec<Line<'static>> {
+    let p = app.palette;
     let Some((_, side)) = app.diff.context_source(file) else { return vec![Line::default()] };
     let h = app.hunk(file, hunk);
     let (old_no, new_no) = context_numbers(h, side, no, is_above(h, side, no));
     let w = app.gutter_width;
     let number = |n: Option<u32>| n.map_or_else(|| " ".repeat(w), |n| format!("{n:>w$}"));
-    let bar = Span::styled("┊", Style::new().fg(Color::DarkGray));
+    let bar = Span::styled("┊", Style::new().fg(p.muted));
     let gutter = vec![
         Span::raw(" "),
         Span::raw(number(old_no)).dim(),
@@ -765,9 +839,10 @@ fn context_line(app: &App, highlighter: &mut Highlighter, file: usize, hunk: usi
 
 /// An agent note, set out like a comment but in the AI's colour.
 fn note_line(app: &App, note: usize) -> Vec<Line<'static>> {
+    let p = app.palette;
     let Some(n) = app.notes.get(note) else { return vec![Line::default()] };
     let indent = Span::raw(" ".repeat(app.code_column() - 2));
-    let color = Style::new().fg(Color::Magenta);
+    let color = Style::new().fg(p.magenta);
     let gutter = vec![indent.clone(), Span::styled("┃ ◆ ", color)];
     let hang = vec![indent, Span::styled("┃   ", color)];
     let mut spans = vec![Span::styled(crate::app::NOTE_LABEL, color.bold())];
@@ -778,6 +853,7 @@ fn note_line(app: &App, note: usize) -> Vec<Line<'static>> {
 /// The path of the file under the cursor and the definitions around it,
 /// outermost first: `src/output.rs › impl Output › fn truncate(…)`.
 fn render_breadcrumbs(frame: &mut Frame, area: Rect, app: &App) {
+    let p = app.palette;
     let Some(row) = app.current_row() else { return };
     let Some(file) = row.file() else {
         let title = app.page_label(app.page);
@@ -814,7 +890,7 @@ fn render_breadcrumbs(frame: &mut Frame, area: Rect, app: &App) {
             scopes[0] = "…".to_string();
         }
     }
-    let separator = || Span::styled(" › ", Style::new().fg(Color::DarkGray));
+    let separator = || Span::styled(" › ", Style::new().fg(p.muted));
     let room = width.saturating_sub(len(&scopes) - path.chars().count());
     let mut spans = vec![Span::raw(" "), Span::raw(truncate_left(&path, room.max(8))).dim()];
     for (i, scope) in scopes.iter().enumerate() {
@@ -829,19 +905,20 @@ fn render_breadcrumbs(frame: &mut Frame, area: Rect, app: &App) {
 /// typed at the bottom. The latest exchange shows from its question down,
 /// and `C-e` / `C-y` scroll from there.
 fn render_ask_panel(frame: &mut Frame, area: Rect, app: &mut App, docked_right: bool) {
+    let p = app.palette;
     let typing = matches!(app.mode, Mode::Ask { .. });
-    let border = if typing { Style::new().fg(Color::Magenta) } else { Style::new().fg(Color::DarkGray) };
+    let border = if typing { Style::new().fg(p.magenta) } else { Style::new().fg(p.muted) };
     // Docked right it's set off by a line on its left; under the diff, on top.
     let borders = if docked_right { Borders::LEFT } else { Borders::TOP };
     let hint = if typing { " Enter ask · Alt-Enter newline · Esc cancel " } else { " a ask · C-e/C-y scroll · A/Esc hide " };
     let block = Block::new()
         .borders(borders)
         .border_style(border)
-        .title(Span::styled(" Ask Claude ", Style::new().fg(Color::Magenta).bold()))
+        .title(Span::styled(" Ask Claude ", Style::new().fg(p.magenta).bold()))
         .title(Span::raw("· reads the whole repository ").dim())
         .title_bottom(Line::from(hint).dim());
     let inner = block.inner(area);
-    frame.render_widget(Clear, area);
+    clear(frame, area, &app.palette);
     frame.render_widget(block, area);
     let inner = Rect { x: inner.x + 1, width: inner.width.saturating_sub(1), ..inner };
     let width = inner.width as usize;
@@ -856,8 +933,8 @@ fn render_ask_panel(frame: &mut Frame, area: Rect, app: &mut App, docked_right: 
         conversation_area.height -= height;
         let location = format!("{}{}", target.location, target.scopes.last().map_or(String::new(), |s| format!(" {s}")));
         let input_block = Block::bordered()
-            .border_style(Style::new().fg(Color::Magenta))
-            .title(Span::styled(truncate_right(&format!(" {location} "), width.saturating_sub(2)), Style::new().fg(Color::Cyan)));
+            .border_style(Style::new().fg(p.magenta))
+            .title(Span::styled(truncate_right(&format!(" {location} "), width.saturating_sub(2)), Style::new().fg(p.cyan)));
         let field = input_block.inner(box_area);
         frame.render_widget(input_block, box_area);
         let skip = (y + 1).saturating_sub(field.height as usize);
@@ -878,9 +955,9 @@ fn render_ask_panel(frame: &mut Frame, area: Rect, app: &mut App, docked_right: 
             lines.push(Line::default());
         }
         latest = lines.len();
-        lines.push(Line::from(Span::styled(truncate_right(&entry.location, width), Style::new().fg(Color::Cyan))));
+        lines.push(Line::from(Span::styled(truncate_right(&entry.location, width), Style::new().fg(p.cyan))));
         for text in wrap_words(&entry.question, width.saturating_sub(2)) {
-            lines.push(Line::from(vec![Span::styled("│ ", Style::new().fg(Color::Magenta)), Span::raw(text).bold()]));
+            lines.push(Line::from(vec![Span::styled("│ ", Style::new().fg(p.magenta)), Span::raw(text).bold()]));
         }
         match &entry.answer {
             Answer::Pending => {
@@ -904,7 +981,7 @@ fn render_ask_panel(frame: &mut Frame, area: Rect, app: &mut App, docked_right: 
             }
             Answer::Failed(error) => {
                 for piece in wrap_words(&format!("error: {error}"), width) {
-                    lines.push(Line::from(Span::styled(piece, Style::new().fg(Color::Red))));
+                    lines.push(Line::from(Span::styled(piece, Style::new().fg(p.red))));
                 }
             }
             Answer::Cancelled => lines.push(Line::from("cancelled").dim().italic()),
@@ -927,6 +1004,7 @@ fn render_ask_panel(frame: &mut Frame, area: Rect, app: &mut App, docked_right: 
 /// The review summed up, with its verdict: how much was looked at, what
 /// was said, and the keys to approve, request changes or hand over.
 fn render_verdict(frame: &mut Frame, area: Rect, app: &App) -> Rect {
+    let p = app.palette;
     let width = 84.min(area.width.saturating_sub(4));
     let inner_width = width.saturating_sub(4) as usize;
     let progress = app.progress();
@@ -939,13 +1017,13 @@ fn render_verdict(frame: &mut Frame, area: Rect, app: &App) -> Rect {
     } else {
         format!("{to_go} of {} hunks to go", progress.total)
     };
-    let headline_style = if to_go == 0 { Style::new().fg(Color::Green).bold() } else { Style::new().bold() };
+    let headline_style = if to_go == 0 { Style::new().fg(p.green).bold() } else { Style::new().bold() };
     lines.push(Line::from(Span::styled(headline, headline_style)));
     lines.push(Line::from(Span::raw(truncate_right(&app.title, inner_width)).dim()));
     lines.push(Line::default());
 
     lines.push(Line::from(Span::raw("WHAT YOU WENT THROUGH").dim().bold()));
-    lines.push(stacked_bar(stats, inner_width.saturating_sub(10)));
+    lines.push(stacked_bar(stats, inner_width.saturating_sub(10), &app.palette));
     let total = stats.total().max(1);
     let row = |label: &str, note: &str, count: usize, color: Color| {
         let bar_width = inner_width.saturating_sub(34).max(4);
@@ -956,12 +1034,12 @@ fn render_verdict(frame: &mut Frame, area: Rect, app: &App) -> Rect {
             Span::raw(format!("{note:<10}")).dim(),
             Span::raw(format!("{count:>5} lines  ")),
             Span::styled("━".repeat(filled), Style::new().fg(color)),
-            Span::styled("━".repeat(bar_width - filled), Style::new().fg(Color::DarkGray)),
+            Span::styled("━".repeat(bar_width - filled), Style::new().fg(p.muted)),
         ])
     };
-    lines.push(row("Looks good", "by you", stats.good, Color::Green));
-    lines.push(row("Read", "on screen", stats.read, Color::Blue));
-    lines.push(row("Not seen", "to go", stats.unseen, Color::Gray));
+    lines.push(row("Looks good", "by you", stats.good, p.green));
+    lines.push(row("Read", "on screen", stats.read, p.blue));
+    lines.push(row("Not seen", "to go", stats.unseen, p.faint));
     lines.push(Line::default());
 
     let comments = app.review.comments().len();
@@ -969,11 +1047,11 @@ fn render_verdict(frame: &mut Frame, area: Rect, app: &App) -> Rect {
     let mut chips = vec![
         Span::styled(format!(" {} of {} hunks good ", progress.reviewed, progress.total), Style::new().reversed()),
         Span::raw(" "),
-        Span::styled(format!(" {} in your review ", plural(comments, "comment")), Style::new().fg(Color::Yellow).reversed()),
+        Span::styled(format!(" {} in your review ", plural(comments, "comment")), Style::new().fg(p.yellow).reversed()),
     ];
     if !app.notes.is_empty() {
         chips.push(Span::raw(" "));
-        chips.push(Span::styled(format!(" {} ", plural(app.notes.len(), "agent note")), Style::new().fg(Color::Magenta).reversed()));
+        chips.push(Span::styled(format!(" {} ", plural(app.notes.len(), "agent note")), Style::new().fg(p.magenta).reversed()));
     }
     lines.push(Line::from(chips));
     lines.push(Line::default());
@@ -994,17 +1072,17 @@ fn render_verdict(frame: &mut Frame, area: Rect, app: &App) -> Rect {
     lines.extend(message_lines);
     let button = |key: &str, label: &str, kind: VerdictKind, color: Color| {
         let chosen = verdict.is_some_and(|v| v.kind == kind);
-        let style = if chosen { Style::new().fg(Color::Black).bg(color).bold() } else { Style::new().fg(color) };
+        let style = if chosen { Style::new().fg(p.on_accent).bg(color).bold() } else { Style::new().fg(color) };
         let mark = if chosen { "● " } else { "" };
         Span::styled(format!(" [{key}] {mark}{label} "), style)
     };
     lines.push(Line::default());
     lines.push(Line::from(vec![
-        button("r", "Request changes", VerdictKind::RequestChanges, Color::Yellow),
+        button("r", "Request changes", VerdictKind::RequestChanges, p.yellow),
         Span::raw("  "),
-        button("c", "Comment", VerdictKind::Comment, Color::Blue),
+        button("c", "Comment", VerdictKind::Comment, p.blue),
         Span::raw("  "),
-        button("a", "Approve", VerdictKind::Approve, Color::Green),
+        button("a", "Approve", VerdictKind::Approve, p.green),
     ]));
     lines.push(Line::default());
     for text in wrap_words(
@@ -1021,12 +1099,12 @@ fn render_verdict(frame: &mut Frame, area: Rect, app: &App) -> Rect {
     let rect = centered(area, width, height);
     let block = Block::bordered()
         .border_type(BorderType::Thick)
-        .border_style(Style::new().fg(Color::Cyan).bold())
+        .border_style(Style::new().fg(p.cyan).bold())
         .title(Span::styled(" Verdict ", Style::new().bold()))
         .title_bottom(Line::from(" a/r/c verdict · m message · x clear · Y copy for agent · e export · Esc close ").dim());
     let inner = block.inner(rect);
     let inner = Rect { x: inner.x + 1, width: inner.width.saturating_sub(2), ..inner };
-    frame.render_widget(Clear, rect);
+    clear(frame, rect, &app.palette);
     frame.render_widget(block, rect);
     frame.render_widget(Paragraph::new(lines), inner);
     if let Mode::VerdictMessage { input } = &app.mode {
@@ -1041,15 +1119,15 @@ fn render_verdict(frame: &mut Frame, area: Rect, app: &App) -> Rect {
 
 /// One bar for everything changed: reviewed, read and not seen yet, with
 /// the share looked at after it.
-fn stacked_bar(stats: LineStats, width: usize) -> Line<'static> {
+fn stacked_bar(stats: LineStats, width: usize, p: &Palette) -> Line<'static> {
     let total = stats.total().max(1);
     let good = stats.good * width / total;
     let read = (stats.good + stats.read) * width / total - good;
     let rest = width - good - read;
     Line::from(vec![
-        Span::styled("█".repeat(good), Style::new().fg(Color::Green)),
-        Span::styled("█".repeat(read), Style::new().fg(Color::Blue)),
-        Span::styled("░".repeat(rest), Style::new().fg(Color::DarkGray)),
+        Span::styled("█".repeat(good), Style::new().fg(p.green)),
+        Span::styled("█".repeat(read), Style::new().fg(p.blue)),
+        Span::styled("░".repeat(rest), Style::new().fg(p.muted)),
         Span::raw(format!(" {:>3}% seen", stats.seen_percent())).bold(),
     ])
 }
@@ -1066,6 +1144,7 @@ fn comment_box_area(app: &App, body: Rect) -> Option<Rect> {
 
 /// Returns where the text cursor goes.
 fn render_comment_box(frame: &mut Frame, area: Rect, app: &App) -> (u16, u16) {
+    let p = app.palette;
     let Mode::Comment { target, input } = &app.mode else { return (area.x, area.y) };
     let title = match *target {
         CommentTarget::New { file, hunk, start, end } => {
@@ -1081,11 +1160,11 @@ fn render_comment_box(frame: &mut Frame, area: Rect, app: &App) -> (u16, u16) {
         CommentTarget::Edit { .. } => " Edit comment (empty deletes it) ".to_string(),
     };
     let block = Block::bordered()
-        .border_style(Style::new().fg(Color::Yellow))
+        .border_style(Style::new().fg(p.yellow))
         .title(Span::styled(title, Style::new().bold()))
         .title_bottom(Line::from(" Enter save · Alt-Enter newline · C-o $EDITOR · Esc cancel ").dim());
     let inner = block.inner(area);
-    frame.render_widget(Clear, area);
+    clear(frame, area, &app.palette);
     frame.render_widget(block, area);
 
     let (lines, (x, y)) = wrap_input(input.text(), input.cursor(), inner.width as usize);
@@ -1127,6 +1206,7 @@ fn wrap_input(text: &str, cursor: usize, width: usize) -> (Vec<String>, (usize, 
 }
 
 fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
+    let p = app.palette;
     let prompt = match &app.mode {
         Mode::Command { input } => Some((':', input)),
         Mode::Search { input } => Some(('/', input)),
@@ -1145,6 +1225,7 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
         (Mode::Ask { .. }, _) => " ASK ",
         (Mode::VerdictMessage { .. }, _) => " VERDICT ",
         _ if app.show_verdict => " VERDICT ",
+        _ if app.theme_picker.is_some() => " THEME ",
         (_, Focus::Sidebar) => " FILES ",
         _ => " NORMAL ",
     };
@@ -1183,7 +1264,7 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
             if !fits(&left, &right) {
                 left = mode.to_string();
             }
-            let style = if msg.starts_with("error:") { Style::new().fg(Color::Red) } else { Style::new() };
+            let style = if msg.starts_with("error:") { Style::new().fg(p.red) } else { Style::new() };
             (right, style.bold())
         }
         None => {
@@ -1191,7 +1272,7 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
                 Mode::Visual { .. } => " c comment  a ask  y copy  Esc cancel ",
                 // The boxes list their own keys.
                 Mode::Comment { .. } | Mode::Ask { .. } | Mode::VerdictMessage { .. } => " ",
-                _ if app.show_verdict => " ",
+                _ if app.show_verdict || app.theme_picker.is_some() => " ",
                 _ if matches!(app.current_row(), Some(Row::Note { .. })) => {
                     " c comment with this  dd dismiss  a ask about it  y copy "
                 }
@@ -1208,12 +1289,35 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
         Span::raw(pending).dim(),
         Span::styled(right, right_style),
     ]);
-    frame.render_widget(Paragraph::new(line).reversed(), area);
+    frame.render_widget(Paragraph::new(line).style(app.palette.bar()), area);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paints_the_theme_and_lists_every_theme_in_the_picker() {
+        use crate::app::Action;
+        use crate::theme::Theme;
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut app = App::new(String::new(), crate::diff::Diff::new(Vec::new()), Default::default());
+        let mut highlighter = Highlighter::new(Theme::terminal(), crate::appearance::Appearance::Dark);
+        let mut anim = Animator::new(false);
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        app.set_theme(Theme::find("nord").unwrap());
+        app.update(Action::PickTheme);
+        terminal.draw(|frame| render(frame, &mut app, &mut highlighter, &mut anim, "")).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let screen: String = buffer.content().iter().map(|c| c.symbol()).collect();
+        for theme in THEMES {
+            assert!(screen.contains(theme.name), "{}", theme.name);
+        }
+        // doom-nord's background, away from the bars and the picker.
+        assert_eq!(buffer[(2, 10)].bg, Color::Rgb(0x2E, 0x34, 0x40));
+    }
 
     #[test]
     fn truncates_paths_from_the_left() {

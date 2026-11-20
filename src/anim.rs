@@ -72,6 +72,7 @@ pub enum Popup {
     Sidebar,
     Comment,
     Verdict,
+    Theme,
 }
 
 impl Popup {
@@ -80,7 +81,7 @@ impl Popup {
     fn anchor(self) -> Anchor {
         match self {
             Popup::Comment => Anchor::Bottom,
-            Popup::Help | Popup::Sidebar | Popup::Verdict => Anchor::Center,
+            Popup::Help | Popup::Sidebar | Popup::Verdict | Popup::Theme => Anchor::Center,
         }
     }
 }
@@ -149,7 +150,7 @@ pub struct Animator {
     now: Instant,
     /// Whether anything moved this frame, so the next one comes soon.
     busy: bool,
-    popups: [PopupState; 4],
+    popups: [PopupState; 5],
     page: Option<(View, usize)>,
     /// Columns the diff is pushed aside by, while a new page slides in.
     slide: Option<Tween>,
@@ -163,6 +164,8 @@ pub struct Animator {
     glints: Vec<Glint>,
     /// When the whole review last became complete.
     completed: Option<Instant>,
+    /// The sweep's colours, `(bg, fg)`, from the app's theme.
+    glint_colors: (Color, Color),
 }
 
 impl Animator {
@@ -180,6 +183,7 @@ impl Animator {
             reviewed: None,
             glints: Vec::new(),
             completed: None,
+            glint_colors: (Color::Green, Color::Black),
         }
     }
 
@@ -197,6 +201,7 @@ impl Animator {
     pub fn begin(&mut self, app: &App) {
         self.now = Instant::now();
         self.busy = false;
+        self.glint_colors = (app.palette.green, app.palette.on_accent);
         if !self.enabled {
             return;
         }
@@ -338,7 +343,7 @@ impl Animator {
                     Row::Group { .. } | Row::Comment { .. } | Row::Note { .. } => false,
                 };
                 if hit {
-                    sweep(buf, rect, t);
+                    sweep(buf, rect, t, self.glint_colors);
                 }
             }
         }
@@ -355,7 +360,7 @@ impl Animator {
                     View::Plan | View::Stack => app.pages()[idx].hunks.iter().any(|h| glint.hunks.contains(h)),
                 };
                 if hit {
-                    sweep(buf, rect, t);
+                    sweep(buf, rect, t, self.glint_colors);
                 }
             }
         }
@@ -364,7 +369,7 @@ impl Animator {
     /// Sweeps across the title bar when the last hunk gets reviewed.
     pub fn glint_title(&self, buf: &mut Buffer, area: Rect) {
         if let Some(start) = self.completed {
-            sweep(buf, area, progress(start, GLINT, self.now));
+            sweep(buf, area, progress(start, GLINT, self.now), self.glint_colors);
         }
     }
 }
@@ -386,7 +391,7 @@ fn restore(buf: &mut Buffer, area: Rect, under: Option<&Buffer>) {
     for y in area.top()..area.bottom() {
         for x in area.left()..area.right() {
             if let Some(cell) = buf.cell_mut((x, y)) {
-                *cell = under.and_then(|u| u.cell((x, y))).cloned().unwrap_or_default();
+                *cell = under.and_then(|u| u.cell((x, y))).cloned().unwrap_or_else(|| blank(cell));
             }
         }
     }
@@ -414,20 +419,27 @@ fn shift(buf: &mut Buffer, area: Rect, by: i32) {
         let row: Vec<Cell> = (area.left()..area.right()).map(|x| buf[(x, y)].clone()).collect();
         for (i, x) in (area.left()..area.right()).enumerate() {
             let from = usize::try_from(i as i32 - by).ok().and_then(|f| row.get(f));
-            buf[(x, y)] = from.cloned().unwrap_or_default();
+            buf[(x, y)] = from.cloned().unwrap_or_else(|| blank(&row[i]));
         }
     }
 }
 
+/// An empty cell on `cell`'s colours, so a theme's background stays put.
+fn blank(cell: &Cell) -> Cell {
+    let mut blank = Cell::default();
+    blank.set_fg(cell.fg).set_bg(cell.bg);
+    blank
+}
+
 /// A green band crossing `area` left to right as `t` goes from 0 to 1.
-fn sweep(buf: &mut Buffer, area: Rect, t: f32) {
+fn sweep(buf: &mut Buffer, area: Rect, t: f32, (bg, fg): (Color, Color)) {
     let travel = (area.width + GLINT_WIDTH) as f32;
     let end = area.x as i32 + (travel * t) as i32;
     let start = (end - GLINT_WIDTH as i32).max(area.x as i32);
     for y in area.top()..area.bottom() {
         for x in start..end.min(area.right() as i32) {
             if let Some(cell) = buf.cell_mut((x as u16, y)) {
-                cell.set_bg(Color::Green).set_fg(Color::Black);
+                cell.set_bg(bg).set_fg(fg);
             }
         }
     }

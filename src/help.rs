@@ -85,6 +85,7 @@ pub const SECTIONS: &[Section] = &[
             ("Tab   h / l", "focus the sidebar / the diff; on a narrow screen, open / close it as a pop-up"),
             ("s", "show / hide the sidebar (the pop-up on a narrow screen)"),
             ("gp / gf", "the plan / the files"),
+            ("T   :theme", "pick a colour theme, shown as you move; Enter keeps it, Esc goes back. Its dark or light variant follows the OS"),
         ],
     },
     Section {
@@ -104,6 +105,7 @@ pub const SECTIONS: &[Section] = &[
             (":organize cancel", "stop a running plan"),
             (":organize clear [all]", "drop the plan (in a stack, the layer's; all: every layer's)"),
             (":export [md|json] [path]", "write the comments to a file"),
+            (":theme [name]", "the theme picker, or straight to a theme: terminal, one, nord, gruvbox, solarized, tomorrow"),
             (":w / :q", "save / quit"),
             ("?", "this help"),
         ],

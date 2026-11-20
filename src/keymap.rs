@@ -108,6 +108,7 @@ impl KeyHandler {
             (None, KeyCode::Char('y')) => Action::Yank,
             (None, KeyCode::Char('Y')) => Action::CopyForAgent,
             (None, KeyCode::Char('S')) => Action::ToggleVerdict,
+            (None, KeyCode::Char('T')) => Action::PickTheme,
             _ => return None,
         };
         Some(action)
@@ -198,6 +199,7 @@ mod tests {
         assert_eq!(press(&mut h, "a"), Some(Action::Ask));
         assert_eq!(press(&mut h, "Y"), Some(Action::CopyForAgent));
         assert_eq!(press(&mut h, "S"), Some(Action::ToggleVerdict));
+        assert_eq!(press(&mut h, "T"), Some(Action::PickTheme));
         assert_eq!(press(&mut h, "gs"), Some(Action::ShowView(View::Stack)));
         assert_eq!(press(&mut h, "gf"), Some(Action::ShowView(View::Files)));
         assert_eq!(press(&mut h, "2]s"), Some(Action::NextLayer(2)));

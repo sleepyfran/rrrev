@@ -1,7 +1,9 @@
 mod anim;
 mod app;
+mod appearance;
 mod ask;
 mod clipboard;
+mod config;
 mod diff;
 mod export;
 mod help;
@@ -11,6 +13,7 @@ mod keymap;
 mod organizer;
 mod review;
 mod text;
+mod theme;
 mod ui;
 
 use std::fs;
@@ -39,7 +42,8 @@ use ask::Assistant;
 use diff::DiffSource;
 use diff::git::{DiffSpec, GitSource};
 use export::{CommentSink, FileSink, Format};
-use highlight::{Background, Highlighter};
+use appearance::Appearance;
+use highlight::Highlighter;
 use keymap::KeyHandler;
 use organizer::claude::ClaudeCli;
 use organizer::{Cancel, Organizer, Plan};
@@ -129,7 +133,9 @@ fn main() -> Result<()> {
     let claude = Arc::new(ClaudeCli::from_env());
     let organizer: Arc<dyn Organizer> = claude.clone();
     let assistant: Arc<dyn Assistant> = claude;
-    let highlighter = Highlighter::new(Background::detect());
+    app.set_appearance(Appearance::detect());
+    app.set_theme(config::theme());
+    let highlighter = Highlighter::new(app.theme, app.appearance);
     let mut terminal = ratatui::init();
     let result = run(&mut terminal, &mut app, &state_file, Ai { organizer, assistant }, highlighter);
     ratatui::restore();
@@ -178,9 +184,13 @@ fn run(
     let mut running: Option<Running> = None;
     let mut asking: Option<Running> = None;
     let mut anim = Animator::from_env();
+    let appearance = appearance::Watch::start();
     while !app.should_quit {
         terminal.draw(|frame| ui::render(frame, app, &mut highlighter, &mut anim, &keys.pending()))?;
 
+        if let Some(mode) = appearance.changed() {
+            app.set_appearance(mode);
+        }
         while let Ok((job, result)) = plans.try_recv() {
             if running.as_ref().is_some_and(|r| r.job == job) {
                 running = None;
@@ -255,6 +265,11 @@ fn run(
             Some(Effect::CancelAsk { job }) => {
                 if let Some(run) = asking.take_if(|r| r.job == job) {
                     run.cancel.cancel();
+                }
+            }
+            Some(Effect::SaveTheme { theme }) => {
+                if let Err(e) = config::save_theme(theme) {
+                    app.message = Some(format!("error: could not save the theme: {e:#}"));
                 }
             }
             Some(Effect::Copy { text }) => {

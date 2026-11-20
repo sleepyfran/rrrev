@@ -6,40 +6,18 @@ use std::collections::HashMap;
 
 use ratatui::style::{Color, Modifier, Style};
 use syntect::easy::HighlightLines;
-use syntect::highlighting::{self, FontStyle, Theme, ThemeSet};
+use syntect::highlighting::{self, FontStyle, ThemeSet};
 use syntect::parsing::{SyntaxReference, SyntaxSet};
 
+use crate::appearance::Appearance;
 use crate::diff::{Diff, Hunk, LineKind};
+use crate::theme::Theme;
 
-/// Whether the terminal draws on a dark or a light background, which picks
-/// the theme.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Background {
-    Dark,
-    Light,
-}
-
-impl Background {
-    /// `RRREV_THEME=light|dark` wins; otherwise the terminal is asked for its
-    /// background colour, assuming dark when it doesn't answer. Asking needs
-    /// the terminal to itself, so this runs before the UI takes it over.
-    pub fn detect() -> Self {
-        match std::env::var("RRREV_THEME").as_deref() {
-            Ok("light") => return Background::Light,
-            Ok("dark") => return Background::Dark,
-            _ => {}
-        }
-        match terminal_colorsaurus::theme_mode(Default::default()) {
-            Ok(terminal_colorsaurus::ThemeMode::Light) => Background::Light,
-            _ => Background::Dark,
-        }
-    }
-
-    fn theme(self) -> &'static str {
-        match self {
-            Background::Dark => "base16-ocean.dark",
-            Background::Light => "base16-ocean.light",
-        }
+/// syntect's theme for the terminal's own colours, in the OS's shade.
+fn base16(appearance: Appearance) -> &'static str {
+    match appearance {
+        Appearance::Dark => "base16-ocean.dark",
+        Appearance::Light => "base16-ocean.light",
     }
 }
 
@@ -52,8 +30,12 @@ pub type Segment = (Style, String);
 
 pub struct Highlighter {
     syntaxes: SyntaxSet,
-    theme: Theme,
-    background: Background,
+    /// The app's theme the syntax colours come from.
+    source: &'static Theme,
+    theme: highlighting::Theme,
+    /// The theme's tints for changed words, if it has its own.
+    tints: Option<(Color, Color)>,
+    appearance: Appearance,
     /// Per `(file, hunk)`: each line's segments, empty for lines left plain.
     cache: HashMap<(usize, usize), Vec<Vec<Segment>>>,
     /// Per file: each line of its whole text, for context shown around hunks.
@@ -65,32 +47,41 @@ pub struct Highlighter {
 const MAX_SOURCE_LINES: usize = 20_000;
 
 impl Highlighter {
-    pub fn new(background: Background) -> Self {
-        let mut themes = ThemeSet::load_defaults();
-        let mut theme = themes.themes.remove(background.theme()).expect("syntect ships this theme");
-        // The light theme keeps the dark one's pale accents, which wash out on
-        // a white background.
-        if background == Background::Light {
-            for scope in &mut theme.scopes {
-                scope.style.foreground = scope.style.foreground.map(readable_on_white);
-            }
-        }
+    pub fn new(theme: &'static Theme, appearance: Appearance) -> Self {
         Self {
             syntaxes: two_face::syntax::extra_newlines(),
-            theme,
-            background,
+            source: theme,
+            theme: syntax_theme(theme, appearance),
+            tints: theme.palette(appearance).tints,
+            appearance,
             cache: HashMap::new(),
             sources: HashMap::new(),
         }
     }
 
+    /// Follows the app's theme and the OS's mode, highlighting again in
+    /// their colours when either changes.
+    pub fn set_theme(&mut self, theme: &'static Theme, appearance: Appearance) {
+        if theme != self.source || appearance != self.appearance {
+            self.source = theme;
+            self.appearance = appearance;
+            self.theme = syntax_theme(theme, appearance);
+            self.tints = theme.palette(appearance).tints;
+            self.cache.clear();
+            self.sources.clear();
+        }
+    }
+
     /// The tint behind words that changed within a changed line.
     pub fn emphasis(&self, kind: LineKind) -> Style {
-        let bg = match (self.background, kind) {
-            (Background::Dark, LineKind::Removed) => Color::Rgb(110, 38, 44),
-            (Background::Dark, _) => Color::Rgb(30, 92, 50),
-            (Background::Light, LineKind::Removed) => Color::Rgb(255, 196, 196),
-            (Background::Light, _) => Color::Rgb(188, 240, 196),
+        if let Some((added, removed)) = self.tints {
+            return Style::new().bg(if kind == LineKind::Removed { removed } else { added });
+        }
+        let bg = match (self.appearance, kind) {
+            (Appearance::Dark, LineKind::Removed) => Color::Rgb(110, 38, 44),
+            (Appearance::Dark, _) => Color::Rgb(30, 92, 50),
+            (Appearance::Light, LineKind::Removed) => Color::Rgb(255, 196, 196),
+            (Appearance::Light, _) => Color::Rgb(188, 240, 196),
         };
         Style::new().bg(bg)
     }
@@ -219,6 +210,24 @@ impl Highlighter {
     }
 }
 
+/// The theme's own syntax colours for the OS's mode, or for the terminal's
+/// theme syntect's base16 ocean in that shade.
+fn syntax_theme(theme: &Theme, appearance: Appearance) -> highlighting::Theme {
+    if let Some(theme) = theme.syntax(appearance) {
+        return theme;
+    }
+    let mut themes = ThemeSet::load_defaults();
+    let mut theme = themes.themes.remove(base16(appearance)).expect("syntect ships this theme");
+    // The light theme keeps the dark one's pale accents, which wash out on
+    // a white background.
+    if appearance == Appearance::Light {
+        for scope in &mut theme.scopes {
+            scope.style.foreground = scope.style.foreground.map(readable_on_white);
+        }
+    }
+    theme
+}
+
 /// Darkens `color`, keeping its hue, until it has the 4.5:1 contrast with
 /// white that WCAG asks of body text.
 fn readable_on_white(mut color: highlighting::Color) -> highlighting::Color {
@@ -278,7 +287,7 @@ mod tests {
     #[test]
     fn highlights_known_languages_and_keeps_the_text() {
         let diff = diff("src/main.rs", &[(LineKind::Added, "fn main() {}")]);
-        let mut highlighter = Highlighter::new(Background::Dark);
+        let mut highlighter = Highlighter::new(Theme::terminal(), Appearance::Dark);
         let segments = highlighter.line(&diff, 0, 0, 0);
         assert_eq!(text(segments), "fn main() {}");
         assert!(segments.iter().any(|(style, _)| style.fg.is_some()));
@@ -288,14 +297,14 @@ mod tests {
     fn knows_typescript_and_toml() {
         for path in ["web/app.ts", "web/App.tsx", "Cargo.toml"] {
             let diff = diff(path, &[(LineKind::Added, "const a = 1")]);
-            assert!(!Highlighter::new(Background::Dark).line(&diff, 0, 0, 0).is_empty(), "{path}");
+            assert!(!Highlighter::new(Theme::terminal(), Appearance::Dark).line(&diff, 0, 0, 0).is_empty(), "{path}");
         }
     }
 
     #[test]
     fn light_theme_is_readable_on_white() {
         let diff = diff("a.rs", &[(LineKind::Added, "fn main() { let s = \"x\"; } // done")]);
-        let mut highlighter = Highlighter::new(Background::Light);
+        let mut highlighter = Highlighter::new(Theme::terminal(), Appearance::Light);
         let colors: Vec<_> = highlighter.line(&diff, 0, 0, 0).iter().filter_map(|(style, _)| style.fg).collect();
         assert!(colors.len() > 1);
         for color in colors {
@@ -309,20 +318,37 @@ mod tests {
         use crate::diff::Sources;
         let mut diff = diff("a.rs", &[(LineKind::Added, "x")]);
         diff.sources = vec![Sources { old: None, new: Some(std::sync::Arc::new(vec!["/*".into(), "fn a() {}".into()])) }];
-        let mut highlighter = Highlighter::new(Background::Dark);
+        let mut highlighter = Highlighter::new(Theme::terminal(), Appearance::Dark);
         assert_eq!(text(highlighter.source_line(&diff, 0, 2)), "fn a() {}");
         // Line 2 is inside the comment line 1 opened.
         let inside = highlighter.source_line(&diff, 0, 2).to_vec();
-        let plain = Highlighter::new(Background::Dark).line(&super::tests::diff("a.rs", &[(LineKind::Added, "fn a() {}")]), 0, 0, 0).to_vec();
+        let plain = Highlighter::new(Theme::terminal(), Appearance::Dark).line(&super::tests::diff("a.rs", &[(LineKind::Added, "fn a() {}")]), 0, 0, 0).to_vec();
         assert_ne!(inside, plain);
         assert!(highlighter.source_line(&diff, 0, 0).is_empty());
         assert!(highlighter.source_line(&diff, 0, 9).is_empty());
     }
 
     #[test]
+    fn follows_the_theme() {
+        let diff = diff("a.rs", &[(LineKind::Added, "fn main() {}")]);
+        let mut highlighter = Highlighter::new(Theme::terminal(), Appearance::Dark);
+        let before = highlighter.line(&diff, 0, 0, 0).to_vec();
+        let one = Theme::find("doom-one").unwrap();
+        highlighter.set_theme(one, Appearance::Dark);
+        let after = highlighter.line(&diff, 0, 0, 0).to_vec();
+        assert_eq!(text(&after), "fn main() {}");
+        assert_ne!(before, after);
+        // doom-one's keywords are its blue; doom-one-light's its red.
+        assert_eq!(after[0].0.fg, Some(Color::Rgb(0x51, 0xaf, 0xef)));
+        highlighter.set_theme(one, Appearance::Light);
+        assert_eq!(highlighter.line(&diff, 0, 0, 0)[0].0.fg, Some(Color::Rgb(0xe4, 0x56, 0x49)));
+        assert_ne!(highlighter.emphasis(LineKind::Added), Highlighter::new(Theme::terminal(), Appearance::Dark).emphasis(LineKind::Added));
+    }
+
+    #[test]
     fn leaves_unknown_files_plain() {
         let diff = diff("notes.unknownext", &[(LineKind::Added, "fn main() {}")]);
-        assert!(Highlighter::new(Background::Dark).line(&diff, 0, 0, 0).is_empty());
+        assert!(Highlighter::new(Theme::terminal(), Appearance::Dark).line(&diff, 0, 0, 0).is_empty());
     }
 
     #[test]
@@ -332,11 +358,11 @@ mod tests {
             &[(LineKind::Context, "/*"), (LineKind::Removed, "fn a() {}"), (LineKind::Added, "fn a() {}")],
         );
         let plain = super::tests::diff("a.rs", &[(LineKind::Added, "fn a() {}")]);
-        let mut highlighter = Highlighter::new(Background::Dark);
+        let mut highlighter = Highlighter::new(Theme::terminal(), Appearance::Dark);
         let removed = highlighter.line(&diff, 0, 0, 1).to_vec();
         let added = highlighter.line(&diff, 0, 0, 2).to_vec();
         // Both sides are inside the comment the context line opened.
         assert_eq!(removed, added);
-        assert_ne!(added, Highlighter::new(Background::Dark).line(&plain, 0, 0, 0));
+        assert_ne!(added, Highlighter::new(Theme::terminal(), Appearance::Dark).line(&plain, 0, 0, 0));
     }
 }
