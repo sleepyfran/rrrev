@@ -1456,6 +1456,9 @@ fn render_verdict(frame: &mut Frame, area: Rect, app: &App) -> Rect {
     };
     lines.push(row("Looks good", "by you", stats.good, p.green));
     lines.push(row("Read", "on screen", stats.read, p.blue));
+    if stats.plumbing > 0 {
+        lines.push(row("Plumbing", "folded", stats.plumbing, p.magenta));
+    }
     lines.push(row("Not seen", "to go", stats.unseen, p.faint));
     lines.push(Line::default());
 
@@ -1534,16 +1537,18 @@ fn render_verdict(frame: &mut Frame, area: Rect, app: &App) -> Rect {
     rect
 }
 
-/// One bar for everything changed: reviewed, read and not seen yet, with
+/// One bar for everything changed: reviewed, read, plumbing and not seen yet, with
 /// the share looked at after it.
 fn stacked_bar(stats: LineStats, width: usize, p: &Palette) -> Line<'static> {
     let total = stats.total().max(1);
     let good = stats.good * width / total;
     let read = (stats.good + stats.read) * width / total - good;
-    let rest = width - good - read;
+    let plumbing = (stats.good + stats.read + stats.plumbing) * width / total - good - read;
+    let rest = width - good - read - plumbing;
     Line::from(vec![
         Span::styled("█".repeat(good), Style::new().fg(p.green)),
         Span::styled("█".repeat(read), Style::new().fg(p.blue)),
+        Span::styled("█".repeat(plumbing), Style::new().fg(p.magenta)),
         Span::styled("░".repeat(rest), Style::new().fg(p.muted)),
         Span::raw(format!(" {:>3}% seen", stats.seen_percent())).bold(),
     ])

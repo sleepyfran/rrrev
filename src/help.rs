@@ -92,9 +92,9 @@ pub const SECTIONS: &[Section] = &[
     Section {
         title: "Layout",
         entries: &[
-            ("za / zo / zc", "toggle / open / close the file's fold"),
-            ("zR / zM", "open / close every fold"),
-            ("Enter", "on a file header, toggle its fold; on a code line, open the whole file there"),
+            ("za / zo / zc", "toggle / open / close the fold of the hunk header under the cursor, or else the file's"),
+            ("zR / zM", "open / close every fold (zM folds plumbing hunks again)"),
+            ("Enter", "on a file or hunk header, toggle its fold; on a code line, open the whole file there"),
             ("Tab", "focus the sidebar / the diff; on a narrow screen, open / close it as a pop-up"),
             ("s", "show / hide the sidebar (the pop-up on a narrow screen)"),
             ("gp / gf", "the plan / the files"),

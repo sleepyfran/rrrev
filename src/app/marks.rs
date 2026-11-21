@@ -22,6 +22,12 @@ impl App {
         self.review.is_reviewed(&self.hunk(file, hunk).id)
     }
 
+    /// Whether a hunk needs nothing more from you: marked reviewed, or
+    /// plumbing, which counts as done without a mark.
+    pub fn is_done(&self, file: usize, hunk: usize) -> bool {
+        self.is_reviewed(file, hunk) || self.diff.is_plumbing(file, hunk)
+    }
+
     pub fn file_progress(&self, file: usize) -> Progress {
         let hunks: Vec<_> = (0..self.diff.files[file].hunks.len()).map(|h| (file, h)).collect();
         self.hunks_progress(&hunks)
@@ -76,15 +82,16 @@ impl App {
 
     fn hunks_progress(&self, hunks: &[(usize, usize)]) -> Progress {
         Progress {
-            reviewed: hunks.iter().filter(|&&(f, h)| self.is_reviewed(f, h)).count(),
+            reviewed: hunks.iter().filter(|&&(f, h)| self.is_done(f, h)).count(),
             total: hunks.len(),
         }
     }
 
     /// Marks the rest of a partly reviewed set; only a fully reviewed set
-    /// gets unmarked.
+    /// gets unmarked. Goes by the marks alone, so plumbing that counts as
+    /// done still gets marked with the rest.
     fn toggle_hunks_reviewed(&mut self, hunks: &[(usize, usize)]) {
-        let reviewed = !self.hunks_progress(hunks).is_complete();
+        let reviewed = !hunks.iter().all(|&(f, h)| self.is_reviewed(f, h));
         self.set_hunks_reviewed(hunks, reviewed);
     }
 
@@ -112,6 +119,24 @@ mod tests {
     use super::*;
     use crate::app::Action;
     use crate::diff::Diff;
+
+    #[test]
+    fn plumbing_counts_as_done_without_a_mark() {
+        let mut app = plumbing_app();
+        // a.rs: the import hunk is done, the function isn't; b.rs is all done.
+        assert_eq!(app.file_progress(0), Progress { reviewed: 1, total: 2 });
+        assert!(app.file_progress(1).is_complete());
+        assert!(!app.is_reviewed(0, 0));
+        // ]u goes past the plumbing to the function.
+        app.update(Action::NextUnreviewed(1));
+        assert_eq!(app.current_row(), Some(Row::Hunk { file: 0, hunk: 1 }));
+        // r on the file header marks both: the marks decide, not the count.
+        app.update(Action::Up(2));
+        app.update(Action::ToggleReviewed);
+        assert!(app.is_reviewed(0, 0) && app.is_reviewed(0, 1));
+        let stats = app.line_stats();
+        assert_eq!((stats.good, stats.plumbing, stats.unseen), (4, 2, 0));
+    }
 
     #[test]
     fn r_toggles_the_hunk_under_the_cursor() {

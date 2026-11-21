@@ -18,20 +18,22 @@ pub struct LineStats {
     pub good: usize,
     /// On screen at some point, in hunks not marked yet.
     pub read: usize,
+    /// In plumbing hunks not marked yet, which need no reading.
+    pub plumbing: usize,
     /// Never on screen.
     pub unseen: usize,
 }
 
 impl LineStats {
     pub fn total(self) -> usize {
-        self.good + self.read + self.unseen
+        self.good + self.read + self.plumbing + self.unseen
     }
 
-    /// Share of changed lines looked at, 0 to 100.
+    /// Share of changed lines looked at or needing no look, 0 to 100.
     pub fn seen_percent(self) -> usize {
         match self.total() {
             0 => 100,
-            total => (self.good + self.read) * 100 / total,
+            total => (self.good + self.read + self.plumbing) * 100 / total,
         }
     }
 }
@@ -59,12 +61,15 @@ impl App {
 
     pub fn line_stats(&self) -> LineStats {
         let mut stats = LineStats::default();
-        for file in &self.diff.files {
-            for hunk in &file.hunks {
+        for (f, file) in self.diff.files.iter().enumerate() {
+            for (h, hunk) in file.hunks.iter().enumerate() {
                 let reviewed = self.review.is_reviewed(&hunk.id);
+                let plumbing = self.diff.is_plumbing(f, h);
                 for (i, _) in hunk.lines.iter().enumerate().filter(|(_, l)| is_change(l.kind)) {
                     if reviewed {
                         stats.good += 1;
+                    } else if plumbing {
+                        stats.plumbing += 1;
                     } else if self.review.is_seen(&hunk.id, i) {
                         stats.read += 1;
                     } else {
@@ -185,14 +190,14 @@ mod tests {
     #[test]
     fn counts_lines_good_read_and_unseen() {
         let mut app = sample_app();
-        assert_eq!(app.line_stats(), LineStats { good: 0, read: 0, unseen: 9 });
+        assert_eq!(app.line_stats(), LineStats { good: 0, read: 0, plumbing: 0, unseen: 9 });
         let rows = app.rows[..4].to_vec();
         app.mark_seen(&rows);
-        assert_eq!(app.line_stats(), LineStats { good: 0, read: 2, unseen: 7 });
+        assert_eq!(app.line_stats(), LineStats { good: 0, read: 2, plumbing: 0, unseen: 7 });
         app.update(Action::Down(2));
         app.update(Action::ToggleReviewed);
         let stats = app.line_stats();
-        assert_eq!(stats, LineStats { good: 3, read: 0, unseen: 6 });
+        assert_eq!(stats, LineStats { good: 3, read: 0, plumbing: 0, unseen: 6 });
         assert_eq!(stats.seen_percent(), 33);
     }
 

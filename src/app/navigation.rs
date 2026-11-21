@@ -64,7 +64,7 @@ impl App {
 
     pub(super) fn jump_unreviewed(&mut self, n: usize, forward: bool) {
         let stops = self.stops(
-            |row| matches!(*row, Row::Hunk { file, hunk } if !self.is_reviewed(file, hunk)),
+            |row| matches!(*row, Row::Hunk { file, hunk } if !self.is_done(file, hunk)),
             |file| !self.file_progress(file).is_complete(),
         );
         if !self.jump_to_stop(&stops, n, forward) {
@@ -231,13 +231,16 @@ mod tests {
 
     #[test]
     fn unreviewed_jumps_stop_at_folded_files_with_work_left() {
-        let mut app = app_with(vec![file("a.rs", &[1]), file("Cargo.lock", &[2])]);
+        let mut app = app_with(vec![file("a.rs", &[1]), file("b.rs", &[2]), file("Cargo.lock", &[2])]);
+        app.collapsed[1] = true;
+        app.rebuild_rows();
         app.update(Action::NextUnreviewed(1));
         app.update(Action::ToggleReviewed);
         app.update(Action::NextUnreviewed(1));
         assert_eq!(position(&app), (1, 0));
         assert_eq!(app.current_row(), Some(Row::File { file: 1 }));
 
+        // The lockfile is plumbing, done without a mark, so no stop.
         app.update(Action::TogglePageReviewed);
         app.update(Action::NextUnreviewed(1));
         assert_eq!(app.message.as_deref(), Some("Everything reviewed ✓"));

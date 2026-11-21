@@ -15,7 +15,9 @@ line `=== <id> <path> <hunk header>`. Group the hunks into a short, ordered \
 list of review steps so a reviewer can read the change like a story: first \
 what everything else depends on (data types, interfaces, schemas, \
 configuration), then the core logic, then the call sites and wiring, then \
-tests, then documentation and generated files. Keep hunks that belong \
+tests, then documentation and generated files. Hunks marked as plumbing \
+only change imports or exports: put them with the code that needs them, or \
+last when nothing does. Keep hunks that belong \
 together in one group even when they are in different files. Aim for 3 to 9 \
 groups, fewer for a small diff. Give each group a title of a few words and a \
 one-sentence rationale saying what it changes and why it comes at this point. \
