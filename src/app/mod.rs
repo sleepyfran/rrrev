@@ -11,6 +11,7 @@ mod comments_menu;
 mod context;
 mod file_view;
 mod goto;
+mod grammars;
 mod lookup;
 mod marks;
 mod mode;
@@ -27,6 +28,7 @@ mod test_support;
 
 pub use action::{Action, Effect, GoTo, Spot, VerdictAction};
 pub use goto::{Place, Target};
+pub use grammars::{EnableLanguage, Grammars};
 pub use lookup::{Hover, ReferencesMenu, hover_text};
 pub use ask::{Answer, AskPanel};
 pub use column::FindChar;
@@ -120,6 +122,11 @@ pub struct App {
     pub comments_menu: Option<CommentsMenu>,
     /// The question after `Y`, while it waits for an answer.
     pub dismiss_prompt: Option<DismissCopied>,
+    /// The question whether to build a language's grammar, while it waits
+    /// for an answer.
+    pub language_prompt: Option<EnableLanguage>,
+    /// Which languages have been offered and which grammars are building.
+    pub grammars: Grammars,
     /// The whole file the cursor was on, while it's open over the diff.
     pub file_view: Option<FileView>,
     /// Where `gd` and its kin jumped from, for `C-o`.
@@ -180,6 +187,8 @@ impl App {
             theme_picker: None,
             comments_menu: None,
             dismiss_prompt: None,
+            language_prompt: None,
+            grammars: Grammars::default(),
             file_view: None,
             jumps: Vec::new(),
             references: None,
@@ -227,8 +236,9 @@ impl App {
             self.update_help(action);
             return;
         }
-        if self.dismiss_prompt.is_some() {
-            // Answered through `answer_dismiss_copied`; nothing else gets through.
+        if self.dismiss_prompt.is_some() || self.language_prompt.is_some() {
+            // Answered through `answer_dismiss_copied` or
+            // `answer_enable_language`; nothing else gets through.
             return;
         }
         if self.hover.is_some() {

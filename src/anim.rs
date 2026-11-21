@@ -76,6 +76,7 @@ pub enum Popup {
     Comments,
     References,
     Hover,
+    Language,
     Confirm,
 }
 
@@ -97,6 +98,7 @@ impl Popup {
             | Popup::Comments
             | Popup::References
             | Popup::Hover
+            | Popup::Language
             | Popup::Confirm => {
                 Anchor::Center
             },

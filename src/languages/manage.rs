@@ -1,5 +1,5 @@
-//! `rrrev lang`: building the grammars of the languages you want, listing
-//! what's enabled, and the hint for files whose language isn't.
+//! `rrrev lang`: building the grammars of the languages you want and listing
+//! what's enabled. The app builds them too, when it offers to.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -153,52 +153,9 @@ fn run(command: &mut Command, what: &str) -> Result<()> {
     Ok(())
 }
 
-/// For the status line: languages in `paths` that rrrev could highlight and
-/// outline once enabled, and how.
-pub fn hint<'a>(registry: &Registry, paths: impl IntoIterator<Item = &'a str>) -> Option<String> {
-    let mut names: Vec<&str> = Vec::new();
-    for path in paths {
-        if let Some(language) = registry.for_path(path)
-            && !names.contains(&language.name.as_str())
-            && status(language) == Status::Available
-        {
-            names.push(&language.name);
-        }
-    }
-    let first = names.first()?;
-    let more = match names.len() {
-        1 => String::new(),
-        n => format!(" (and {} more)", n - 1),
-    };
-    Some(format!("{first}{more} has no highlighting yet: `rrrev lang enable {}`", names.join(" ")))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn hints_only_at_languages_that_can_be_enabled() {
-        let registry = Registry::builtin()
-            .merge(
-                r#"
-                [[language]]
-                name = "zig"
-                extensions = ["zig"]
-                grammar = { git = "https://example.com/zig", rev = "0000000000000000000000000000000000000000" }
-
-                [[language]]
-                name = "nix"
-                extensions = ["nix"]
-                "#,
-            )
-            .unwrap();
-        let hint = hint(&registry, ["b.zig", "c.zig", "d.nix", "README.md"]).unwrap();
-        assert_eq!(hint, "zig has no highlighting yet: `rrrev lang enable zig`");
-        let hint = super::hint(&registry, ["a.rs", "b.zig", "d.nix"]).unwrap();
-        assert_eq!(hint, "rust (and 1 more) has no highlighting yet: `rrrev lang enable rust zig`");
-        assert_eq!(super::hint(&registry, ["d.nix", "README.md"]), None);
-    }
 
     #[test]
     fn lists_every_language() {

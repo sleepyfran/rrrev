@@ -18,6 +18,7 @@
 - [x] Copy every comment for an agent (`Y`); copy lines (`y`).
 - [x] A real parser (tree-sitter) for the scopes: Rust, Python, JS, TS/TSX, Go, Java, C, C++, C#, Ruby, Swift, Kotlin, Lua and F#, once enabled with `rrrev lang enable`; other files still go by indentation.
 - [x] Load tree-sitter grammars at runtime: `rrrev lang enable <name>` fetches a grammar at the commit `languages.toml` pins and builds it into `~/.local/share/rrrev/grammars`; `rrrev lang list` shows what's enabled and whether each LSP server is in Mason. Scope rules live in `src/languages/queries/<lang>/scopes.scm`.
+- [x] Offer to build a language's grammar in the app, the first time the cursor reaches one of its files; it builds in the background and colours and breadcrumbs follow without a restart.
 - [ ] A structural diff with tree-sitter; today changes come from a word-level diff.
 - [ ] Show the commit messages of the range (the "description").
 - [ ] GitHub mode: the PR queue, CI checks, posting the review and merging. Deliberately out of scope while rrrev is local-only.

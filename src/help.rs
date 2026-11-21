@@ -39,6 +39,7 @@ pub const SECTIONS: &[Section] = &[
             ("K", "what the language server says about the symbol under the cursor: its type, signature and docs"),
             ("C-o", "back to where gd or gr jumped from"),
             ("breadcrumbs", "the line above the diff shows the file and the definitions around the cursor"),
+            ("y / n", "the first time the cursor reaches a language whose grammar isn't built, rrrev asks to build it: y builds it in the background, for highlighting and breadcrumbs; n leaves it plain until `rrrev lang enable`"),
             ("tinted words", "within a changed line, the words that changed"),
             ("-", "hide / show removed lines: the file as it is now, with the additions still marked"),
         ],

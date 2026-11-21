@@ -156,6 +156,21 @@ impl Diff {
         }
     }
 
+    /// Drops the outlines of the files in `language`, to parse them again
+    /// with a grammar built since they were asked for.
+    pub fn forget_outlines(&mut self, language: &str) {
+        let registry = crate::languages::Registry::global();
+        for (f, sides) in self.files.iter().zip(&mut self.outlines) {
+            // In `Side` order, as `scopes_at` reads them.
+            let paths = [f.old_path.as_deref(), f.new_path.as_deref()];
+            for (outline, path) in sides.iter_mut().zip(paths) {
+                if registry.for_path(path.unwrap_or(f.path())).is_some_and(|l| l.name == language) {
+                    *outline = OnceLock::new();
+                }
+            }
+        }
+    }
+
     /// What a hunk is in: the innermost definition around its first changed
     /// line, or failing that the context git put in its `@@` header.
     pub fn hunk_scope(&self, file: usize, hunk: usize) -> Option<String> {
@@ -393,6 +408,21 @@ mod tests {
         let ids = ids(&diff);
         assert_ne!(ids[0], ids[1]);
         assert_eq!(diff.sections[1].files, 1..3);
+    }
+
+    #[test]
+    fn forgets_the_outlines_of_one_language() {
+        let source = || Some(Arc::new(vec!["fn a() {".to_string(), "    1".into(), "}".into()]));
+        let rust = file("a.rs", vec![hunk(2, vec![line(LineKind::Added, 2, "    1")])]);
+        let mut diff = Diff::new(vec![rust, file("b.py", Vec::new())])
+            .with_sources(vec![Sources { old: source(), new: source() }, Sources { old: None, new: source() }]);
+        diff.scopes_at(0, Side::New, 2);
+        diff.scopes_at(1, Side::New, 2);
+        let parsed = |diff: &Diff| diff.outlines.iter().map(|s| s[Side::New as usize].get().is_some()).collect::<Vec<_>>();
+        assert_eq!(parsed(&diff), [true, true]);
+        diff.forget_outlines("rust");
+        assert_eq!(parsed(&diff), [false, true]);
+        assert_eq!(diff.scopes_at(0, Side::New, 2)[0].label, "fn a()");
     }
 
     #[test]

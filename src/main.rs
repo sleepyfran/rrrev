@@ -180,9 +180,8 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let hint = languages::manage::hint(languages::Registry::global(), diff.files.iter().map(|f| f.path()));
     let mut app = App::new(source.describe(), diff, review);
-    app.message = hint;
+    app.grammars.status = Some(languages::manage::status);
     let claude = Arc::new(ClaudeCli::from_env());
     let organizer: Arc<dyn Organizer> = claude.clone();
     let assistant: Arc<dyn Assistant> = claude;
@@ -205,6 +204,8 @@ const TICK: Duration = Duration::from_millis(100);
 type PlanResult = (u64, Result<Plan>);
 /// What a background question sends back: its job id and the answer.
 type AskResult = (u64, Result<String>);
+/// What a grammar build sends back: the language, and whether it worked.
+type BuildResult = (String, Result<()>);
 
 /// The AI behind `:organize` and the ask panel.
 struct Ai {
@@ -237,6 +238,7 @@ fn run(
     let mut keys = KeyHandler::default();
     let (plans_tx, plans): (Sender<PlanResult>, Receiver<PlanResult>) = mpsc::channel();
     let (answers_tx, answers): (Sender<AskResult>, Receiver<AskResult>) = mpsc::channel();
+    let (builds_tx, builds): (Sender<BuildResult>, Receiver<BuildResult>) = mpsc::channel();
     let mut running: Option<Running> = None;
     let mut asking: Option<Running> = None;
     let mut anim = Animator::from_env();
@@ -245,6 +247,7 @@ fn run(
     // the last, so only the latest answer counts.
     let mut asked: Option<Asked> = None;
     while !app.should_quit {
+        app.offer_grammar();
         terminal.draw(|frame| ui::render(frame, app, &mut highlighter, &mut anim, &keys.pending()))?;
 
         if let Some(mode) = appearance.changed() {
@@ -282,11 +285,24 @@ fn run(
             }
             app.finish_ask(job, result);
         }
+        while let Ok((name, result)) = builds.try_recv() {
+            if result.is_ok() {
+                // What was looked up while it was missing goes, so the
+                // next draw uses it.
+                languages::grammar::forget(&name);
+                highlighter.forget(&app.diff, &name);
+            }
+            app.finish_enable_language(&name, result);
+        }
         if event::poll(if anim.is_animating() { anim::FRAME } else { TICK })?
             && let Event::Key(key) = event::read()?
             && key.kind == KeyEventKind::Press
         {
-            if app.dismiss_prompt.is_some() {
+            if app.language_prompt.is_some() {
+                if let Some(build) = keymap::confirm_action(key) {
+                    app.answer_enable_language(build);
+                }
+            } else if app.dismiss_prompt.is_some() {
                 if let Some(dismiss) = keymap::confirm_action(key) {
                     app.answer_dismiss_copied(dismiss);
                 }
@@ -372,6 +388,19 @@ fn run(
                     // Nothing was handed over, so nothing to dismiss.
                     app.dismiss_prompt = None;
                 }
+            }
+            Some(Effect::EnableLanguage { name }) => {
+                // Fetching and compiling takes a while; the screen carries on.
+                // Nobody waits for it on quit: a build cut short leaves nothing
+                // in place.
+                let done = builds_tx.clone();
+                thread::spawn(move || {
+                    let result = match languages::Registry::global().get(&name) {
+                        Some(language) => languages::manage::enable(language).map(drop),
+                        None => Err(anyhow!("no language `{name}`")),
+                    };
+                    let _ = done.send((name, result));
+                });
             }
             None => {}
         }

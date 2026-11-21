@@ -169,6 +169,9 @@ pub enum Effect {
     References { spot: Spot },
     /// Ask about `spot`, then call `finish_hover`.
     Hover { spot: Spot },
+    /// Build the language's grammar in the background, then call
+    /// `finish_enable_language`.
+    EnableLanguage { name: String },
 }
 
 /// What `gd` and its kin look for.

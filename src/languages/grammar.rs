@@ -12,6 +12,14 @@ use tree_sitter_language::LanguageFn;
 
 use super::Registry;
 
+/// The grammars loaded so far, by name, and `None` for those that aren't
+/// there, so neither is looked for twice.
+static LOADED: OnceLock<Mutex<HashMap<String, Option<Language>>>> = OnceLock::new();
+
+fn loaded() -> std::sync::MutexGuard<'static, HashMap<String, Option<Language>>> {
+    LOADED.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// The grammar for a registry language, linked in or built, loaded the
 /// first time it's asked for. `None` when it's neither, or the build doesn't
 /// load (`rrrev lang list` says why).
@@ -20,15 +28,19 @@ pub fn get(name: &str) -> Option<Language> {
     if let Some(language) = linked(name) {
         return Some(language);
     }
-    static LOADED: OnceLock<Mutex<HashMap<String, Option<Language>>>> = OnceLock::new();
-    let mut loaded = LOADED.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
-    loaded
+    loaded()
         .entry(name.to_string())
         .or_insert_with(|| {
             let path = path(name)?;
             path.exists().then(|| load(&path, &symbol(name))).and_then(Result::ok)
         })
         .clone()
+}
+
+/// Forgets what `get` found for a language, so a grammar built since rrrev
+/// started is loaded the next time it's asked for.
+pub fn forget(name: &str) {
+    loaded().remove(name);
 }
 
 /// Where built grammars live: `$XDG_DATA_HOME/rrrev/grammars`, by default

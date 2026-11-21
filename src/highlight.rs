@@ -68,6 +68,16 @@ impl Highlighter {
         }
     }
 
+    /// Drops what was highlighted in `language`, to highlight it again with
+    /// a grammar built since.
+    pub fn forget(&mut self, diff: &Diff, language: &str) {
+        let registry = Registry::global();
+        let is = |path: &str| registry.for_path(path).is_some_and(|l| l.name == language);
+        self.cache.retain(|(file, _), _| !is(diff.files[*file].path()));
+        self.sources.retain(|(file, _), _| !is(diff.files[*file].path()));
+        self.files.retain(|(path, _), _| !is(path));
+    }
+
     /// The tint behind words that changed within a changed line.
     pub fn emphasis(&self, kind: LineKind) -> Style {
         if let Some((added, removed)) = self.tints {
@@ -351,6 +361,20 @@ mod tests {
         highlighter.set_theme(one, Appearance::Light);
         assert_eq!(highlighter.line(&diff, 0, 0, 0)[0].0.fg, Some(Color::Rgb(0xe4, 0x56, 0x49)));
         assert_ne!(highlighter.emphasis(LineKind::Added), Highlighter::new(Theme::terminal(), Appearance::Dark).emphasis(LineKind::Added));
+    }
+
+    #[test]
+    fn forgets_only_the_language_asked() {
+        let rust = diff("a.rs", &[(LineKind::Added, "fn main() {}")]);
+        let mut highlighter = Highlighter::new(Theme::terminal(), Appearance::Dark);
+        highlighter.line(&rust, 0, 0, 0);
+        highlighter.file_line("a.rs", false, &["fn a() {}".into()], 0);
+        highlighter.file_line("b.py", false, &["def b(): pass".into()], 0);
+        highlighter.forget(&rust, "rust");
+        assert!(highlighter.cache.is_empty());
+        assert_eq!(highlighter.files.keys().map(|(p, _)| p.as_str()).collect::<Vec<_>>(), ["b.py"]);
+        highlighter.forget(&rust, "python");
+        assert!(highlighter.files.is_empty());
     }
 
     #[test]

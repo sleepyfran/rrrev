@@ -131,8 +131,10 @@ pub fn render(frame: &mut Frame, app: &mut App, highlighter: &mut Highlighter, a
     let under = frame.buffer_mut().clone();
     let picker = app.theme_picker.is_some().then(|| render_theme_picker(frame, main, app));
     anim.popup(frame.buffer_mut(), Popup::Theme, picker, Some(&under));
-    // The question goes over whatever asked it.
+    // The questions go over whatever asked them.
     let under = frame.buffer_mut().clone();
+    let language = app.language_prompt.is_some().then(|| render_language_prompt(frame, frame.area(), app));
+    anim.popup(frame.buffer_mut(), Popup::Language, language, Some(&under));
     let confirm = app.dismiss_prompt.is_some().then(|| render_dismiss_prompt(frame, frame.area(), app));
     anim.popup(frame.buffer_mut(), Popup::Confirm, confirm, Some(&under));
 }
@@ -328,6 +330,45 @@ fn render_dismiss_prompt(frame: &mut Frame, area: Rect, app: &App) -> Rect {
         .border_type(BorderType::Thick)
         .border_style(Style::new().fg(p.yellow).bold())
         .title(Span::styled(" Copied ", Style::new().bold()));
+    let inner = block.inner(rect);
+    clear(frame, rect, &p);
+    frame.render_widget(block, rect);
+    frame.render_widget(Paragraph::new(lines), inner);
+    rect
+}
+
+/// When the cursor first reaches a file in a language whose grammar isn't
+/// built: whether to build it now. Returns where it was drawn.
+fn render_language_prompt(frame: &mut Frame, area: Rect, app: &App) -> Rect {
+    let p = app.palette;
+    let Some(prompt) = &app.language_prompt else { return Rect::default() };
+    let name = &prompt.name;
+    let mut lines = vec![Line::default()];
+    match &prompt.broken {
+        None => lines.push(Line::from(format!("  {name} has no highlighting yet. Build its grammar now?  ")).bold()),
+        Some(why) => {
+            lines.push(Line::from(format!("  {name}'s grammar doesn't load. Build it again?  ")).bold());
+            let room = (area.width as usize).saturating_sub(8).min(72);
+            lines.push(Line::from(format!("  {}  ", truncate_right(why, room))).dim());
+        }
+    }
+    lines.extend([
+        Line::from("  It's fetched with git and compiled in the background, which takes a minute.  ").dim(),
+        Line::default(),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled(" y ", Style::new().fg(p.on_accent).bg(p.green).bold()),
+            Span::raw(" build it   "),
+            Span::styled(" n ", Style::new().fg(p.on_accent).bg(p.muted).bold()),
+            Span::raw(" not this time"),
+        ]),
+    ]);
+    let width = (lines.iter().map(Line::width).max().unwrap_or(0) as u16 + 2).min(area.width);
+    let rect = centered(area, width, lines.len() as u16 + 3);
+    let block = Block::bordered()
+        .border_type(BorderType::Thick)
+        .border_style(Style::new().fg(p.yellow).bold())
+        .title(Span::styled(format!(" {name} "), Style::new().bold()));
     let inner = block.inner(rect);
     clear(frame, rect, &p);
     frame.render_widget(block, rect);
@@ -1572,6 +1613,7 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
         (Mode::Ask { .. }, _) => " ASK ",
         (Mode::VerdictMessage { .. }, _) => " VERDICT ",
         _ if app.show_verdict => " VERDICT ",
+        _ if app.language_prompt.is_some() => " LANGUAGE ",
         _ if app.dismiss_prompt.is_some() => " COPIED ",
         _ if app.comments_menu.is_some() => " COMMENTS ",
         _ if app.references.is_some() => " REFERENCES ",
@@ -1607,6 +1649,9 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
     if let Some(status) = &app.lsp_status {
         parts.push(status.clone());
     }
+    for (name, started) in &app.grammars.building {
+        parts.push(format!("{} enabling {name}…", spinner(*started)));
+    }
     let mut left = parts.join("  ");
     let pending = format!("{pending:>6}");
     let width = area.width as usize;
@@ -1637,7 +1682,7 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
                 {
                     " "
                 }
-                _ if app.dismiss_prompt.is_some() => " ",
+                _ if app.dismiss_prompt.is_some() || app.language_prompt.is_some() => " ",
                 _ if app.file_view.is_some() => " ? help  ]c [c changes  / search  q back to the diff ",
                 _ if matches!(app.current_row(), Some(Row::Note { .. })) => {
                     " c comment with this  dd dismiss  a ask about it  y copy "
@@ -1731,6 +1776,36 @@ mod tests {
 
         app.update(Action::CopyForAgent);
         assert!(screen(&mut app).contains("Copied the comment. Dismiss it now?"));
+    }
+
+    #[test]
+    fn draws_the_language_prompt_and_the_build_in_the_status_line() {
+        use crate::app::EnableLanguage;
+        use crate::theme::Theme;
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut app = App::new(String::new(), crate::diff::Diff::new(Vec::new()), Default::default());
+        let mut highlighter = Highlighter::new(Theme::terminal(), crate::appearance::Appearance::Dark);
+        let mut anim = Animator::new(false);
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        let mut screen = |app: &mut App| {
+            terminal.draw(|frame| render(frame, app, &mut highlighter, &mut anim, "")).unwrap();
+            terminal.backend().buffer().content().iter().map(|c| c.symbol()).collect::<String>()
+        };
+
+        app.language_prompt = Some(EnableLanguage { name: "rust".into(), broken: None });
+        let shown = screen(&mut app);
+        assert!(shown.contains("rust has no highlighting yet. Build its grammar now?"));
+        assert!(shown.contains(" LANGUAGE "));
+        app.language_prompt = Some(EnableLanguage { name: "rust".into(), broken: Some("wrong ABI".into()) });
+        let shown = screen(&mut app);
+        assert!(shown.contains("rust's grammar doesn't load. Build it again?"));
+        assert!(shown.contains("wrong ABI"));
+
+        app.answer_enable_language(true);
+        let shown = screen(&mut app);
+        assert!(!shown.contains("Build it again?"));
+        assert!(shown.contains("enabling rust…"));
     }
 
     #[test]
