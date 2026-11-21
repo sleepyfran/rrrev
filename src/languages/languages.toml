@@ -1,0 +1,101 @@
+# Every language rrrev knows: which files are in it, where its tree-sitter
+# grammar comes from, and the LSP server that speaks it. Override or add
+# entries in ~/.config/rrrev/languages.toml, in the same format; an entry
+# with the same `name` changes only the fields it sets.
+#
+# `grammar.rev` pins a commit; `grammar.path` is the grammar's folder inside
+# the repository when it holds several. LSP servers are looked up in
+# Mason's bin folder by `lsp.command`.
+
+[[language]]
+name = "rust"
+extensions = ["rs"]
+grammar = { git = "https://github.com/tree-sitter/tree-sitter-rust", rev = "77a3747266f4d621d0757825e6b11edcbf991ca5" }
+lsp = { command = "rust-analyzer", roots = ["Cargo.toml"] }
+
+[[language]]
+name = "python"
+extensions = ["py", "pyi"]
+grammar = { git = "https://github.com/tree-sitter/tree-sitter-python", rev = "293fdc02038ee2bf0e2e206711b69c90ac0d413f" }
+lsp = { command = "pyright-langserver", args = ["--stdio"], roots = ["pyproject.toml", "setup.py", "requirements.txt"] }
+
+[[language]]
+name = "javascript"
+extensions = ["js", "mjs", "cjs", "jsx"]
+grammar = { git = "https://github.com/tree-sitter/tree-sitter-javascript", rev = "44c892e0be055ac465d5eeddae6d3e194424e7de" }
+lsp = { command = "typescript-language-server", args = ["--stdio"], roots = ["package.json", "jsconfig.json"] }
+
+[[language]]
+name = "typescript"
+extensions = ["ts", "mts", "cts"]
+grammar = { git = "https://github.com/tree-sitter/tree-sitter-typescript", rev = "f975a621f4e7f532fe322e13c4f79495e0a7b2e7", path = "typescript" }
+lsp = { command = "typescript-language-server", args = ["--stdio"], roots = ["package.json", "tsconfig.json"] }
+
+[[language]]
+name = "tsx"
+extensions = ["tsx"]
+grammar = { git = "https://github.com/tree-sitter/tree-sitter-typescript", rev = "f975a621f4e7f532fe322e13c4f79495e0a7b2e7", path = "tsx" }
+lsp = { command = "typescript-language-server", args = ["--stdio"], roots = ["package.json", "tsconfig.json"] }
+
+[[language]]
+name = "go"
+extensions = ["go"]
+grammar = { git = "https://github.com/tree-sitter/tree-sitter-go", rev = "1547678a9da59885853f5f5cc8a99cc203fa2e2c" }
+lsp = { command = "gopls", roots = ["go.mod", "go.work"] }
+
+[[language]]
+name = "java"
+extensions = ["java"]
+grammar = { git = "https://github.com/tree-sitter/tree-sitter-java", rev = "94703d5a6bed02b98e438d7cad1136c01a60ba2c" }
+lsp = { command = "jdtls", roots = ["pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle"] }
+
+[[language]]
+name = "c"
+extensions = ["c", "h"]
+grammar = { git = "https://github.com/tree-sitter/tree-sitter-c", rev = "b780e47fc780ddc8da13afa35a3f4ed5c157823d" }
+lsp = { command = "clangd", roots = ["compile_commands.json", "CMakeLists.txt", "Makefile"] }
+
+[[language]]
+name = "cpp"
+extensions = ["cc", "cpp", "cxx", "c++", "hpp", "hh", "hxx"]
+grammar = { git = "https://github.com/tree-sitter/tree-sitter-cpp", rev = "f41e1a044c8a84ea9fa8577fdd2eab92ec96de02" }
+lsp = { command = "clangd", roots = ["compile_commands.json", "CMakeLists.txt", "Makefile"] }
+
+[[language]]
+name = "csharp"
+extensions = ["cs"]
+grammar = { git = "https://github.com/tree-sitter/tree-sitter-c-sharp", rev = "d4bbe18103c3380c6454085e589d2610938da142", symbol = "c_sharp" }
+lsp = { command = "csharp-ls", roots = ["*.sln", "*.csproj"] }
+
+[[language]]
+name = "ruby"
+extensions = ["rb", "rake", "gemspec"]
+filenames = ["Gemfile", "Rakefile"]
+grammar = { git = "https://github.com/tree-sitter/tree-sitter-ruby", rev = "71bd32fb7607035768799732addba884a37a6210" }
+lsp = { command = "ruby-lsp", roots = ["Gemfile"] }
+
+[[language]]
+name = "swift"
+extensions = ["swift"]
+grammar = { git = "https://github.com/alex-pinkus/tree-sitter-swift", rev = "171fa3bc343233fe07f5e17205aaada33d778825" }
+# Mason doesn't carry sourcekit-lsp, which comes with Xcode and Swift
+# toolchains: point `command` at it in your languages.toml.
+lsp = { command = "sourcekit-lsp", roots = ["Package.swift"] }
+
+[[language]]
+name = "kotlin"
+extensions = ["kt", "kts"]
+grammar = { git = "https://github.com/tree-sitter-grammars/tree-sitter-kotlin", rev = "77dd60ea0a9003ce062c9728a513ffe1aaff8c82" }
+lsp = { command = "kotlin-lsp", args = ["--stdio"], roots = ["settings.gradle.kts", "settings.gradle", "build.gradle.kts", "pom.xml"] }
+
+[[language]]
+name = "lua"
+extensions = ["lua"]
+grammar = { git = "https://github.com/tree-sitter-grammars/tree-sitter-lua", rev = "10fe0054734eec83049514ea2e718b2a56acd0c9" }
+lsp = { command = "lua-language-server", roots = [".luarc.json", ".luarc.jsonc"] }
+
+[[language]]
+name = "fsharp"
+extensions = ["fs", "fsx"]
+grammar = { git = "https://github.com/ionide/tree-sitter-fsharp", rev = "12ed86cfef3ed8c7106a6e599dafe5de911d01b3", path = "fsharp" }
+lsp = { command = "fsautocomplete", args = ["--adaptive-lsp-server-enabled"], roots = ["*.sln", "*.fsproj"] }
