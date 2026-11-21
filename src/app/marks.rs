@@ -58,7 +58,8 @@ impl App {
                 Row::Hunk { file, hunk }
                 | Row::Line { file, hunk, .. }
                 | Row::Context { file, hunk, .. }
-                | Row::Note { file, hunk, .. },
+                | Row::Note { file, hunk, .. }
+                | Row::Plumbing { file, hunk, .. },
             ) => {
                 let reviewed = self.is_reviewed(file, hunk);
                 self.set_hunks_reviewed(&[(file, hunk)], !reviewed);

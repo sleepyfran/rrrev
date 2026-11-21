@@ -186,37 +186,68 @@ impl Diff {
     /// side; or the file is a lockfile. `false` when unsure, e.g. for a
     /// language with no grammar here.
     pub fn is_plumbing(&self, file: usize, hunk: usize) -> bool {
-        let f = &self.files[file];
-        if f.looks_generated() {
+        if self.files[file].looks_generated() {
             return true;
         }
-        let Some(sides) = self.plumbing.get(file) else { return false };
-        let sources = &self.sources[file];
-        let lines = |side: Side| {
-            let (source, path) = match side {
-                Side::Old => (sources.old.as_ref(), f.old_path.as_deref()),
-                Side::New => (sources.new.as_ref(), f.new_path.as_deref()),
-            };
-            let source = source?;
-            sides[side as usize].get_or_init(|| plumbing::lines(path.unwrap_or(f.path()), source)).as_deref()
-        };
         let mut changed = false;
         for line in &self.files[file].hunks[hunk].lines {
-            let (side, no) = match line.kind {
-                LineKind::Added => (Side::New, line.new_no),
-                LineKind::Removed => (Side::Old, line.old_no),
-                _ => continue,
-            };
-            if line.content.trim().is_empty() {
+            if !matches!(line.kind, LineKind::Added | LineKind::Removed) || line.content.trim().is_empty() {
                 continue;
             }
-            let plumbing = no.zip(lines(side)).and_then(|(no, lines)| lines.get((no as usize).checked_sub(1)?).copied());
-            if plumbing != Some(true) {
+            if self.line_is_plumbing(file, line) != Some(true) {
                 return false;
             }
             changed = true;
         }
         changed
+    }
+
+    /// Whether a diff line is plumbing, on the side it's on (the new side
+    /// for context). `None` when that side's text or grammar isn't here.
+    fn line_is_plumbing(&self, file: usize, line: &DiffLine) -> Option<bool> {
+        let f = &self.files[file];
+        let sides = self.plumbing.get(file)?;
+        let sources = &self.sources[file];
+        let (side, no) = match line.kind {
+            LineKind::Removed => (Side::Old, line.old_no?),
+            LineKind::Added | LineKind::Context => (Side::New, line.new_no?),
+            LineKind::NoNewline => return None,
+        };
+        let (source, path) = match side {
+            Side::Old => (sources.old.as_ref(), f.old_path.as_deref()),
+            Side::New => (sources.new.as_ref(), f.new_path.as_deref()),
+        };
+        let source = source?;
+        let lines = sides[side as usize].get_or_init(|| plumbing::lines(path.unwrap_or(f.path()), source)).as_deref()?;
+        lines.get((no as usize).checked_sub(1)?).copied()
+    }
+
+    /// In a hunk that also changes code, the runs of lines that only change
+    /// plumbing, as ranges of the hunk's lines: each starts and ends on a
+    /// changed line, and holds nothing but plumbing, changed or not, and
+    /// blank lines. Empty for a hunk that's all plumbing, which folds whole.
+    pub fn plumbing_runs(&self, file: usize, hunk: usize) -> Vec<Range<usize>> {
+        if self.is_plumbing(file, hunk) {
+            return Vec::new();
+        }
+        let lines = &self.files[file].hunks[hunk].lines;
+        let changed = |l: &DiffLine| matches!(l.kind, LineKind::Added | LineKind::Removed);
+        let mut runs = Vec::new();
+        // The run being built: where it starts, and its last changed line.
+        let mut run: Option<(usize, usize)> = None;
+        for (i, line) in lines.iter().enumerate() {
+            let blank = line.content.trim().is_empty() && line.kind != LineKind::NoNewline;
+            let fits = blank || self.line_is_plumbing(file, line) == Some(true);
+            if !fits {
+                runs.extend(run.take().map(|(start, last)| start..last + 1));
+                continue;
+            }
+            if changed(line) && !blank {
+                run = Some(run.map_or((i, i), |(start, _)| (start, i)));
+            }
+        }
+        runs.extend(run.map(|(start, last)| start..last + 1));
+        runs
     }
 
     /// Whether a file has hunks and they're all plumbing.
@@ -393,6 +424,56 @@ pub struct DiffLine {
     pub content: String,
 }
 
+/// A small file whose one hunk drops two imports, adds one and changes a
+/// function: lines 3 to 7 of the hunk are plumbing, the rest is code.
+#[cfg(test)]
+pub fn mixed_diff() -> Diff {
+    let old = "//! Doc.\n\nuse a::B;\nuse c::D;\nuse e::F;\n\nuse g::H;\nuse i::J;\n\nfn f() {\n    1\n}\n";
+    let new = "//! Doc.\n\nuse a::B;\nuse e::F;\n\nuse k::L;\nuse i::J;\n\nfn f(l: L) {\n    2\n}\n";
+    let line = |kind, old_no: Option<u32>, new_no: Option<u32>, content: &str| DiffLine {
+        kind,
+        old_no,
+        new_no,
+        content: content.to_string(),
+    };
+    use LineKind::{Added as A, Context as C, Removed as R};
+    let lines = vec![
+        line(C, Some(1), Some(1), "//! Doc."),
+        line(C, Some(2), Some(2), ""),
+        line(C, Some(3), Some(3), "use a::B;"),
+        line(R, Some(4), None, "use c::D;"),
+        line(C, Some(5), Some(4), "use e::F;"),
+        line(C, Some(6), Some(5), ""),
+        line(R, Some(7), None, "use g::H;"),
+        line(A, None, Some(6), "use k::L;"),
+        line(C, Some(8), Some(7), "use i::J;"),
+        line(C, Some(9), Some(8), ""),
+        line(R, Some(10), None, "fn f() {"),
+        line(R, Some(11), None, "    1"),
+        line(A, None, Some(9), "fn f(l: L) {"),
+        line(A, None, Some(10), "    2"),
+        line(C, Some(12), Some(11), "}"),
+    ];
+    let hunk = Hunk {
+        id: HunkId::default(),
+        header: "@@ -1,12 +1,11 @@".into(),
+        old_start: 1,
+        old_lines: 12,
+        new_start: 1,
+        new_lines: 11,
+        lines,
+    };
+    let file = FileDiff {
+        old_path: Some("a.rs".into()),
+        new_path: Some("a.rs".into()),
+        status: FileStatus::Modified,
+        is_binary: false,
+        hunks: vec![hunk],
+    };
+    let source = |text: &str| Some(Arc::new(text.lines().map(str::to_string).collect::<Vec<_>>()));
+    Diff::new(vec![file]).with_sources(vec![Sources { old: source(old), new: source(new) }])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -486,6 +567,16 @@ mod tests {
         let ids = ids(&diff);
         assert_ne!(ids[0], ids[1]);
         assert!(ids[1].0.ends_with("-2"));
+    }
+
+    #[test]
+    fn plumbing_runs_in_a_hunk_that_also_changes_code() {
+        let diff = mixed_diff();
+        assert!(!diff.is_plumbing(0, 0));
+        // From the first changed import to the last, through the unchanged
+        // ones and blank lines between; not the context around them.
+        let runs = diff.plumbing_runs(0, 0);
+        assert_eq!((runs.len(), runs[0].clone()), (1, 3..8));
     }
 
     #[test]

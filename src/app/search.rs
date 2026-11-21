@@ -106,6 +106,7 @@ impl App {
             Row::Context { file, no, .. } => super::context_text(&self.diff, file, no)?.to_string(),
             Row::Comment { id, line, .. } => self.review.comment(id)?.text.lines().nth(line)?.to_string(),
             Row::Note { note, .. } => self.notes.get(note)?.text.clone(),
+            Row::Plumbing { .. } => return None,
         })
     }
 
@@ -116,6 +117,11 @@ impl App {
             && self.hunk(file, hunk).lines.iter().any(|l| !find_matches(&l.content, query).is_empty())
         {
             return true;
+        }
+        if let Row::Plumbing { file, hunk, start } = row {
+            let run = self.run_at(file, hunk, start).unwrap_or(start..start + 1);
+            let lines = &self.hunk(file, hunk).lines[run];
+            return lines.iter().any(|l| !find_matches(&l.content, query).is_empty());
         }
         self.row_text(row).is_some_and(|text| !find_matches(&text, query).is_empty())
     }
