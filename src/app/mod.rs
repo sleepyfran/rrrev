@@ -9,6 +9,7 @@ mod command;
 mod comments;
 mod comments_menu;
 mod context;
+mod file_view;
 mod marks;
 mod mode;
 mod navigation;
@@ -27,6 +28,7 @@ pub use ask::{Answer, AskPanel};
 pub use column::FindChar;
 pub use comments_menu::{CommentsMenu, DismissCopied};
 pub use context::{context_numbers, context_text, is_above};
+pub use file_view::{FileView, Mark};
 pub use marks::Progress;
 pub use mode::{AskTarget, CommentTarget, Focus, Mode, View};
 pub use notes::PlacedNote;
@@ -112,6 +114,8 @@ pub struct App {
     pub comments_menu: Option<CommentsMenu>,
     /// The question after `Y`, while it waits for an answer.
     pub dismiss_prompt: Option<DismissCopied>,
+    /// The whole file the cursor was on, while it's open over the diff.
+    pub file_view: Option<FileView>,
     pub should_quit: bool,
 }
 
@@ -163,6 +167,7 @@ impl App {
             theme_picker: None,
             comments_menu: None,
             dismiss_prompt: None,
+            file_view: None,
             should_quit: false,
         };
         // Generated files and files already reviewed start out of the way.
@@ -210,6 +215,10 @@ impl App {
             // Answered through `answer_dismiss_copied`; nothing else gets through.
             return;
         }
+        if self.file_view.is_some() {
+            self.update_file_view(action);
+            return;
+        }
         if self.theme_picker.is_some() {
             self.update_theme_picker(action);
             return;
@@ -236,15 +245,15 @@ impl App {
         match action {
             Action::Down(n) => self.move_by(n as isize),
             Action::Up(n) => self.move_by(-(n as isize)),
-            Action::Left(n) => self.move_column(-(n as isize)),
-            Action::Right(n) => self.move_column(n as isize),
-            Action::WordForward { n, big } => self.word_forward(n, big),
-            Action::WordBackward { n, big } => self.word_backward(n, big),
-            Action::WordEnd { n, big } => self.word_end(n, big),
-            Action::LineStart => self.line_start(false),
-            Action::FirstNonBlank => self.line_start(true),
-            Action::LineEnd => self.line_end(),
-            Action::FindChar { n, find } => self.find_char(n, find),
+            action @ (Action::Left(_)
+            | Action::Right(_)
+            | Action::WordForward { .. }
+            | Action::WordBackward { .. }
+            | Action::WordEnd { .. }
+            | Action::LineStart
+            | Action::FirstNonBlank
+            | Action::LineEnd
+            | Action::FindChar { .. }) => self.move_along(action),
             Action::HalfPageDown => self.move_by(self.half_page()),
             Action::HalfPageUp => self.move_by(-self.half_page()),
             Action::Top => self.cursor = 0,
@@ -299,11 +308,13 @@ impl App {
             Action::ListComments => self.open_comments_menu(),
             Action::ToggleVerdict => self.show_verdict = true,
             Action::PickTheme => self.open_theme_picker(),
-            Action::Select => {
-                if let Some(Row::File { .. }) = self.current_row() {
-                    self.toggle_fold();
-                }
-            }
+            Action::Select => match self.current_row() {
+                Some(Row::File { .. }) => self.toggle_fold(),
+                Some(Row::Line { .. } | Row::Context { .. }) => self.open_file_view(),
+                _ => {}
+            },
+            // Nothing to go back to yet outside the file view.
+            Action::JumpBack => {}
             Action::Cancel => {
                 if self.focus == Focus::Sidebar {
                     self.focus = Focus::Diff;

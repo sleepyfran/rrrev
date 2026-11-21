@@ -81,6 +81,7 @@ impl KeyHandler {
             (None, KeyCode::Char('c')) if ctrl => Action::Quit,
             (None, KeyCode::Char('d')) if ctrl => Action::HalfPageDown,
             (None, KeyCode::Char('u')) if ctrl => Action::HalfPageUp,
+            (None, KeyCode::Char('o')) if ctrl => Action::JumpBack,
             (None, KeyCode::Char('e')) if ctrl => Action::PanelDown(3 * n),
             (None, KeyCode::Char('y')) if ctrl => Action::PanelUp(3 * n),
             (None, KeyCode::Char('q')) => Action::Quit,

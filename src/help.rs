@@ -32,6 +32,8 @@ pub const SECTIONS: &[Section] = &[
             ("[e / ]e", "20 more lines of the file above / below the hunk (counts work: 3[e)"),
             ("ze", "the whole function, impl or class the hunk is in"),
             ("zE", "back to the hunks as git shows them"),
+            ("Enter", "the whole file at the cursor, read-only (the old one from a removed line), changes marked in the gutter"),
+            ("in the file", "the same motions and / search; ]c / [c next / previous change; q, Esc or C-o back to the diff"),
             ("breadcrumbs", "the line above the diff shows the file and the definitions around the cursor"),
             ("tinted words", "within a changed line, the words that changed"),
             ("-", "hide / show removed lines: the file as it is now, with the additions still marked"),
@@ -87,7 +89,7 @@ pub const SECTIONS: &[Section] = &[
         entries: &[
             ("za / zo / zc", "toggle / open / close the file's fold"),
             ("zR / zM", "open / close every fold"),
-            ("Enter", "on a file header, toggle its fold"),
+            ("Enter", "on a file header, toggle its fold; on a code line, open the whole file there"),
             ("Tab", "focus the sidebar / the diff; on a narrow screen, open / close it as a pop-up"),
             ("s", "show / hide the sidebar (the pop-up on a narrow screen)"),
             ("gp / gf", "the plan / the files"),

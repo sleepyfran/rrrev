@@ -8,7 +8,7 @@
 
 use std::ops::Range;
 
-use super::{App, Row};
+use super::{Action, App, Row};
 use crate::app::find_matches;
 
 /// What `f`, `F` and `t` look for.
@@ -84,83 +84,125 @@ fn first_non_blank(chars: &[char]) -> usize {
     chars.iter().position(|c| !c.is_whitespace()).unwrap_or(0)
 }
 
-impl App {
-    /// The code on a row, for rows that have a column.
-    pub fn code_text(&self, row: Row) -> Option<&str> {
-        match row {
-            Row::Line { file, hunk, line } => Some(&self.line(file, hunk, line).content),
-            Row::Context { file, no, .. } => super::context_text(&self.diff, file, no),
-            _ => None,
-        }
+/// Lines a cursor moves over: the rows of the diff, where only code rows
+/// have text, or a whole file in the file view.
+pub(super) trait CodeLines {
+    fn count(&self) -> usize;
+    /// The code on line `idx`, or `None` for a line without any (a header).
+    fn code(&self, idx: usize) -> Option<&str>;
+}
+
+impl CodeLines for [String] {
+    fn count(&self) -> usize {
+        self.len()
     }
 
-    /// The character the cursor is on, as an index into its row's code;
-    /// `None` on rows without code. An empty line has its cursor at 0.
-    pub fn cursor_column(&self) -> Option<usize> {
-        let text = self.code_text(self.current_row()?)?;
+    fn code(&self, idx: usize) -> Option<&str> {
+        self.get(idx).map(String::as_str)
+    }
+}
+
+/// The diff's rows, through the app.
+struct Rows<'a>(&'a App);
+
+impl CodeLines for Rows<'_> {
+    fn count(&self) -> usize {
+        self.0.rows.len()
+    }
+
+    fn code(&self, idx: usize) -> Option<&str> {
+        self.0.code_text(*self.0.rows.get(idx)?)
+    }
+}
+
+/// A cursor with a column: the line it's on and the column it wants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Caret {
+    pub line: usize,
+    pub column: usize,
+}
+
+impl Caret {
+    /// The character the cursor is on, as an index into its line's code;
+    /// `None` on lines without code. An empty line has its cursor at 0.
+    pub(super) fn on(&self, lines: &(impl CodeLines + ?Sized)) -> Option<usize> {
+        let text = lines.code(self.line)?;
         Some(self.column.min(text.chars().count().saturating_sub(1)))
     }
 
-    /// The bytes of the code under the cursor, for the UI to draw it; empty
-    /// on an empty line.
-    pub fn cursor_bytes(&self) -> Option<Range<usize>> {
-        let text = self.code_text(self.current_row()?)?;
-        let column = self.cursor_column()?;
+    /// The bytes of the character under the cursor; empty on an empty line.
+    pub(super) fn bytes(&self, lines: &(impl CodeLines + ?Sized)) -> Option<Range<usize>> {
+        let text = lines.code(self.line)?;
+        let column = self.on(lines)?;
         Some(match text.char_indices().nth(column) {
             Some((start, c)) => start..start + c.len_utf8(),
             None => text.len()..text.len(),
         })
     }
 
-    fn cursor_chars(&self) -> Option<Vec<char>> {
-        Some(self.code_text(self.current_row()?)?.chars().collect())
-    }
-
-    /// The next (or previous) row after the cursor's that has code, on this page.
-    fn code_row(&self, forward: bool) -> Option<usize> {
-        let has_code = |&idx: &usize| self.code_text(self.rows[idx]).is_some();
-        if forward {
-            (self.cursor + 1..self.rows.len()).find(has_code)
-        } else {
-            (0..self.cursor).rev().find(has_code)
+    /// Carries out a motion along lines; anything else is left alone.
+    pub(super) fn apply(&mut self, lines: &(impl CodeLines + ?Sized), action: Action) {
+        match action {
+            Action::Left(n) => self.shift(lines, -(n as isize)),
+            Action::Right(n) => self.shift(lines, n as isize),
+            Action::WordForward { n, big } => self.word_forward(lines, n, big),
+            Action::WordBackward { n, big } => self.word_backward(lines, n, big),
+            Action::WordEnd { n, big } => self.word_end(lines, n, big),
+            Action::LineStart => self.line_start(lines, false),
+            Action::FirstNonBlank => self.line_start(lines, true),
+            Action::LineEnd => {
+                if lines.code(self.line).is_some() {
+                    self.column = usize::MAX;
+                }
+            }
+            Action::FindChar { n, find } => self.find_char(lines, n, find),
+            _ => {}
         }
     }
 
-    /// Moves to row `idx` with the column `pick` chooses on its characters.
-    fn land(&mut self, idx: usize, pick: impl Fn(&[char]) -> Option<usize>) {
-        self.cursor = idx;
-        let chars = self.cursor_chars().unwrap_or_default();
+    fn chars(&self, lines: &(impl CodeLines + ?Sized)) -> Option<Vec<char>> {
+        Some(lines.code(self.line)?.chars().collect())
+    }
+
+    /// The next (or previous) line with code.
+    fn code_line(&self, lines: &(impl CodeLines + ?Sized), forward: bool) -> Option<usize> {
+        let has_code = |&idx: &usize| lines.code(idx).is_some();
+        if forward {
+            (self.line + 1..lines.count()).find(has_code)
+        } else {
+            (0..self.line).rev().find(has_code)
+        }
+    }
+
+    /// Moves to `line` with the column `pick` chooses on its characters.
+    fn land(&mut self, lines: &(impl CodeLines + ?Sized), line: usize, pick: impl Fn(&[char]) -> Option<usize>) {
+        self.line = line;
+        let chars = self.chars(lines).unwrap_or_default();
         self.column = pick(&chars).unwrap_or(0);
     }
 
     /// `h` / `l`.
-    pub(super) fn move_column(&mut self, delta: isize) {
-        let (Some(column), Some(chars)) = (self.cursor_column(), self.cursor_chars()) else { return };
+    fn shift(&mut self, lines: &(impl CodeLines + ?Sized), delta: isize) {
+        let (Some(column), Some(chars)) = (self.on(lines), self.chars(lines)) else { return };
         self.column = column.saturating_add_signed(delta).min(chars.len().saturating_sub(1));
     }
 
-    /// `0` / `^` / `$`.
-    pub(super) fn line_start(&mut self, skip_blanks: bool) {
-        if let Some(chars) = self.cursor_chars() {
+    /// `0` / `^`.
+    fn line_start(&mut self, lines: &(impl CodeLines + ?Sized), skip_blanks: bool) {
+        if let Some(chars) = self.chars(lines) {
             self.column = if skip_blanks { first_non_blank(&chars) } else { 0 };
         }
     }
 
-    pub(super) fn line_end(&mut self) {
-        if self.cursor_chars().is_some() {
-            self.column = usize::MAX;
-        }
-    }
-
-    /// `w` / `W`: the next word's start, carrying on to the next code row.
-    pub(super) fn word_forward(&mut self, n: usize, big: bool) {
+    /// `w` / `W`: the next word's start, carrying on to the next code line.
+    fn word_forward(&mut self, lines: &(impl CodeLines + ?Sized), n: usize, big: bool) {
         for _ in 0..n {
-            let here = self.cursor_chars().zip(self.cursor_column());
+            let here = self.chars(lines).zip(self.on(lines));
             if let Some(next) = here.and_then(|(chars, i)| next_word_start(&chars, i, big)) {
                 self.column = next;
-            } else if let Some(row) = self.code_row(true) {
+            } else if let Some(line) = self.code_line(lines, true) {
                 // Like vim, stops at the start of an empty line.
-                self.land(row, |chars| Some(first_non_blank(chars)));
+                self.land(lines, line, |chars| Some(first_non_blank(chars)));
             } else {
                 break;
             }
@@ -168,28 +210,28 @@ impl App {
     }
 
     /// `b` / `B`: the start of this word or the one before, carrying on to
-    /// the previous code row.
-    pub(super) fn word_backward(&mut self, n: usize, big: bool) {
+    /// the previous code line.
+    fn word_backward(&mut self, lines: &(impl CodeLines + ?Sized), n: usize, big: bool) {
         for _ in 0..n {
-            let here = self.cursor_chars().zip(self.cursor_column());
+            let here = self.chars(lines).zip(self.on(lines));
             if let Some(prev) = here.and_then(|(chars, i)| prev_word_start(&chars, i, big)) {
                 self.column = prev;
-            } else if let Some(row) = self.code_row(false) {
-                self.land(row, |chars| prev_word_start(chars, chars.len(), big));
+            } else if let Some(line) = self.code_line(lines, false) {
+                self.land(lines, line, |chars| prev_word_start(chars, chars.len(), big));
             } else {
                 break;
             }
         }
     }
 
-    /// `e` / `E`: the end of this word or the next, carrying on to the next code row.
-    pub(super) fn word_end(&mut self, n: usize, big: bool) {
+    /// `e` / `E`: the end of this word or the next, carrying on to the next code line.
+    fn word_end(&mut self, lines: &(impl CodeLines + ?Sized), n: usize, big: bool) {
         for _ in 0..n {
-            let here = self.cursor_chars().zip(self.cursor_column());
+            let here = self.chars(lines).zip(self.on(lines));
             if let Some(end) = here.and_then(|(chars, i)| word_end(&chars, Some(i), big)) {
                 self.column = end;
-            } else if let Some(row) = self.code_row(true) {
-                self.land(row, |chars| word_end(chars, None, big));
+            } else if let Some(line) = self.code_line(lines, true) {
+                self.land(lines, line, |chars| word_end(chars, None, big));
             } else {
                 break;
             }
@@ -198,8 +240,8 @@ impl App {
 
     /// `f` / `F` / `t`: the `n`th `target` on the line; stays put if there
     /// aren't that many.
-    pub(super) fn find_char(&mut self, n: usize, find: FindChar) {
-        let (Some(chars), Some(column)) = (self.cursor_chars(), self.cursor_column()) else { return };
+    fn find_char(&mut self, lines: &(impl CodeLines + ?Sized), n: usize, find: FindChar) {
+        let (Some(chars), Some(column)) = (self.chars(lines), self.on(lines)) else { return };
         let hits: Vec<usize> = if find.forward {
             // `t` right before a match would find it again; vim skips it.
             let from = column + 1 + usize::from(find.till);
@@ -212,12 +254,52 @@ impl App {
         }
     }
 
-    /// After a search lands on a row, puts the column on the first match.
-    pub(super) fn column_on_match(&mut self, query: &str) {
-        let Some(text) = self.current_row().and_then(|row| self.code_text(row)) else { return };
+    /// Puts the column on the first match of `query` on its line.
+    pub(super) fn move_to_match(&mut self, lines: &(impl CodeLines + ?Sized), query: &str) {
+        let Some(text) = lines.code(self.line) else { return };
         if let Some(found) = find_matches(text, query).first() {
             self.column = text[..found.start].chars().count();
         }
+    }
+}
+
+impl App {
+    /// The code on a row, for rows that have a column.
+    pub fn code_text(&self, row: Row) -> Option<&str> {
+        match row {
+            Row::Line { file, hunk, line } => Some(&self.line(file, hunk, line).content),
+            Row::Context { file, no, .. } => super::context_text(&self.diff, file, no),
+            _ => None,
+        }
+    }
+
+    fn caret(&self) -> Caret {
+        Caret { line: self.cursor, column: self.column }
+    }
+
+    /// The character the cursor is on, as an index into its row's code;
+    /// `None` on rows without code.
+    pub fn cursor_column(&self) -> Option<usize> {
+        self.caret().on(&Rows(self))
+    }
+
+    /// The bytes of the code under the cursor, for the UI to draw it.
+    pub fn cursor_bytes(&self) -> Option<Range<usize>> {
+        self.caret().bytes(&Rows(self))
+    }
+
+    /// A motion along the line (`h`, `w`, `$`, `f`…) in the diff.
+    pub(super) fn move_along(&mut self, action: Action) {
+        let mut caret = self.caret();
+        caret.apply(&Rows(self), action);
+        (self.cursor, self.column) = (caret.line, caret.column);
+    }
+
+    /// After a search lands on a row, puts the column on the first match.
+    pub(super) fn column_on_match(&mut self, query: &str) {
+        let mut caret = self.caret();
+        caret.move_to_match(&Rows(self), query);
+        self.column = caret.column;
     }
 }
 
@@ -225,7 +307,7 @@ impl App {
 mod tests {
     use super::super::test_support::*;
     use super::*;
-    use crate::app::{Action, Focus};
+    use crate::app::Focus;
 
     /// One file, one hunk, a line per entry; rows 2.. are the lines.
     fn lines_app(lines: &[&str]) -> App {

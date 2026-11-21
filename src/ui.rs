@@ -10,10 +10,10 @@ use std::ops::Range;
 
 use crate::anim::{Animator, Popup};
 use crate::app::{
-    Answer, App, CommentTarget, Focus, LineStats, Mode, Progress, Row, View, context_numbers, context_text,
-    find_matches, is_above,
+    Answer, App, CommentTarget, FileView, Focus, LineStats, Mark, Mode, Progress, Row, View, context_numbers,
+    context_text, find_matches, is_above,
 };
-use crate::diff::{FileStatus, LineKind};
+use crate::diff::{FileStatus, LineKind, Side, scope};
 use crate::help;
 use crate::highlight::{Highlighter, Segment};
 use crate::review::VerdictKind;
@@ -73,13 +73,18 @@ pub fn render(frame: &mut Frame, app: &mut App, highlighter: &mut Highlighter, a
     app.set_viewport(rows_area.width as usize, rows_area.height as usize);
     render_title(frame, title, app);
     anim.glint_title(frame.buffer_mut(), title);
-    render_breadcrumbs(frame, crumbs, app);
-    let scroll = anim.scroll(app);
-    let rows = render_body(frame, rows_area, app, highlighter, scroll);
-    let shown: Vec<Row> = rows.iter().map(|(row, _)| *row).collect();
-    app.mark_seen(&shown);
-    anim.glint_rows(frame.buffer_mut(), &rows);
-    anim.slide(frame.buffer_mut(), rows_area);
+    if let Some(view) = &app.file_view {
+        render_file_crumbs(frame, crumbs, app, view);
+        render_file_view(frame, rows_area, app, view, highlighter);
+    } else {
+        render_breadcrumbs(frame, crumbs, app);
+        let scroll = anim.scroll(app);
+        let rows = render_body(frame, rows_area, app, highlighter, scroll);
+        let shown: Vec<Row> = rows.iter().map(|(row, _)| *row).collect();
+        app.mark_seen(&shown);
+        anim.glint_rows(frame.buffer_mut(), &rows);
+        anim.slide(frame.buffer_mut(), rows_area);
+    }
     if let Some((area, docked_right)) = ask_area {
         render_ask_panel(frame, area, app, docked_right);
     }
@@ -1017,6 +1022,87 @@ fn note_line(app: &App, note: usize) -> Vec<Line<'static>> {
     hanging(app, gutter, hang, spans)
 }
 
+/// The file view's file, which side of the diff it is, and the definitions
+/// around the cursor.
+fn render_file_crumbs(frame: &mut Frame, area: Rect, app: &App, view: &FileView) {
+    let p = app.palette;
+    let no = view.line_no();
+    let scopes = match view.file {
+        Some(file) => app.diff.scopes_at(file, view.side, no),
+        None => scope::by_indentation(&view.lines, no),
+    };
+    let side = match view.side {
+        Side::New => "new",
+        Side::Old => "old",
+    };
+    let mut spans = vec![
+        Span::raw(" "),
+        Span::styled(view.path.clone(), Style::new().bold()),
+        Span::styled(format!(" ({side})"), Style::new().fg(p.muted)),
+    ];
+    for s in scopes {
+        spans.push(Span::styled(" › ", Style::new().fg(p.muted)));
+        spans.push(Span::raw(s.label));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// A whole file, from its scroll line down: numbers and the diff's marks in
+/// the gutter, the code unwrapped and scrolled sideways to keep the cursor in
+/// sight.
+fn render_file_view(frame: &mut Frame, area: Rect, app: &App, view: &FileView, highlighter: &mut Highlighter) {
+    let p = app.palette;
+    let width = view.lines.len().to_string().len();
+    let gutter_width = (width + 4) as u16;
+    let [gutter_area, text_area] =
+        Layout::horizontal([Constraint::Length(gutter_width), Constraint::Min(0)]).areas(area);
+    let old = view.side == Side::Old;
+    let (own, other) = if old { (p.red, p.green) } else { (p.green, p.red) };
+    let cursor_at = app.file_view_cursor();
+    let mut gutter = Vec::new();
+    let mut text = Vec::new();
+    for i in view.scroll..view.lines.len().min(view.scroll + area.height as usize) {
+        let mark = match view.marks.get(i).copied().flatten() {
+            Some(Mark::Changed) => Span::styled("▌", Style::new().fg(own)),
+            Some(Mark::Modified) => Span::styled("▌", Style::new().fg(p.yellow)),
+            Some(Mark::Gap) => Span::styled("▔", Style::new().fg(other)),
+            None => Span::raw(" "),
+        };
+        let number_style = match view.marks.get(i).copied().flatten() {
+            Some(Mark::Changed) => Style::new().fg(own),
+            Some(Mark::Modified) => Style::new().fg(p.yellow),
+            _ => Style::new().dim(),
+        };
+        gutter.push(Line::from(vec![
+            Span::styled(format!(" {:>width$} ", i + 1), number_style),
+            mark,
+            Span::raw(" "),
+        ]));
+        let line = &view.lines[i];
+        let segments = match highlighter.file_line(&view.path, old, &view.lines, i) {
+            [] => vec![(Style::new(), line.clone())],
+            segments => segments.to_vec(),
+        };
+        let here = i == view.caret.line;
+        let segments = with_cursor(segments, if here { cursor_at.clone() } else { None });
+        let segments = segments.into_iter().map(|(style, text)| (style, text.replace('\t', "    "))).collect();
+        let mut line = Line::from(highlighted(segments, app));
+        if here {
+            line = line.style(Style::new().bg(p.cursor));
+        }
+        text.push(line);
+    }
+    // Sideways, as far as it takes to show the cursor, with a little room after it.
+    let room = text_area.width as usize;
+    let before: usize = view.lines.get(view.caret.line).map_or(0, |line| {
+        let column = view.cursor_column();
+        line.chars().take(column).map(|c| if c == '\t' { 4 } else { 1 }).sum()
+    });
+    let left = if room > 0 && before + 1 > room.saturating_sub(4) { before + 5 - room } else { 0 };
+    frame.render_widget(Paragraph::new(gutter), gutter_area);
+    frame.render_widget(Paragraph::new(text).scroll((0, left as u16)), text_area);
+}
+
 /// The path of the file under the cursor and the definitions around it,
 /// outermost first: `src/output.rs › impl Output › fn truncate(…)`.
 fn render_breadcrumbs(frame: &mut Frame, area: Rect, app: &App) {
@@ -1398,8 +1484,12 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
         (_, Focus::Sidebar) => " FILES ",
         _ => " NORMAL ",
     };
+    let mode = if app.file_view.is_some() && mode == " NORMAL " { " FILE " } else { mode };
     let mut parts = vec![mode.to_string()];
-    if let Some(row) = app.current_row() {
+    if let Some(view) = &app.file_view {
+        parts.push(format!("{}:{}", view.path, view.line_no()));
+        parts.push(format!("line {} of {}", view.line_no(), view.lines.len()));
+    } else if let Some(row) = app.current_row() {
         let mut location = match row.file() {
             Some(file) => app.diff.files[file].display_path(),
             None => app.page_label(app.page),
@@ -1443,6 +1533,7 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
                 Mode::Comment { .. } | Mode::Ask { .. } | Mode::VerdictMessage { .. } => " ",
                 _ if app.show_verdict || app.theme_picker.is_some() || app.comments_menu.is_some() => " ",
                 _ if app.dismiss_prompt.is_some() => " ",
+                _ if app.file_view.is_some() => " ? help  ]c [c changes  / search  q back to the diff ",
                 _ if matches!(app.current_row(), Some(Row::Note { .. })) => {
                     " c comment with this  dd dismiss  a ask about it  y copy "
                 }

@@ -95,6 +95,8 @@ pub enum Action {
     /// `T`: the theme picker.
     PickTheme,
     Select,
+    /// `C-o`: back to where the cursor jumped from.
+    JumpBack,
     Cancel,
     Quit,
 }

@@ -40,6 +40,8 @@ pub struct Highlighter {
     cache: HashMap<(usize, usize), Vec<Vec<Segment>>>,
     /// Per file: each line of its whole text, for context shown around hunks.
     sources: HashMap<usize, Vec<Vec<Segment>>>,
+    /// Per path and side: each line of a file shown whole in the file view.
+    files: HashMap<(String, bool), Vec<Vec<Segment>>>,
 }
 
 /// Files longer than this are shown as plain text around hunks, rather than
@@ -56,6 +58,7 @@ impl Highlighter {
             appearance,
             cache: HashMap::new(),
             sources: HashMap::new(),
+            files: HashMap::new(),
         }
     }
 
@@ -69,6 +72,7 @@ impl Highlighter {
             self.tints = theme.palette(appearance).tints;
             self.cache.clear();
             self.sources.clear();
+            self.files.clear();
         }
     }
 
@@ -101,6 +105,18 @@ impl Highlighter {
         }
         let index = (no as usize).checked_sub(1);
         index.and_then(|i| self.sources[&file].get(i)).map_or(&[], Vec::as_slice)
+    }
+
+    /// The segments of line `index` (0-based) of a file shown whole, as
+    /// `source_line` does for context; `old` tells the two sides of a file apart.
+    pub fn file_line(&mut self, path: &str, old: bool, source: &[String], index: usize) -> &[Segment] {
+        let key = (path.to_string(), old);
+        if !self.files.contains_key(&key) {
+            let lines =
+                if source.len() <= MAX_SOURCE_LINES { self.highlight_source(path, source) } else { Vec::new() };
+            self.files.insert(key.clone(), lines);
+        }
+        self.files[&key].get(index).map_or(&[], Vec::as_slice)
     }
 
     fn highlight_source(&self, path: &str, source: &[String]) -> Vec<Vec<Segment>> {
