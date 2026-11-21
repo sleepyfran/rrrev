@@ -11,7 +11,6 @@ git2 = "0.21.0"
 ratatui = "0.30.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-syntect = { version = "5.3.0", default-features = false, features = ["default-onig"] }
 terminal-colorsaurus = "1.0.3"
 toml = { version = "1.2.1", default-features = false, features = ["parse", "serde"] }
 tree-sitter = "0.27.2"
@@ -29,7 +28,6 @@ tree-sitter-ruby = "0.23.1"
 tree-sitter-rust = "0.24.2"
 tree-sitter-swift = { version = "0.7.4", optional = true }
 tree-sitter-typescript = "0.23.2"
-two-face = { version = "0.5.2", default-features = false, features = ["syntect-default-onig"] }
 
 [features]
 # Grammars for scopes (breadcrumbs, `ze`). The heavy ones are opt-in: each

@@ -5,10 +5,7 @@
 
 pub mod doom;
 
-use std::str::FromStr;
-
-use ratatui::style::{Color, Style};
-use syntect::highlighting::{self, FontStyle, ScopeSelectors, StyleModifier, ThemeItem, ThemeSettings};
+use ratatui::style::{Color, Modifier, Style};
 
 use crate::appearance::Appearance;
 use doom::{Doom, Rgb, blend};
@@ -88,10 +85,16 @@ impl Theme {
         self.variant(appearance).map_or(Palette::TERMINAL, Palette::from_doom)
     }
 
-    /// Its syntax colours for syntect; `None` for the terminal's theme, which
-    /// leaves the choice to the highlighter.
-    pub fn syntax(&self, appearance: Appearance) -> Option<highlighting::Theme> {
-        self.variant(appearance).map(|d| syntax_theme(self.name, d))
+    /// Its syntax colours. The terminal's theme takes base16 Ocean's, in the
+    /// OS's shade.
+    pub fn syntax(&self, appearance: Appearance) -> Syntax {
+        match (self.variant(appearance), appearance) {
+            (Some(d), _) => Syntax::from_doom(d, |c| c),
+            (None, Appearance::Dark) => Syntax::from_doom(&doom::OCEAN, |c| c),
+            // Ocean's light shade keeps the dark one's pale accents, which
+            // wash out on a white background.
+            (None, Appearance::Light) => Syntax::from_doom(&doom::OCEAN_LIGHT, readable_on_white),
+        }
     }
 }
 
@@ -210,63 +213,76 @@ fn luminance(c: Rgb) -> f32 {
     0.2126 * linear(c.0) + 0.7152 * linear(c.1) + 0.0722 * linear(c.2)
 }
 
-/// A syntect theme painting TextMate scopes with the doom theme's faces,
-/// matched up the way its Emacs font-lock faces are.
-fn syntax_theme(name: &str, d: &Doom) -> highlighting::Theme {
-    let none = FontStyle::empty();
-    // As doom's `font-lock-property-name-face`.
-    let property = blend(d.keywords, d.fg, 0.6);
-    let rules: &[(&str, Rgb, FontStyle)] = &[
-        ("comment, punctuation.definition.comment", d.comments, none),
-        ("comment.block.documentation, comment.line.documentation, comment.line.double-slash.documentation", d.doc_comments, none),
-        ("string, punctuation.definition.string", d.strings, none),
-        ("constant.character.escape, string.regexp", d.operators, FontStyle::BOLD),
-        ("constant.numeric", d.numbers, none),
-        ("constant.language, constant.other, support.constant, variable.other.constant, entity.name.constant", d.constants, none),
-        ("keyword, storage, keyword.control", d.keywords, none),
-        ("keyword.operator", d.operators, none),
-        (
-            "entity.name.type, entity.name.class, entity.name.struct, entity.name.enum, entity.name.union, \
-             entity.name.trait, entity.name.interface, entity.other.inherited-class, support.type, support.class, \
-             storage.type.primitive",
-            d.types,
-            none,
-        ),
-        ("entity.name.function, support.function, variable.function", d.functions, none),
-        ("meta.method-call entity.name.function, meta.function-call.method variable.function, variable.function.method", d.methods, none),
-        ("variable.parameter, entity.name.variable", d.variables, none),
-        ("variable.language, support.function.builtin, support.type.builtin, support.variable", d.builtin, none),
-        ("meta.annotation, meta.attribute, entity.name.function.decorator, meta.preprocessor", d.operators, none),
-        ("entity.name.tag", d.methods, none),
-        ("entity.other.attribute-name", d.types, none),
-        ("support.type.property-name, meta.mapping.key string, entity.name.tag.yaml", property, none),
-        ("markup.heading, markup.heading entity.name", d.keywords, FontStyle::BOLD),
-        ("markup.bold", d.fg, FontStyle::BOLD),
-        ("markup.italic", d.fg, FontStyle::ITALIC),
-        ("markup.raw, markup.inline.raw", d.strings, none),
-        ("markup.underline.link, string.other.link", d.highlight, FontStyle::UNDERLINE),
-        ("markup.inserted", d.vc_added, none),
-        ("markup.deleted", d.vc_deleted, none),
-        ("markup.changed", d.vc_modified, none),
-        ("invalid", d.red, none),
-    ];
-    let color = |c: Rgb| highlighting::Color { r: c.0, g: c.1, b: c.2, a: 0xff };
-    highlighting::Theme {
-        name: Some(name.to_string()),
-        author: None,
-        settings: ThemeSettings { foreground: Some(color(d.fg)), background: Some(color(d.bg)), ..Default::default() },
-        scopes: rules
+/// Colours for tree-sitter's highlight captures (`keyword`,
+/// `function.method`, …), matched up with a doom theme's faces the way its
+/// Emacs font-lock faces are.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Syntax {
+    rules: Vec<(&'static str, Style)>,
+}
+
+impl Syntax {
+    fn from_doom(d: &Doom, adjust: fn(Rgb) -> Rgb) -> Syntax {
+        // As doom's `font-lock-property-name-face`.
+        let property = blend(d.keywords, d.fg, 0.6);
+        let bold = Modifier::BOLD;
+        let none = Modifier::empty();
+        let faces: &[(&[&'static str], Rgb, Modifier)] = &[
+            (&["comment"], d.comments, none),
+            (&["comment.documentation"], d.doc_comments, none),
+            (&["string", "character"], d.strings, none),
+            (&["string.escape", "escape", "string.regexp", "string.special.regex", "character.special"], d.operators, bold),
+            (&["string.special.symbol"], d.constants, none),
+            (&["number", "float"], d.numbers, none),
+            (&["constant", "constant.builtin", "constant.macro", "boolean"], d.constants, none),
+            (&["keyword", "conditional", "repeat", "exception", "include"], d.keywords, none),
+            (&["operator"], d.operators, none),
+            (&["type", "type.builtin", "type.definition", "constructor", "module", "namespace"], d.types, none),
+            (&["function", "function.call", "function.macro", "function.special"], d.functions, none),
+            (&["function.method", "function.member", "method"], d.methods, none),
+            (&["variable.parameter", "parameter"], d.variables, none),
+            (&["variable.builtin", "function.builtin", "module.builtin", "variable.parameter.builtin"], d.builtin, none),
+            (&["attribute", "label", "preproc", "keyword.directive", "punctuation.special", "embedded"], d.operators, none),
+            (&["tag"], d.methods, none),
+            (&["tag.attribute"], d.types, none),
+            (&["property", "property.definition", "field", "variable.member"], property, none),
+        ];
+        let rules = faces
             .iter()
-            .map(|&(scope, c, font_style)| ThemeItem {
-                scope: ScopeSelectors::from_str(scope).expect("scope selectors parse"),
-                style: StyleModifier {
-                    foreground: Some(color(c)),
-                    background: None,
-                    font_style: (!font_style.is_empty()).then_some(font_style),
-                },
+            .flat_map(|&(names, color, modifier)| {
+                // Text in the theme's own colour keeps the terminal's.
+                let mut style = Style::new().add_modifier(modifier);
+                if color != d.fg {
+                    style = style.fg(rgb(adjust(color)));
+                }
+                names.iter().map(move |&name| (name, style))
             })
-            .collect(),
+            .collect();
+        Syntax { rules }
     }
+
+    /// The style of a capture: its own rule, or its nearest parent's, so
+    /// `function.method.call` falls back to `function.method`, then
+    /// `function`. `None` leaves the text plain.
+    pub fn style(&self, capture: &str) -> Option<Style> {
+        let mut name = capture;
+        loop {
+            if let Some(&(_, style)) = self.rules.iter().find(|(n, _)| *n == name) {
+                return Some(style);
+            }
+            name = name.rsplit_once('.')?.0;
+        }
+    }
+}
+
+/// Darkens `color`, keeping its hue, until it has the 4.5:1 contrast with
+/// white that WCAG asks of body text.
+pub fn readable_on_white(mut color: Rgb) -> Rgb {
+    while contrast(color, Rgb(255, 255, 255)) < 4.5 {
+        let darker = |c: u8| (f32::from(c) * 0.9) as u8;
+        color = Rgb(darker(color.0), darker(color.1), darker(color.2));
+    }
+    color
 }
 
 #[cfg(test)]
@@ -294,8 +310,8 @@ mod tests {
     fn every_theme_has_a_dark_and_a_light_variant_that_read() {
         for theme in &THEMES[1..] {
             for appearance in [Appearance::Dark, Appearance::Light] {
-                let syntax = theme.syntax(appearance).expect("doom themes bring syntax colours");
-                assert!(syntax.scopes.len() > 10, "{}", theme.id);
+                let syntax = theme.syntax(appearance);
+                assert!(syntax.rules.len() > 10, "{}", theme.id);
                 let d = theme.variant(appearance).unwrap();
                 assert_eq!(luminance(d.bg) > 0.5, appearance == Appearance::Light, "{} {appearance:?}", theme.id);
                 let Palette { yellow: Color::Rgb(r, g, b), .. } = theme.palette(appearance) else { panic!() };
@@ -308,6 +324,10 @@ mod tests {
     fn terminal_theme_keeps_the_terminal_colours() {
         let palette = Theme::terminal().palette(Appearance::Light);
         assert_eq!(palette.bg, Color::Reset);
-        assert!(Theme::terminal().syntax(Appearance::Dark).is_none());
+        // Ocean's colours, with plain text left to the terminal.
+        let syntax = Theme::terminal().syntax(Appearance::Dark);
+        assert_eq!(syntax.style("keyword.function").and_then(|s| s.fg), Some(Color::Rgb(0xb4, 0x8e, 0xad)));
+        assert_eq!(syntax.style("variable"), None);
+        assert_eq!(syntax.style("punctuation.bracket"), None);
     }
 }

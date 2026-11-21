@@ -57,7 +57,7 @@ impl Sources {
 }
 
 /// Which side of the diff a line number counts on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Side {
     Old,
     New,

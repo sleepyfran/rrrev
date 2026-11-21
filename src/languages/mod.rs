@@ -3,6 +3,9 @@
 //! list ships in `languages.toml`; `~/.config/rrrev/languages.toml` can
 //! change entries or add new ones.
 
+pub mod grammar;
+pub mod query;
+
 use std::fs;
 use std::path::Path;
 use std::sync::OnceLock;

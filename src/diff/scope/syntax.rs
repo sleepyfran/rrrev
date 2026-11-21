@@ -2,158 +2,23 @@
 //! a grammar here. A file parses once into its outline, every definition in
 //! it in the order they start, and lines look their scopes up from that.
 
-use std::sync::OnceLock;
-
-use tree_sitter::{Language, Node, Parser, Query, QueryCursor, StreamingIterator};
+use tree_sitter::{Node, Parser, QueryCursor, StreamingIterator};
 
 use super::{Scope, shorten};
-use crate::languages::Registry;
-
-/// The languages with a grammar, picked by file name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Lang {
-    Rust,
-    Python,
-    JavaScript,
-    TypeScript,
-    Tsx,
-    Go,
-    Java,
-    C,
-    Cpp,
-    #[cfg(feature = "csharp")]
-    CSharp,
-    Ruby,
-    #[cfg(feature = "swift")]
-    Swift,
-    #[cfg(feature = "kotlin")]
-    Kotlin,
-    Lua,
-    #[cfg(feature = "fsharp")]
-    FSharp,
-}
+use crate::languages::{Registry, grammar, query};
 
 /// How many lines a label may take, for signatures split over several.
 const MAX_LABEL_ROWS: usize = 12;
 
-impl Lang {
-    #[cfg(test)]
-    const ALL: &[Lang] = &[
-        Lang::Rust,
-        Lang::Python,
-        Lang::JavaScript,
-        Lang::TypeScript,
-        Lang::Tsx,
-        Lang::Go,
-        Lang::Java,
-        Lang::C,
-        Lang::Cpp,
-        #[cfg(feature = "csharp")]
-        Lang::CSharp,
-        Lang::Ruby,
-        #[cfg(feature = "swift")]
-        Lang::Swift,
-        #[cfg(feature = "kotlin")]
-        Lang::Kotlin,
-        Lang::Lua,
-        #[cfg(feature = "fsharp")]
-        Lang::FSharp,
-    ];
-
-    /// The language of a file, from the registry, if it has a grammar here.
-    fn from_path(path: &str) -> Option<Lang> {
-        Lang::from_name(&Registry::global().for_path(path)?.name)
-    }
-
-    /// The grammar linked in for a registry language, by its name.
-    fn from_name(name: &str) -> Option<Lang> {
-        Some(match name {
-            "rust" => Lang::Rust,
-            "python" => Lang::Python,
-            "javascript" => Lang::JavaScript,
-            "typescript" => Lang::TypeScript,
-            "tsx" => Lang::Tsx,
-            "go" => Lang::Go,
-            "java" => Lang::Java,
-            "c" => Lang::C,
-            "cpp" => Lang::Cpp,
-            #[cfg(feature = "csharp")]
-            "csharp" => Lang::CSharp,
-            "ruby" => Lang::Ruby,
-            #[cfg(feature = "swift")]
-            "swift" => Lang::Swift,
-            #[cfg(feature = "kotlin")]
-            "kotlin" => Lang::Kotlin,
-            "lua" => Lang::Lua,
-            #[cfg(feature = "fsharp")]
-            "fsharp" => Lang::FSharp,
-            _ => return None,
-        })
-    }
-
-    fn grammar(self) -> Language {
-        match self {
-            Lang::Rust => tree_sitter_rust::LANGUAGE.into(),
-            Lang::Python => tree_sitter_python::LANGUAGE.into(),
-            Lang::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
-            Lang::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-            Lang::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
-            Lang::Go => tree_sitter_go::LANGUAGE.into(),
-            Lang::Java => tree_sitter_java::LANGUAGE.into(),
-            Lang::C => tree_sitter_c::LANGUAGE.into(),
-            Lang::Cpp => tree_sitter_cpp::LANGUAGE.into(),
-            #[cfg(feature = "csharp")]
-            Lang::CSharp => tree_sitter_c_sharp::LANGUAGE.into(),
-            Lang::Ruby => tree_sitter_ruby::LANGUAGE.into(),
-            #[cfg(feature = "swift")]
-            Lang::Swift => tree_sitter_swift::LANGUAGE.into(),
-            #[cfg(feature = "kotlin")]
-            Lang::Kotlin => tree_sitter_kotlin_ng::LANGUAGE.into(),
-            Lang::Lua => tree_sitter_lua::LANGUAGE.into(),
-            #[cfg(feature = "fsharp")]
-            Lang::FSharp => tree_sitter_fsharp::LANGUAGE_FSHARP.into(),
-        }
-    }
-
-    /// The `scopes.scm` query for this language, as written.
-    fn scopes_source(self) -> &'static str {
-        match self {
-            Lang::Rust => include_str!("../../languages/queries/rust/scopes.scm"),
-            Lang::Python => include_str!("../../languages/queries/python/scopes.scm"),
-            Lang::JavaScript => include_str!("../../languages/queries/javascript/scopes.scm"),
-            Lang::TypeScript | Lang::Tsx => include_str!("../../languages/queries/typescript/scopes.scm"),
-            Lang::Go => include_str!("../../languages/queries/go/scopes.scm"),
-            Lang::Java => include_str!("../../languages/queries/java/scopes.scm"),
-            Lang::C => include_str!("../../languages/queries/c/scopes.scm"),
-            Lang::Cpp => include_str!("../../languages/queries/cpp/scopes.scm"),
-            #[cfg(feature = "csharp")]
-            Lang::CSharp => include_str!("../../languages/queries/csharp/scopes.scm"),
-            Lang::Ruby => include_str!("../../languages/queries/ruby/scopes.scm"),
-            #[cfg(feature = "swift")]
-            Lang::Swift => include_str!("../../languages/queries/swift/scopes.scm"),
-            #[cfg(feature = "kotlin")]
-            Lang::Kotlin => include_str!("../../languages/queries/kotlin/scopes.scm"),
-            Lang::Lua => include_str!("../../languages/queries/lua/scopes.scm"),
-            #[cfg(feature = "fsharp")]
-            Lang::FSharp => include_str!("../../languages/queries/fsharp/scopes.scm"),
-        }
-    }
-
-    /// The compiled `scopes.scm`, built the first time it's needed.
-    fn scopes(self) -> Option<&'static Query> {
-        static QUERIES: [OnceLock<Option<Query>>; 15] = [const { OnceLock::new() }; 15];
-        QUERIES[self as usize].get_or_init(|| Query::new(&self.grammar(), self.scopes_source()).ok()).as_ref()
-    }
-}
-
 /// Every definition in `source`, in the order they start, if its language
 /// (from `path`) has a grammar here.
 pub fn outline(path: &str, source: &[String]) -> Option<Vec<Scope>> {
-    let lang = Lang::from_path(path)?;
-    let query = lang.scopes()?;
+    let lang = &Registry::global().for_path(path)?.name;
+    let grammar = grammar::bundled(lang)?;
+    let query = query::compiled(lang, "scopes", &grammar)?;
     let text = source.join("\n");
     let mut parser = Parser::new();
-    parser.set_language(&lang.grammar()).ok()?;
+    parser.set_language(&grammar).ok()?;
     let tree = parser.parse(&text, None)?;
 
     // Each definition once, with where its label stops if a pattern says.
@@ -272,38 +137,16 @@ mod tests {
     }
 
     #[test]
-    fn every_scopes_query_compiles() {
-        for &lang in Lang::ALL {
-            if let Err(e) = Query::new(&lang.grammar(), lang.scopes_source()) {
-                panic!("{lang:?}'s scopes.scm: {e}");
-            }
-        }
-    }
-
-    #[test]
-    fn every_grammar_has_a_registry_entry() {
-        let registry = Registry::builtin();
-        for &lang in Lang::ALL {
-            assert!(
-                registry.iter().any(|l| Lang::from_name(&l.name) == Some(lang)),
-                "{lang:?} isn't in languages.toml"
-            );
-        }
-    }
-
-    #[test]
     fn picks_languages_by_file_name() {
-        assert_eq!(Lang::from_path("src/a.rs"), Some(Lang::Rust));
-        assert_eq!(Lang::from_path("web/App.tsx"), Some(Lang::Tsx));
-        assert_eq!(Lang::from_path("Gemfile"), Some(Lang::Ruby));
+        let parses = |path| outline(path, &source("fn a() {}")).is_some();
+        assert!(parses("src/a.rs"));
+        assert!(parses("web/App.tsx"));
+        assert!(parses("Gemfile"));
         // Opt-in grammars only with their feature; indentation otherwise.
-        #[cfg(feature = "fsharp")]
-        assert_eq!(Lang::from_path("lib/Mod.fs"), Some(Lang::FSharp));
-        #[cfg(not(feature = "fsharp"))]
-        assert_eq!(Lang::from_path("lib/Mod.fs"), None);
-        assert_eq!(Lang::from_path("README.md"), None);
-        assert_eq!(Lang::from_path("Makefile"), None);
-        assert!(outline("notes.txt", &source("fn a() {}")).is_none());
+        assert_eq!(parses("lib/Mod.fs"), cfg!(feature = "fsharp"));
+        assert!(!parses("README.md"));
+        assert!(!parses("Makefile"));
+        assert!(!parses("notes.txt"));
     }
 
     const PYTHON: &str = "\
