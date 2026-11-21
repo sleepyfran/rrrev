@@ -74,7 +74,14 @@ pub enum Popup {
     Verdict,
     Theme,
     Comments,
+    References,
+    Hover,
     Confirm,
+}
+
+impl Popup {
+    /// How many there are; `Confirm` is the last.
+    const COUNT: usize = Popup::Confirm as usize + 1;
 }
 
 impl Popup {
@@ -83,7 +90,14 @@ impl Popup {
     fn anchor(self) -> Anchor {
         match self {
             Popup::Comment => Anchor::Bottom,
-            Popup::Help | Popup::Sidebar | Popup::Verdict | Popup::Theme | Popup::Comments | Popup::Confirm => {
+            Popup::Help
+            | Popup::Sidebar
+            | Popup::Verdict
+            | Popup::Theme
+            | Popup::Comments
+            | Popup::References
+            | Popup::Hover
+            | Popup::Confirm => {
                 Anchor::Center
             },
         }
@@ -154,7 +168,7 @@ pub struct Animator {
     now: Instant,
     /// Whether anything moved this frame, so the next one comes soon.
     busy: bool,
-    popups: [PopupState; 7],
+    popups: [PopupState; Popup::COUNT],
     page: Option<(View, usize)>,
     /// Columns the diff is pushed aside by, while a new page slides in.
     slide: Option<Tween>,

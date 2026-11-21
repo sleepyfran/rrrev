@@ -11,6 +11,7 @@ mod comments_menu;
 mod context;
 mod file_view;
 mod goto;
+mod lookup;
 mod marks;
 mod mode;
 mod navigation;
@@ -26,6 +27,7 @@ mod test_support;
 
 pub use action::{Action, Effect, GoTo, Spot, VerdictAction};
 pub use goto::{Place, Target};
+pub use lookup::{Hover, ReferencesMenu, hover_text};
 pub use ask::{Answer, AskPanel};
 pub use column::FindChar;
 pub use comments_menu::{CommentsMenu, DismissCopied};
@@ -122,6 +124,10 @@ pub struct App {
     pub file_view: Option<FileView>,
     /// Where `gd` and its kin jumped from, for `C-o`.
     jumps: Vec<goto::Jump>,
+    /// `gr`'s list, while it's open.
+    pub references: Option<ReferencesMenu>,
+    /// `K`'s box, while it's open.
+    pub hover: Option<Hover>,
     pub should_quit: bool,
 }
 
@@ -176,6 +182,8 @@ impl App {
             dismiss_prompt: None,
             file_view: None,
             jumps: Vec::new(),
+            references: None,
+            hover: None,
             should_quit: false,
         };
         // Generated files and files already reviewed start out of the way.
@@ -221,6 +229,14 @@ impl App {
         }
         if self.dismiss_prompt.is_some() {
             // Answered through `answer_dismiss_copied`; nothing else gets through.
+            return;
+        }
+        if self.hover.is_some() {
+            self.update_hover(action);
+            return;
+        }
+        if self.references.is_some() {
+            self.update_references(action);
             return;
         }
         if self.file_view.is_some() {
@@ -322,6 +338,8 @@ impl App {
                 _ => {}
             },
             Action::GoTo(kind) => self.go_to(kind),
+            Action::References => self.references(),
+            Action::Hover => self.hover(),
             Action::JumpBack => self.jump_back(),
             Action::Cancel => {
                 if self.focus == Focus::Sidebar {

@@ -257,14 +257,23 @@ fn run(
             app.finish_organize(job, result);
         }
         for reply in lsp.poll() {
-            let Some(question) = asked.take_if(|a| (a.server, a.id) == (reply.server, reply.id)) else { continue };
+            let Some(asked) = asked.take_if(|a| (a.server, a.id) == (reply.server, reply.id)) else { continue };
             // An answer that comes after the cursor moved on is dropped,
             // rather than pulling it back from wherever it went.
-            if !app.still_at(&question.from) {
+            if !app.still_at(&asked.from) {
                 continue;
             }
-            let targets = reply.result.map(|result| targets(lsp, reply.server, &result));
-            app.finish_go_to(question.kind, targets, question.note);
+            match asked.question {
+                Question::GoTo(kind) => {
+                    let targets = reply.result.map(|result| targets(lsp, reply.server, &result));
+                    app.finish_go_to(kind, targets, asked.note);
+                }
+                Question::References => {
+                    let targets = reply.result.map(|result| targets(lsp, reply.server, &result));
+                    app.finish_references(targets, asked.note);
+                }
+                Question::Hover => app.finish_hover(reply.result.map(|r| app::hover_text(&r)), asked.note),
+            }
         }
         app.lsp_status = lsp.status();
         while let Ok((job, result)) = answers.try_recv() {
@@ -346,15 +355,9 @@ fn run(
                     app.message = Some(format!("error: could not save the theme: {e:#}"));
                 }
             }
-            Some(Effect::GoTo { kind, spot }) => {
-                if let Some(old) = asked.take() {
-                    lsp.server(old.server).cancel(old.id);
-                }
-                match ask_go_to(lsp, kind, &spot) {
-                    Ok((server, id, note)) => asked = Some(Asked { server, id, kind, note, from: app.place() }),
-                    Err(why) => app.message = Some(why),
-                }
-            }
+            Some(Effect::GoTo { kind, spot }) => ask(lsp, app, &mut asked, Question::GoTo(kind), &spot),
+            Some(Effect::References { spot }) => ask(lsp, app, &mut asked, Question::References, &spot),
+            Some(Effect::Hover { spot }) => ask(lsp, app, &mut asked, Question::Hover, &spot),
             Some(Effect::Lsp { restart }) => {
                 if restart {
                     asked = None;
@@ -387,19 +390,48 @@ fn run(
     Ok(())
 }
 
+/// What a request to a language server was for.
+#[derive(Clone, Copy)]
+enum Question {
+    GoTo(app::GoTo),
+    References,
+    Hover,
+}
+
+impl Question {
+    fn method(self) -> &'static str {
+        match self {
+            Question::GoTo(kind) => kind.method(),
+            Question::References => "textDocument/references",
+            Question::Hover => "textDocument/hover",
+        }
+    }
+}
+
 /// A question out to a language server: which request it is, what it was
 /// for, what to say with the answer, and where the cursor was.
 struct Asked {
     server: usize,
     id: u64,
-    kind: app::GoTo,
+    question: Question,
     note: Option<&'static str>,
     from: app::Place,
 }
 
-/// Sends `gd` and its kin's request for `spot`. Returns the server and
+/// Asks `question` about `spot`, calling off the question still out, if any.
+fn ask(lsp: &mut lsp::Lsp, app: &mut App, asked: &mut Option<Asked>, question: Question, spot: &app::Spot) {
+    if let Some(old) = asked.take() {
+        lsp.server(old.server).cancel(old.id);
+    }
+    match ask_about(lsp, question.method(), spot) {
+        Ok((server, id, note)) => *asked = Some(Asked { server, id, question, note, from: app.place() }),
+        Err(why) => app.message = Some(why),
+    }
+}
+
+/// Sends a request about `spot` (`gd`, `gr`, `K`…). Returns the server and
 /// request id, and a note for when the code on disk isn't what's shown.
-fn ask_go_to(lsp: &mut lsp::Lsp, kind: app::GoTo, spot: &app::Spot) -> Result<(usize, u64, Option<&'static str>), String> {
+fn ask_about(lsp: &mut lsp::Lsp, method: &str, spot: &app::Spot) -> Result<(usize, u64, Option<&'static str>), String> {
     let Some(index) = lsp.server_for(&spot.path) else {
         return Err(format!("No language server for {}: {}", spot.path, lsp.describe()));
     };
@@ -410,11 +442,14 @@ fn ask_go_to(lsp: &mut lsp::Lsp, kind: app::GoTo, spot: &app::Spot) -> Result<(u
         .then_some("may be off: this revision isn't the one checked out");
     let server = lsp.server(index);
     let character = lsp::to_character(&spot.text, spot.column, server.encoding);
-    let params = serde_json::json!({
+    let mut params = serde_json::json!({
         "textDocument": {"uri": lsp::uri(&full)},
         "position": {"line": spot.line, "character": character},
     });
-    let id = server.request(kind.method(), params);
+    if method == "textDocument/references" {
+        params["context"] = serde_json::json!({"includeDeclaration": true});
+    }
+    let id = server.request(method, params);
     Ok((index, id, note))
 }
 

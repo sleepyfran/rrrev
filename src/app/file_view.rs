@@ -239,6 +239,8 @@ impl App {
             Action::Cancel | Action::Quit => self.file_view = None,
             Action::JumpBack => self.jump_back(),
             Action::GoTo(kind) => self.go_to(kind),
+            Action::References => self.references(),
+            Action::Hover => self.hover(),
             action if action.is_horizontal() => view.caret.apply(&view.lines[..], action),
             _ => {}
         }

@@ -99,7 +99,12 @@ pub fn render(frame: &mut Frame, app: &mut App, highlighter: &mut Highlighter, a
     render_status(frame, status, app, pending);
 
     let sidebar_popup = app.compact && app.focus == Focus::Sidebar;
-    if sidebar_popup || app.help_scroll.is_some() || app.show_verdict || app.comments_menu.is_some() {
+    if sidebar_popup
+        || app.help_scroll.is_some()
+        || app.show_verdict
+        || app.comments_menu.is_some()
+        || app.references.is_some()
+    {
         dim_backdrop(frame, &app.palette);
     }
     // What the pop-ups cover, to show around them as they unroll.
@@ -114,6 +119,12 @@ pub fn render(frame: &mut Frame, app: &mut App, highlighter: &mut Highlighter, a
     anim.popup(frame.buffer_mut(), Popup::Verdict, verdict, Some(&under));
     let comments = app.comments_menu.is_some().then(|| render_comments_menu(frame, frame.area(), app));
     anim.popup(frame.buffer_mut(), Popup::Comments, comments, Some(&under));
+    let references = app.references.is_some().then(|| render_references(frame, frame.area(), app));
+    anim.popup(frame.buffer_mut(), Popup::References, references, Some(&under));
+    // The hover box goes over the code it's about, which stays bright.
+    let under_hover = frame.buffer_mut().clone();
+    let hover = app.hover.is_some().then(|| render_hover(frame, main, app));
+    anim.popup(frame.buffer_mut(), Popup::Hover, hover, Some(&under_hover));
     let help = app.help_scroll.is_some().then(|| render_help(frame, frame.area(), app));
     anim.popup(frame.buffer_mut(), Popup::Help, help, Some(&under));
     // The picker leaves the screen bright, to show each theme on the diff.
@@ -207,6 +218,89 @@ fn render_comments_menu(frame: &mut Frame, area: Rect, app: &App) -> Rect {
     clear(frame, rect, &p);
     frame.render_widget(block, rect);
     frame.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), inner);
+    rect
+}
+
+/// `gr`'s list, centred: each reference's place and code, marked when the
+/// diff shows it. Returns where it was drawn.
+fn render_references(frame: &mut Frame, area: Rect, app: &App) -> Rect {
+    let p = app.palette;
+    let Some(menu) = &app.references else { return Rect::default() };
+    let shown = menu.shown();
+    let width = 110.min(area.width.saturating_sub(4));
+    let inner_width = width.saturating_sub(2) as usize;
+    let places: Vec<String> = shown.iter().map(|r| format!("{}:{}", r.target.path, r.target.line + 1)).collect();
+    let place_width = places.iter().map(|l| l.chars().count()).max().unwrap_or(0).min(inner_width / 2);
+    let code_width = inner_width.saturating_sub(5 + place_width + 2);
+    let lines: Vec<Line> = shown
+        .iter()
+        .zip(&places)
+        .enumerate()
+        .map(|(i, (reference, place))| {
+            let selected = i == menu.selected;
+            let marker = if reference.in_diff.is_some() {
+                Span::styled("● ", Style::new().fg(p.green))
+            } else {
+                Span::raw("  ")
+            };
+            let line = Line::from(vec![
+                Span::styled(if selected { " ▸ " } else { "   " }, Style::new().fg(p.yellow)),
+                marker,
+                Span::styled(
+                    format!("{:<place_width$}  ", truncate_right(place, place_width)),
+                    Style::new().fg(p.cyan),
+                ),
+                Span::raw(truncate_right(reference.code(), code_width)),
+            ]);
+            if selected { line.style(Style::new().bg(p.cursor).bold()) } else { line }
+        })
+        .collect();
+    let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(2));
+    let rect = centered(area, width, height);
+    let in_diff = menu.references.iter().filter(|r| r.in_diff.is_some()).count();
+    let title = match (menu.only_in_diff, &menu.note) {
+        (true, _) => format!(" References in the diff ({in_diff} of {}) ", menu.references.len()),
+        (false, None) => format!(" References ({}, {in_diff} in the diff) ", menu.references.len()),
+        (false, Some(note)) => format!(" References ({}, {in_diff} in the diff) · {note} ", menu.references.len()),
+    };
+    let filter = if menu.only_in_diff { "Tab show all" } else { "Tab only ● in the diff" };
+    let footer = Line::from(format!(" j/k move · Enter go to · {filter} · C-o back after · Esc close ")).dim();
+    let block = Block::bordered()
+        .border_type(BorderType::Thick)
+        .border_style(Style::new().fg(p.yellow).bold())
+        .title(Span::styled(title, Style::new().bold()))
+        .title_bottom(footer);
+    let inner = block.inner(rect);
+    let scroll = (menu.selected + 1).saturating_sub(inner.height as usize);
+    clear(frame, rect, &p);
+    frame.render_widget(block, rect);
+    frame.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), inner);
+    rect
+}
+
+/// `K`'s box, in the middle of the code: the server's text, wrapped.
+/// Returns where it was drawn.
+fn render_hover(frame: &mut Frame, area: Rect, app: &App) -> Rect {
+    let p = app.palette;
+    let Some(hover) = &app.hover else { return Rect::default() };
+    let width = 90.min(area.width.saturating_sub(4));
+    let inner_width = width.saturating_sub(4) as usize;
+    let lines: Vec<Line> = hover
+        .lines
+        .iter()
+        // Lines that fit keep their indentation; longer ones wrap at words.
+        .flat_map(|l| if l.chars().count() <= inner_width { vec![l.clone()] } else { crate::text::wrap_words(l, inner_width) })
+        .map(|l| Line::from(format!(" {l}")))
+        .collect();
+    let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(2)).max(3);
+    let rect = centered(area, width, height);
+    let block = Block::bordered()
+        .border_style(Style::new().fg(p.blue))
+        .title_bottom(Line::from(" j/k scroll · any other key closes ").dim());
+    let inner = block.inner(rect);
+    clear(frame, rect, &p);
+    frame.render_widget(block, rect);
+    frame.render_widget(Paragraph::new(lines).scroll((hover.scroll as u16, 0)), inner);
     rect
 }
 
@@ -1480,6 +1574,7 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
         _ if app.show_verdict => " VERDICT ",
         _ if app.dismiss_prompt.is_some() => " COPIED ",
         _ if app.comments_menu.is_some() => " COMMENTS ",
+        _ if app.references.is_some() => " REFERENCES ",
         _ if app.theme_picker.is_some() => " THEME ",
         (_, Focus::Sidebar) => " FILES ",
         _ => " NORMAL ",
@@ -1534,7 +1629,14 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
                 Mode::Visual { .. } => " c comment  a ask  y copy  Esc cancel ",
                 // The boxes list their own keys.
                 Mode::Comment { .. } | Mode::Ask { .. } | Mode::VerdictMessage { .. } => " ",
-                _ if app.show_verdict || app.theme_picker.is_some() || app.comments_menu.is_some() => " ",
+                _ if app.show_verdict
+                    || app.theme_picker.is_some()
+                    || app.comments_menu.is_some()
+                    || app.references.is_some()
+                    || app.hover.is_some() =>
+                {
+                    " "
+                }
                 _ if app.dismiss_prompt.is_some() => " ",
                 _ if app.file_view.is_some() => " ? help  ]c [c changes  / search  q back to the diff ",
                 _ if matches!(app.current_row(), Some(Row::Note { .. })) => {
