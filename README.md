@@ -2,6 +2,10 @@
 
 With the current state of development we spend almost all of our time reviewing code (or at least I do!), yet the usual review tools either suck or don't really allow us to fully explore the code surrounding a diff. Behold, rrrev: a fully keyboard-driven (VIM style keybindings) review tool that runs on your terminal, right by your agent's side.
 
+<p align="center">
+  <img src="docs/screenshot.png" alt="rrrev reviewing the last 3 commits, with the theme picker open" width="900">
+</p>
+
 ## Features!
 
 - Review any set of changes, from uncommitted work to staged changes, the last N commits, a single commit, commit..ranges, everything since a commit, or a branch against the branch it split off. Oh, and did I mention you can also review each layer of a stack at a time quickly?
