@@ -1,6 +1,6 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::{Action, VerdictAction, View};
+use crate::app::{Action, FindChar, VerdictAction, View};
 use crate::input::InputAction;
 
 /// Turns key presses into actions, handling vim-style counts (`5j`) and
@@ -40,10 +40,13 @@ impl KeyHandler {
         let count = self.count.take();
         let n = count.unwrap_or(1);
         let action = match (self.prefix.take(), key.code) {
-            (None, KeyCode::Char(c @ ('g' | 'z' | ']' | '[' | 'd'))) if !ctrl => {
+            (None, KeyCode::Char(c @ ('g' | 'z' | ']' | '[' | 'd' | 'f' | 'F' | 't'))) if !ctrl => {
                 self.prefix = Some(c);
                 self.count = count;
                 return None;
+            }
+            (Some(p @ ('f' | 'F' | 't')), KeyCode::Char(target)) => {
+                Action::FindChar { n, find: FindChar { target, forward: p != 'F', till: p == 't' } }
             }
             (Some('g'), KeyCode::Char('g')) => Action::Top,
             (Some('g'), KeyCode::Char('s')) => Action::ShowView(View::Stack),
@@ -90,8 +93,17 @@ impl KeyHandler {
             (None, KeyCode::PageDown) => Action::HalfPageDown,
             (None, KeyCode::PageUp) => Action::HalfPageUp,
             (None, KeyCode::Tab) => Action::ToggleFocus,
-            (None, KeyCode::Char('h')) => Action::FocusSidebar,
-            (None, KeyCode::Char('l')) => Action::FocusDiff,
+            (None, KeyCode::Char('h') | KeyCode::Left) => Action::Left(n),
+            (None, KeyCode::Char('l') | KeyCode::Right) => Action::Right(n),
+            (None, KeyCode::Char('w')) => Action::WordForward { n, big: false },
+            (None, KeyCode::Char('W')) => Action::WordForward { n, big: true },
+            (None, KeyCode::Char('b')) => Action::WordBackward { n, big: false },
+            (None, KeyCode::Char('B')) => Action::WordBackward { n, big: true },
+            (None, KeyCode::Char('e')) => Action::WordEnd { n, big: false },
+            (None, KeyCode::Char('E')) => Action::WordEnd { n, big: true },
+            (None, KeyCode::Char('0')) => Action::LineStart,
+            (None, KeyCode::Char('^')) => Action::FirstNonBlank,
+            (None, KeyCode::Char('$')) => Action::LineEnd,
             (None, KeyCode::Enter) => Action::Select,
             (None, KeyCode::Char('s')) => Action::ToggleSidebar,
             (None, KeyCode::Char('r')) => Action::ToggleReviewed,
@@ -248,8 +260,26 @@ mod tests {
     #[test]
     fn leading_zero_is_not_a_count() {
         let mut h = KeyHandler::default();
-        assert_eq!(press(&mut h, "0"), None);
+        assert_eq!(press(&mut h, "0"), Some(Action::LineStart));
         assert_eq!(h.pending(), "");
         assert_eq!(press(&mut h, "10j"), Some(Action::Down(10)));
+    }
+
+    #[test]
+    fn column_motions() {
+        let mut h = KeyHandler::default();
+        assert_eq!(press(&mut h, "3l"), Some(Action::Right(3)));
+        assert_eq!(press(&mut h, "h"), Some(Action::Left(1)));
+        assert_eq!(press(&mut h, "2w"), Some(Action::WordForward { n: 2, big: false }));
+        assert_eq!(press(&mut h, "B"), Some(Action::WordBackward { n: 1, big: true }));
+        assert_eq!(press(&mut h, "E"), Some(Action::WordEnd { n: 1, big: true }));
+        assert_eq!(press(&mut h, "^"), Some(Action::FirstNonBlank));
+        assert_eq!(press(&mut h, "$"), Some(Action::LineEnd));
+        let find = |target, forward, till| FindChar { target, forward, till };
+        assert_eq!(press(&mut h, "2f("), Some(Action::FindChar { n: 2, find: find('(', true, false) }));
+        assert_eq!(press(&mut h, "t)"), Some(Action::FindChar { n: 1, find: find(')', true, true) }));
+        assert_eq!(press(&mut h, "Fx"), Some(Action::FindChar { n: 1, find: find('x', false, false) }));
+        // `T` is still the theme picker.
+        assert_eq!(press(&mut h, "T"), Some(Action::PickTheme));
     }
 }

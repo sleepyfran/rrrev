@@ -80,6 +80,7 @@ impl App {
                     .to_string(),
             );
         }
+        self.column_on_match(&query);
     }
 
     /// `Esc` in normal mode: hides matches, but `n` still finds the next one.
