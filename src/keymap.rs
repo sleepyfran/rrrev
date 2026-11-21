@@ -1,6 +1,6 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::{Action, FindChar, VerdictAction, View};
+use crate::app::{Action, FindChar, GoTo, VerdictAction, View};
 use crate::input::InputAction;
 
 /// Turns key presses into actions, handling vim-style counts (`5j`) and
@@ -53,6 +53,9 @@ impl KeyHandler {
             (Some('g'), KeyCode::Char('p')) => Action::ShowView(View::Plan),
             (Some('g'), KeyCode::Char('f')) => Action::ShowView(View::Files),
             (Some('g'), KeyCode::Char('c')) => Action::ListComments,
+            (Some('g'), KeyCode::Char('d')) => Action::GoTo(GoTo::Definition),
+            (Some('g'), KeyCode::Char('y')) => Action::GoTo(GoTo::TypeDefinition),
+            (Some('g'), KeyCode::Char('i')) => Action::GoTo(GoTo::Implementation),
             (Some(']'), KeyCode::Char('s')) => Action::NextLayer(n),
             (Some('['), KeyCode::Char('s')) => Action::PrevLayer(n),
             (Some(']'), KeyCode::Char('c')) => Action::NextHunk(n),
@@ -264,6 +267,14 @@ mod tests {
         assert_eq!(press(&mut h, "0"), Some(Action::LineStart));
         assert_eq!(h.pending(), "");
         assert_eq!(press(&mut h, "10j"), Some(Action::Down(10)));
+    }
+
+    #[test]
+    fn go_to_keys() {
+        let mut h = KeyHandler::default();
+        assert_eq!(press(&mut h, "gd"), Some(Action::GoTo(GoTo::Definition)));
+        assert_eq!(press(&mut h, "gy"), Some(Action::GoTo(GoTo::TypeDefinition)));
+        assert_eq!(press(&mut h, "gi"), Some(Action::GoTo(GoTo::Implementation)));
     }
 
     #[test]

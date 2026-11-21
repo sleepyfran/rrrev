@@ -95,6 +95,9 @@ pub enum Action {
     /// `T`: the theme picker.
     PickTheme,
     Select,
+    /// `gd` / `gy` / `gi`: ask the language server where the symbol under
+    /// the cursor is defined.
+    GoTo(GoTo),
     /// `C-o`: back to where the cursor jumped from.
     JumpBack,
     Cancel,
@@ -155,4 +158,43 @@ pub enum Effect {
     SaveTheme { theme: &'static Theme },
     /// `:lsp`: say how the language servers are doing, or restart them.
     Lsp { restart: bool },
+    /// Ask the language server for `spot`'s definition, then call
+    /// `finish_go_to`.
+    GoTo { kind: GoTo, spot: Spot },
+}
+
+/// What `gd` and its kin look for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GoTo {
+    Definition,
+    TypeDefinition,
+    Implementation,
+}
+
+impl GoTo {
+    pub fn method(self) -> &'static str {
+        match self {
+            GoTo::Definition => "textDocument/definition",
+            GoTo::TypeDefinition => "textDocument/typeDefinition",
+            GoTo::Implementation => "textDocument/implementation",
+        }
+    }
+
+    pub fn noun(self) -> &'static str {
+        match self {
+            GoTo::Definition => "definition",
+            GoTo::TypeDefinition => "type definition",
+            GoTo::Implementation => "implementation",
+        }
+    }
+}
+
+/// A place in the code as the user sees it: a file relative to the working
+/// folder, a 0-based line, the byte the cursor is on and that line's text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Spot {
+    pub path: String,
+    pub line: u32,
+    pub column: usize,
+    pub text: String,
 }

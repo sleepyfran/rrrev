@@ -10,6 +10,7 @@ mod comments;
 mod comments_menu;
 mod context;
 mod file_view;
+mod goto;
 mod marks;
 mod mode;
 mod navigation;
@@ -23,7 +24,8 @@ mod view;
 #[cfg(test)]
 mod test_support;
 
-pub use action::{Action, Effect, VerdictAction};
+pub use action::{Action, Effect, GoTo, Spot, VerdictAction};
+pub use goto::{Place, Target};
 pub use ask::{Answer, AskPanel};
 pub use column::FindChar;
 pub use comments_menu::{CommentsMenu, DismissCopied};
@@ -118,6 +120,8 @@ pub struct App {
     pub dismiss_prompt: Option<DismissCopied>,
     /// The whole file the cursor was on, while it's open over the diff.
     pub file_view: Option<FileView>,
+    /// Where `gd` and its kin jumped from, for `C-o`.
+    jumps: Vec<goto::Jump>,
     pub should_quit: bool,
 }
 
@@ -171,6 +175,7 @@ impl App {
             comments_menu: None,
             dismiss_prompt: None,
             file_view: None,
+            jumps: Vec::new(),
             should_quit: false,
         };
         // Generated files and files already reviewed start out of the way.
@@ -316,8 +321,8 @@ impl App {
                 Some(Row::Line { .. } | Row::Context { .. }) => self.open_file_view(),
                 _ => {}
             },
-            // Nothing to go back to yet outside the file view.
-            Action::JumpBack => {}
+            Action::GoTo(kind) => self.go_to(kind),
+            Action::JumpBack => self.jump_back(),
             Action::Cancel => {
                 if self.focus == Focus::Sidebar {
                     self.focus = Focus::Diff;

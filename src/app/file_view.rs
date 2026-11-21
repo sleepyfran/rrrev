@@ -236,7 +236,9 @@ impl App {
             Action::SearchPrev(n) => self.search_next(n, false),
             Action::ToggleHelp => self.help_scroll = Some(0),
             Action::Cancel if highlighting => self.clear_search_highlight(),
-            Action::Cancel | Action::Quit | Action::JumpBack => self.file_view = None,
+            Action::Cancel | Action::Quit => self.file_view = None,
+            Action::JumpBack => self.jump_back(),
+            Action::GoTo(kind) => self.go_to(kind),
             action if action.is_horizontal() => view.caret.apply(&view.lines[..], action),
             _ => {}
         }
