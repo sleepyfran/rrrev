@@ -176,6 +176,10 @@ impl App {
     /// A hunk's header and lines, with each comment and agent note under the
     /// line it ends on, between any extra context shown above and below.
     fn push_hunk_rows(&self, rows: &mut Vec<Row>, file: usize, hunk: usize) {
+        if self.is_hunk_folded(file, hunk) {
+            rows.push(Row::Hunk { file, hunk });
+            return;
+        }
         let h = &self.diff.files[file].hunks[hunk];
         let last = h.lines.len().saturating_sub(1);
         let (above, below) = self.context_lines(file, hunk);
@@ -219,8 +223,8 @@ impl App {
         self.rows = self.page_rows(self.page);
         let kept = current.and_then(|row| self.rows.iter().position(|r| *r == row));
         // A deleted comment hands the cursor to the row after it; a folded
-        // hunk, to its file's header; a header line lost to rewrapping, to
-        // the header.
+        // file, to its header; a folded hunk, to the hunk's header; a header
+        // line lost to rewrapping, to the header.
         let fallback = || {
             if let Some(Row::Group { group, .. }) = current {
                 let header = self.rows.iter().rposition(|r| matches!(*r, Row::Group { group: g, .. } if g == group));
@@ -231,8 +235,11 @@ impl App {
             let header = current.and_then(Row::file).map(|file| Row::File { file });
             let header = header.and_then(|h| self.rows.iter().position(|r| *r == h));
             let folded = current.and_then(Row::file).is_some_and(|f| self.collapsed[f]);
-            match header {
-                Some(idx) if folded => idx,
+            let folded_hunk = current.and_then(|r| Some((r.file()?, r.hunk()?))).filter(|&(f, h)| self.is_hunk_folded(f, h));
+            let hunk_header = folded_hunk.and_then(|(file, hunk)| self.rows.iter().position(|r| *r == Row::Hunk { file, hunk }));
+            match (header, hunk_header) {
+                (Some(idx), _) if folded => idx,
+                (_, Some(idx)) => idx,
                 _ => self.cursor.min(self.rows.len() - 1),
             }
         };
@@ -273,22 +280,66 @@ impl App {
             && lines[line - 1].kind == LineKind::Removed
     }
 
+    /// `za`: on a hunk header, folds or unfolds that hunk; anywhere else,
+    /// the file.
     pub(super) fn toggle_fold(&mut self) {
-        if let Some(file) = self.current_file() {
+        if let Some(Row::Hunk { file, hunk }) = self.current_row() {
+            self.set_fold(!self.is_hunk_folded(file, hunk));
+        } else if let Some(file) = self.current_file() {
             self.set_fold(!self.collapsed[file]);
         }
     }
 
     pub(super) fn set_fold(&mut self, collapsed: bool) {
-        if let Some(file) = self.current_file() {
+        if let Some(Row::Hunk { file, hunk }) = self.current_row() {
+            self.hunk_folds[file][hunk] = collapsed;
+            self.rebuild_rows();
+        } else if let Some(file) = self.current_file() {
             self.collapsed[file] = collapsed;
             self.rebuild_rows();
         }
     }
 
+    /// `zR` opens every file and hunk; `zM` closes every file, and folds
+    /// the plumbing again for when they're opened.
     pub(super) fn set_all_folds(&mut self, collapsed: bool) {
         self.collapsed.fill(collapsed);
+        for file in 0..self.hunk_folds.len() {
+            self.hunk_folds[file] = if collapsed { self.plumbing_folds(file) } else { vec![false; self.hunk_folds[file].len()] };
+        }
         self.rebuild_rows();
+    }
+
+    pub fn is_hunk_folded(&self, file: usize, hunk: usize) -> bool {
+        self.hunk_folds.get(file).and_then(|f| f.get(hunk)).copied().unwrap_or(false)
+    }
+
+    /// Which of a file's hunks start folded: its plumbing, unless the whole
+    /// file is plumbing, which folds as a file instead.
+    pub(super) fn plumbing_folds(&self, file: usize) -> Vec<bool> {
+        let hunks = self.diff.files[file].hunks.len();
+        let whole = self.diff.is_plumbing_file(file);
+        (0..hunks).map(|h| !whole && self.diff.is_plumbing(file, h)).collect()
+    }
+
+    /// After a grammar arrives: folds the plumbing it finds, leaving what's
+    /// already folded or open alone.
+    pub(super) fn fold_new_plumbing(&mut self) {
+        for file in 0..self.hunk_folds.len() {
+            let found = self.plumbing_folds(file);
+            for (folded, plumbing) in self.hunk_folds[file].iter_mut().zip(found) {
+                *folded |= plumbing;
+            }
+        }
+        self.rebuild_rows();
+    }
+
+    /// Opens whatever hides a row of `file`'s `hunk`: the file and the hunk.
+    pub(super) fn unfold_hunk(&mut self, file: usize, hunk: usize) {
+        self.collapsed[file] = false;
+        if let Some(folded) = self.hunk_folds.get_mut(file).and_then(|f| f.get_mut(hunk)) {
+            *folded = false;
+        }
     }
 
     /// Whether the screen is too narrow to dock the sidebar, reported by the
@@ -549,6 +600,75 @@ mod tests {
         app.update(Action::ToggleRemovals);
         assert_eq!(app.rows.len(), 7);
         assert_eq!(app.current_row(), Some(line(2)));
+    }
+
+    /// a.rs changes an import (hunk 0) and a function (hunk 1); b.rs only
+    /// its imports.
+    fn plumbing_app() -> App {
+        use crate::diff::{Diff, DiffLine, Sources};
+        use crate::review::ReviewState;
+        use std::sync::Arc;
+        let lines = |text: &str| Some(Arc::new(text.lines().map(str::to_string).collect::<Vec<_>>()));
+        let old = "use a::B;\nuse c::D;\n\nfn f() {}\n";
+        let new = "use a::B;\nuse e::F;\n\nfn f() { 1 }\n";
+        let at = |line: u32, content: &str| {
+            let mut f = file_at("x", &[(line, content)]).hunks.remove(0);
+            f.lines.insert(0, DiffLine { kind: LineKind::Removed, old_no: Some(line), new_no: None, content: "-".into() });
+            f
+        };
+        let mut imports = at(2, "use e::F;");
+        imports.lines[0].content = "use c::D;".into();
+        let mut code = at(4, "fn f() { 1 }");
+        code.lines[0].content = "fn f() {}".into();
+        let mut a = file("a.rs", &[]);
+        a.hunks = vec![imports.clone(), code];
+        let mut b = file("b.rs", &[]);
+        b.hunks = vec![imports];
+        let sources = || Sources { old: lines(old), new: lines(new) };
+        let diff = Diff::new(vec![a, b]).with_sources(vec![sources(), sources()]);
+        App::new(String::new(), diff, ReviewState::default())
+    }
+
+    #[test]
+    fn plumbing_starts_folded() {
+        let mut app = plumbing_app();
+        // a.rs: the import hunk is only its header; the function shows.
+        assert_eq!(app.hunk_folds, [vec![true, false], vec![false]]);
+        assert_eq!(app.rows[..3], [Row::File { file: 0 }, Row::Hunk { file: 0, hunk: 0 }, Row::Hunk { file: 0, hunk: 1 }]);
+        // b.rs is all plumbing, so it folds as a file.
+        assert_eq!(app.collapsed, [false, true]);
+
+        // za on the header opens it, and again folds it, cursor and all.
+        app.update(Action::Down(1));
+        app.update(Action::ToggleFold);
+        assert_eq!(app.rows[2..4], [Row::Line { file: 0, hunk: 0, line: 0 }, Row::Line { file: 0, hunk: 0, line: 1 }]);
+        app.update(Action::Down(2));
+        app.update(Action::Up(2));
+        app.update(Action::ToggleFold);
+        assert_eq!(app.current_row(), Some(Row::Hunk { file: 0, hunk: 0 }));
+        assert!(app.is_hunk_folded(0, 0));
+        // zc on a line folds the file, as before.
+        app.update(Action::Down(2));
+        app.update(Action::CloseFold);
+        assert_eq!(app.rows, [Row::File { file: 0 }]);
+
+        // zR opens everything; zM folds the plumbing again for later.
+        app.update(Action::OpenAllFolds);
+        assert_eq!(app.hunk_folds, [vec![false, false], vec![false]]);
+        app.update(Action::CloseAllFolds);
+        assert_eq!(app.hunk_folds, [vec![true, false], vec![false]]);
+    }
+
+    #[test]
+    fn search_finds_what_folded_plumbing_hides() {
+        let mut app = plumbing_app();
+        app.update(Action::StartSearch);
+        crate::app::test_support::type_text(&mut app, "c::D");
+        app.update_input(crate::input::InputAction::Submit);
+        assert_eq!(app.current_row(), Some(Row::Hunk { file: 0, hunk: 0 }));
+        // And in the folded file after it, on its header.
+        app.update(Action::SearchNext(1));
+        assert_eq!(app.current_row(), Some(Row::File { file: 1 }));
     }
 
     #[test]

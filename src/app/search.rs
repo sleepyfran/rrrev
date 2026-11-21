@@ -109,7 +109,14 @@ impl App {
         })
     }
 
+    /// Whether a row has a match, or hides one as a folded hunk's header.
     fn row_matches(&self, row: Row, query: &str) -> bool {
+        if let Row::Hunk { file, hunk } = row
+            && self.is_hunk_folded(file, hunk)
+            && self.hunk(file, hunk).lines.iter().any(|l| !find_matches(&l.content, query).is_empty())
+        {
+            return true;
+        }
         self.row_text(row).is_some_and(|text| !find_matches(&text, query).is_empty())
     }
 
