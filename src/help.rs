@@ -115,6 +115,7 @@ pub const SECTIONS: &[Section] = &[
             (":comments", "the list of every comment"),
             (":export [md|json] [path]", "write the comments to a file"),
             (":theme [name]", "the theme picker, or straight to a theme: terminal, one, nord, gruvbox, solarized, tomorrow"),
+            (":lsp [restart]", "how the language servers are doing, or start them again. They come from Mason's folder; `rrrev lang list` shows which are there"),
             (":w / :q", "save / quit"),
             ("?", "this help"),
         ],

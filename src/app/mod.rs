@@ -80,6 +80,8 @@ pub struct App {
     pub compact: bool,
     /// One-off feedback for the status line, cleared by the next action.
     pub message: Option<String>,
+    /// What a language server is busy with, like indexing, for the status line.
+    pub lsp_status: Option<String>,
     pub effect: Option<Effect>,
     /// The organizer run in progress, if any.
     pub organizing: Option<Job>,
@@ -149,6 +151,7 @@ impl App {
             show_sidebar: true,
             compact: false,
             message: None,
+            lsp_status: None,
             effect: None,
             organizing: None,
             organizing_layer: None,
