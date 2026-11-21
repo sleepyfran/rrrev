@@ -13,8 +13,6 @@ use super::{Grammar, Language, Registry, grammar};
 /// Where a language's grammar stands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Status {
-    /// Linked into rrrev.
-    Bundled,
     /// Built by `rrrev lang enable`, and it loads.
     Enabled,
     /// Built, but it doesn't load: the message says why.
@@ -26,9 +24,6 @@ pub enum Status {
 }
 
 pub fn status(language: &Language) -> Status {
-    if grammar::bundled(&language.name).is_some() {
-        return Status::Bundled;
-    }
     if language.grammar.is_none() {
         return Status::NoGrammar;
     }
@@ -47,7 +42,6 @@ pub fn list(registry: &Registry) -> String {
     let width = registry.iter().map(|l| l.name.len()).max().unwrap_or(0);
     for language in registry.iter() {
         let grammar = match status(language) {
-            Status::Bundled => "built in".to_string(),
             Status::Enabled => "enabled".to_string(),
             Status::Broken(why) => format!("broken ({why}); run `rrrev lang enable {}` again", language.name),
             Status::Available => "not enabled".to_string(),
@@ -68,9 +62,6 @@ pub fn list(registry: &Registry) -> String {
 /// to tell the user.
 pub fn enable(language: &Language) -> Result<String> {
     let name = &language.name;
-    if grammar::bundled(name).is_some() {
-        return Ok(format!("{name} is built into rrrev already"));
-    }
     let Some(source) = &language.grammar else { bail!("{name} has no grammar to build") };
     let target = grammar::path(name).context("no home directory to keep grammars in")?;
     let work = std::env::temp_dir().join(format!("rrrev-grammar-{name}-{}", std::process::id()));
@@ -105,9 +96,6 @@ pub fn enable(language: &Language) -> Result<String> {
 /// `rrrev lang disable <name>`: deletes its built grammar.
 pub fn disable(language: &Language) -> Result<String> {
     let name = &language.name;
-    if grammar::bundled(name).is_some() {
-        bail!("{name} is built into rrrev and can't be disabled");
-    }
     match grammar::path(name).filter(|p| p.exists()) {
         Some(path) => {
             fs::remove_file(&path).with_context(|| format!("cannot delete {}", path.display()))?;
@@ -205,9 +193,11 @@ mod tests {
                 "#,
             )
             .unwrap();
-        let hint = hint(&registry, ["a.rs", "b.zig", "c.zig", "d.nix", "README.md"]).unwrap();
+        let hint = hint(&registry, ["b.zig", "c.zig", "d.nix", "README.md"]).unwrap();
         assert_eq!(hint, "zig has no highlighting yet: `rrrev lang enable zig`");
-        assert_eq!(super::hint(&registry, ["a.rs", "d.nix"]), None);
+        let hint = super::hint(&registry, ["a.rs", "b.zig", "d.nix"]).unwrap();
+        assert_eq!(hint, "rust (and 1 more) has no highlighting yet: `rrrev lang enable rust zig`");
+        assert_eq!(super::hint(&registry, ["d.nix", "README.md"]), None);
     }
 
     #[test]
@@ -216,13 +206,6 @@ mod tests {
         let list = list(&registry);
         assert_eq!(list.lines().count(), registry.iter().count());
         assert!(list.lines().next().unwrap().starts_with("rust "), "{list}");
-        assert!(list.contains("built in"));
-    }
-
-    #[test]
-    fn bundled_languages_need_no_enabling() {
-        let rust = Registry::builtin().get("rust").unwrap().clone();
-        assert!(enable(&rust).unwrap().contains("built into rrrev"));
-        assert!(disable(&rust).is_err());
+        assert!(list.contains("not enabled"));
     }
 }

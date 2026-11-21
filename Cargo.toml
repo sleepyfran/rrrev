@@ -16,30 +16,22 @@ serde_json = "1.0.154"
 terminal-colorsaurus = "1.0.3"
 toml = { version = "1.2.1", default-features = false, features = ["parse", "serde"] }
 tree-sitter = "0.27.2"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+# Grammars for tests only: rrrev builds the ones you enable (`rrrev lang
+# enable`) and loads them at run time.
 tree-sitter-c = "0.24.2"
-tree-sitter-c-sharp = { version = "0.24.0", optional = true }
+tree-sitter-c-sharp = "0.24.0"
 tree-sitter-cpp = "0.23.4"
-tree-sitter-fsharp = { version = "0.3.13", optional = true }
+tree-sitter-fsharp = "0.3.13"
 tree-sitter-go = "0.25.0"
 tree-sitter-java = "0.23.5"
 tree-sitter-javascript = "0.25.0"
-tree-sitter-kotlin-ng = { version = "1.1.0", optional = true }
+tree-sitter-kotlin-ng = "1.1.0"
 tree-sitter-lua = "0.5.0"
 tree-sitter-python = "0.25.0"
 tree-sitter-ruby = "0.23.1"
 tree-sitter-rust = "0.24.2"
-tree-sitter-swift = { version = "0.7.4", optional = true }
+tree-sitter-swift = "0.7.4"
 tree-sitter-typescript = "0.23.2"
-
-[features]
-# Grammars for scopes (breadcrumbs, `ze`). The heavy ones are opt-in: each
-# adds 3-14 MB to the binary. Files without a grammar go by indentation.
-default = []
-csharp = ["dep:tree-sitter-c-sharp"]
-fsharp = ["dep:tree-sitter-fsharp"]
-kotlin = ["dep:tree-sitter-kotlin-ng"]
-swift = ["dep:tree-sitter-swift"]
-all-languages = ["csharp", "fsharp", "kotlin", "swift"]
-
-[dev-dependencies]
-tempfile = "3.27.0"
