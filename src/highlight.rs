@@ -183,7 +183,7 @@ impl Highlighter {
 /// come back empty, to be drawn plain.
 fn highlight(syntax: &Syntax, path: &str, lines: &[String]) -> Option<Vec<Vec<Segment>>> {
     let lang = &Registry::global().for_path(path)?.name;
-    let grammar = grammar::bundled(lang)?;
+    let grammar = grammar::get(lang)?;
     let query = query::compiled(lang, "highlights", &grammar)?;
     let text = lines.join("\n");
     let mut parser = Parser::new();

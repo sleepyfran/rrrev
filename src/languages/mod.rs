@@ -4,10 +4,11 @@
 //! change entries or add new ones.
 
 pub mod grammar;
+pub mod manage;
 pub mod query;
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
@@ -41,6 +42,34 @@ pub struct Lsp {
     /// Files that mark a project's root, e.g. `Cargo.toml`; globs allowed.
     #[serde(default)]
     pub roots: Vec<String>,
+}
+
+impl Lsp {
+    /// The server's executable: a full path as given, or the command in
+    /// Mason's bin folder. rrrev never looks on `PATH` and never installs
+    /// servers, so what runs is what Neovim runs.
+    pub fn find(&self) -> Option<PathBuf> {
+        let path = if self.command.contains('/') {
+            PathBuf::from(&self.command)
+        } else {
+            mason_bin()?.join(&self.command)
+        };
+        path.is_file().then_some(path)
+    }
+}
+
+/// `$XDG_DATA_HOME`, by default `~/.local/share`.
+pub fn data_home() -> Option<PathBuf> {
+    std::env::var_os("XDG_DATA_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
+}
+
+/// Mason's bin folder: `$XDG_DATA_HOME/nvim/mason/bin`, where Neovim's
+/// Mason puts the servers it installs.
+pub fn mason_bin() -> Option<PathBuf> {
+    Some(data_home()?.join("nvim/mason/bin"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -166,13 +195,10 @@ impl Registry {
         self.languages.iter().find(|l| l.matches(name))
     }
 
-    // `get` and `iter` are for the LSP client and `rrrev lang`, which come next.
-    #[allow(dead_code)]
     pub fn get(&self, name: &str) -> Option<&Language> {
         self.languages.iter().find(|l| l.name == name)
     }
 
-    #[allow(dead_code)]
     pub fn iter(&self) -> impl Iterator<Item = &Language> {
         self.languages.iter()
     }

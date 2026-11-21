@@ -105,6 +105,51 @@ enum Mode {
     /// Review the current branch's stack (`gh stack`) one layer per group,
     /// each layer against the one below, plus what isn't committed yet.
     Stack,
+    /// Turn languages' highlighting and outlines on or off, and list them.
+    Lang {
+        #[command(subcommand)]
+        command: LangCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum LangCommand {
+    /// Every language rrrev knows, whether its grammar is enabled and whether
+    /// its LSP server is in Mason's folder.
+    List,
+    /// Fetch and build languages' grammars, with git and the C compiler.
+    Enable {
+        #[arg(required = true)]
+        names: Vec<String>,
+    },
+    /// Delete languages' built grammars.
+    Disable {
+        #[arg(required = true)]
+        names: Vec<String>,
+    },
+}
+
+fn lang(command: LangCommand) -> Result<()> {
+    let registry = languages::Registry::global();
+    let find = |name: &str| {
+        registry.get(name).ok_or_else(|| anyhow!("no language `{name}`; `rrrev lang list` shows them all"))
+    };
+    match command {
+        LangCommand::List => print!("{}", languages::manage::list(registry)),
+        LangCommand::Enable { names } => {
+            for name in names {
+                let language = find(&name)?;
+                println!("Building {name}…");
+                println!("{}", languages::manage::enable(language)?);
+            }
+        }
+        LangCommand::Disable { names } => {
+            for name in names {
+                println!("{}", languages::manage::disable(find(&name)?)?);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn main() -> Result<()> {
@@ -118,6 +163,7 @@ fn main() -> Result<()> {
         Some(Mode::Since { commit }) => GitSource::discover(".", DiffSpec::RevToWorkTree(commit))?,
         Some(Mode::Branch { base }) => GitSource::branch(".", base)?,
         Some(Mode::Stack) => GitSource::stack(".")?,
+        Some(Mode::Lang { command }) => return lang(command),
         None => GitSource::discover(".", DiffSpec::from_args(cli.spec.as_deref(), cli.staged))?,
     };
     // Load before entering the alternate screen so errors print normally.
@@ -132,7 +178,9 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    let hint = languages::manage::hint(languages::Registry::global(), diff.files.iter().map(|f| f.path()));
     let mut app = App::new(source.describe(), diff, review);
+    app.message = hint;
     let claude = Arc::new(ClaudeCli::from_env());
     let organizer: Arc<dyn Organizer> = claude.clone();
     let assistant: Arc<dyn Assistant> = claude;

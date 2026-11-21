@@ -77,7 +77,8 @@ lsp = { command = "ruby-lsp", roots = ["Gemfile"] }
 [[language]]
 name = "swift"
 extensions = ["swift"]
-grammar = { git = "https://github.com/alex-pinkus/tree-sitter-swift", rev = "171fa3bc343233fe07f5e17205aaada33d778825" }
+# The 0.7.4-with-generated-files tag: the plain tag has no parser.c.
+grammar = { git = "https://github.com/alex-pinkus/tree-sitter-swift", rev = "82bb3a533e0801fd2bbaa11dc49676e10bf41948" }
 # Mason doesn't carry sourcekit-lsp, which comes with Xcode and Swift
 # toolchains: point `command` at it in your languages.toml.
 lsp = { command = "sourcekit-lsp", roots = ["Package.swift"] }

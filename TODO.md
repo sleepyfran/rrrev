@@ -17,7 +17,7 @@
 - [x] What you went through (good / read on screen / not seen) and a verdict (`S`).
 - [x] Copy every comment for an agent (`Y`); copy lines (`y`).
 - [x] A real parser (tree-sitter) for the scopes: Rust, Python, JS, TS/TSX, Go, Java, C, C++, Ruby and Lua built in; C#, F#, Swift and Kotlin behind Cargo features (`--features fsharp,swift`, or `all-languages`); other files still go by indentation.
-- [ ] Load tree-sitter grammars at runtime (`.so`/`.dylib`, as editors do) instead of compiling them in. Grammars are big (F# alone is 14 MB, all 14 take the binary from 4 MB to 43 MB), which is why the heavy ones sit behind features today; loading them on demand would keep the binary small, give every language without a rebuild, and let people add their own. Needs a place to find them (e.g. `~/.config/rrrev/grammars`), a way to get them (a `rrrev grammars install <lang>` or building from the grammar's repo) and the node-kind tables in `src/diff/scope/syntax.rs` moved to data, probably tree-sitter query files like the `tags.scm` most grammars already ship.
+- [x] Load tree-sitter grammars at runtime: `rrrev lang enable <name>` fetches a grammar at the commit `languages.toml` pins and builds it into `~/.local/share/rrrev/grammars`; `rrrev lang list` shows what's enabled and whether each LSP server is in Mason. Scope rules live in `src/languages/queries/<lang>/scopes.scm`.
 - [ ] A structural diff with tree-sitter; today changes come from a word-level diff.
 - [ ] Show the commit messages of the range (the "description").
 - [ ] GitHub mode: the PR queue, CI checks, posting the review and merging. Deliberately out of scope while rrrev is local-only.
