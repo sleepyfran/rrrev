@@ -2,7 +2,9 @@
 //! a grammar here. A file parses once into its outline, every definition in
 //! it in the order they start, and lines look their scopes up from that.
 
-use tree_sitter::{Language, Node, Parser};
+use std::sync::OnceLock;
+
+use tree_sitter::{Language, Node, Parser, Query, QueryCursor, StreamingIterator};
 
 use super::{Scope, shorten};
 use crate::languages::Registry;
@@ -30,10 +32,6 @@ enum Lang {
     #[cfg(feature = "fsharp")]
     FSharp,
 }
-
-/// Calls whose function argument reads as a definition, as test suites
-/// write them: `describe("…", () => {`, `it "…" do`.
-const TEST_CALLS: &[&str] = &["describe", "context", "it", "test"];
 
 /// How many lines a label may take, for signatures split over several.
 const MAX_LABEL_ROWS: usize = 12;
@@ -117,107 +115,34 @@ impl Lang {
         }
     }
 
-    /// Node kinds that are a definition wherever they appear, as long as
-    /// they have a body or take more than a line (so `mod a;`, `struct A;`
-    /// and Go's `type X int` don't count).
-    fn kinds(self) -> &'static [&'static str] {
-        const JS: &[&str] =
-            &["function_declaration", "generator_function_declaration", "class_declaration", "method_definition"];
-        const TS: &[&str] = &[
-            "function_declaration",
-            "generator_function_declaration",
-            "class_declaration",
-            "abstract_class_declaration",
-            "method_definition",
-            "interface_declaration",
-            "enum_declaration",
-            "internal_module",
-            "module",
-        ];
-        const C: &[&str] = &["function_definition", "struct_specifier", "enum_specifier", "union_specifier"];
+    /// The `scopes.scm` query for this language, as written.
+    fn scopes_source(self) -> &'static str {
         match self {
-            Lang::Rust => &[
-                "function_item",
-                "impl_item",
-                "trait_item",
-                "struct_item",
-                "enum_item",
-                "union_item",
-                "mod_item",
-                "macro_definition",
-            ],
-            Lang::Python => &["function_definition", "class_definition"],
-            Lang::JavaScript => JS,
-            Lang::TypeScript | Lang::Tsx => TS,
-            Lang::Go => &["function_declaration", "method_declaration", "type_spec"],
-            Lang::Java => &[
-                "class_declaration",
-                "interface_declaration",
-                "enum_declaration",
-                "record_declaration",
-                "annotation_type_declaration",
-                "method_declaration",
-                "constructor_declaration",
-            ],
-            Lang::C => C,
-            Lang::Cpp => &[
-                "function_definition",
-                "struct_specifier",
-                "enum_specifier",
-                "union_specifier",
-                "class_specifier",
-                "namespace_definition",
-            ],
+            Lang::Rust => include_str!("../../languages/queries/rust/scopes.scm"),
+            Lang::Python => include_str!("../../languages/queries/python/scopes.scm"),
+            Lang::JavaScript => include_str!("../../languages/queries/javascript/scopes.scm"),
+            Lang::TypeScript | Lang::Tsx => include_str!("../../languages/queries/typescript/scopes.scm"),
+            Lang::Go => include_str!("../../languages/queries/go/scopes.scm"),
+            Lang::Java => include_str!("../../languages/queries/java/scopes.scm"),
+            Lang::C => include_str!("../../languages/queries/c/scopes.scm"),
+            Lang::Cpp => include_str!("../../languages/queries/cpp/scopes.scm"),
             #[cfg(feature = "csharp")]
-            Lang::CSharp => &[
-                "namespace_declaration",
-                "class_declaration",
-                "struct_declaration",
-                "interface_declaration",
-                "enum_declaration",
-                "record_declaration",
-                "method_declaration",
-                "constructor_declaration",
-                "local_function_statement",
-                "property_declaration",
-            ],
-            Lang::Ruby => &["method", "singleton_method", "class", "module", "singleton_class"],
-            // Swift's structs, enums, actors and extensions are all `class_declaration`.
+            Lang::CSharp => include_str!("../../languages/queries/csharp/scopes.scm"),
+            Lang::Ruby => include_str!("../../languages/queries/ruby/scopes.scm"),
             #[cfg(feature = "swift")]
-            Lang::Swift => &[
-                "class_declaration",
-                "protocol_declaration",
-                "function_declaration",
-                "init_declaration",
-                "deinit_declaration",
-            ],
+            Lang::Swift => include_str!("../../languages/queries/swift/scopes.scm"),
             #[cfg(feature = "kotlin")]
-            Lang::Kotlin => &[
-                "class_declaration",
-                "object_declaration",
-                "companion_object",
-                "function_declaration",
-                "secondary_constructor",
-            ],
-            Lang::Lua => &["function_declaration"],
+            Lang::Kotlin => include_str!("../../languages/queries/kotlin/scopes.scm"),
+            Lang::Lua => include_str!("../../languages/queries/lua/scopes.scm"),
             #[cfg(feature = "fsharp")]
-            Lang::FSharp => &["namespace", "module_defn", "type_definition", "member_defn"],
+            Lang::FSharp => include_str!("../../languages/queries/fsharp/scopes.scm"),
         }
     }
 
-    /// Kinds that are a definition only in some places, checked by `special`.
-    #[cfg(test)]
-    fn special_kinds(self) -> &'static [&'static str] {
-        match self {
-            Lang::JavaScript | Lang::TypeScript | Lang::Tsx => {
-                &["arrow_function", "function_expression", "call_expression"]
-            }
-            Lang::Ruby => &["call"],
-            Lang::Lua => &["function_definition"],
-            #[cfg(feature = "fsharp")]
-            Lang::FSharp => &["function_or_value_defn"],
-            _ => &[],
-        }
+    /// The compiled `scopes.scm`, built the first time it's needed.
+    fn scopes(self) -> Option<&'static Query> {
+        static QUERIES: [OnceLock<Option<Query>>; 15] = [const { OnceLock::new() }; 15];
+        QUERIES[self as usize].get_or_init(|| Query::new(&self.grammar(), self.scopes_source()).ok()).as_ref()
     }
 }
 
@@ -225,95 +150,61 @@ impl Lang {
 /// (from `path`) has a grammar here.
 pub fn outline(path: &str, source: &[String]) -> Option<Vec<Scope>> {
     let lang = Lang::from_path(path)?;
+    let query = lang.scopes()?;
     let text = source.join("\n");
     let mut parser = Parser::new();
     parser.set_language(&lang.grammar()).ok()?;
     let tree = parser.parse(&text, None)?;
-    let mut scopes = Vec::new();
-    let mut cursor = tree.walk();
-    loop {
-        let node = cursor.node();
-        if node.is_named() && is_definition(lang, node, &text) {
-            scopes.push(Scope {
-                line: node.start_position().row as u32 + 1,
-                end: last_row(node) as u32 + 1,
-                label: label(node, body(lang, node), source),
-            });
-        }
-        if cursor.goto_first_child() {
-            continue;
-        }
-        while !cursor.goto_next_sibling() {
-            if !cursor.goto_parent() {
-                return Some(scopes);
+
+    // Each definition once, with where its label stops if a pattern says.
+    let mut found: Vec<(Node, Option<Node>)> = Vec::new();
+    let mut cursor = QueryCursor::new();
+    let mut matches = cursor.matches(query, tree.root_node(), text.as_bytes());
+    while let Some(m) = matches.next() {
+        let mut def = None;
+        let mut label_end = None;
+        for capture in m.captures() {
+            let name = query.capture_names()[capture.index as usize];
+            let node = capture.node;
+            match name {
+                "scope.body" => label_end = Some(node),
+                "scope" if body(node).is_some() || spans_lines(node) => def = Some(node),
+                "scope.always" => def = Some(node),
+                "scope.multiline" if spans_lines(node) => def = Some(node),
+                _ => {}
             }
         }
+        let Some(node) = def else { continue };
+        match found.iter_mut().find(|(n, _)| n.id() == node.id()) {
+            Some((_, end)) => *end = end.or(label_end),
+            None => found.push((node, label_end)),
+        }
     }
+    found.sort_by_key(|(n, _)| (n.start_byte(), std::cmp::Reverse(n.end_byte())));
+    Some(
+        found
+            .into_iter()
+            .map(|(node, label_end)| Scope {
+                line: node.start_position().row as u32 + 1,
+                end: last_row(node) as u32 + 1,
+                label: label(node, label_end.or_else(|| body(node)), source),
+            })
+            .collect(),
+    )
 }
 
-fn is_definition(lang: Lang, node: Node, text: &str) -> bool {
-    if let Some(yes) = special(lang, node, text) {
-        return yes;
-    }
-    lang.kinds().contains(&node.kind())
-        && (body(lang, node).is_some() || node.start_position().row < last_row(node))
+fn spans_lines(node: Node) -> bool {
+    node.start_position().row < last_row(node)
 }
 
-/// For kinds that are a definition only in some places: whether this one is.
-fn special(lang: Lang, node: Node, text: &str) -> Option<bool> {
-    fn parent<'t>(n: Node<'t>) -> &'t str {
-        n.parent().map_or("", |p| p.kind())
-    }
-    let js = matches!(lang, Lang::JavaScript | Lang::TypeScript | Lang::Tsx);
-    Some(match (lang, node.kind()) {
-        // A function given a name: `const f = () => {`, `k: function () {`,
-        // not every callback passed to `.map`.
-        (_, "arrow_function" | "function_expression") if js => matches!(
-            parent(node),
-            "variable_declarator" | "pair" | "assignment_expression" | "public_field_definition" | "field_definition"
-        ),
-        (_, "call_expression") if js => {
-            test_call(node.child_by_field_name("function"), text) && body(lang, node).is_some()
-        }
-        (Lang::Ruby, "call") => {
-            test_call(node.child_by_field_name("method"), text) && node.child_by_field_name("block").is_some()
-        }
-        // `local d = function() … end`, `M.e = function() … end`, `{ f = function() … end }`.
-        (Lang::Lua, "function_definition") => {
-            parent(node) == "field" || node.parent().is_some_and(|p| parent(p) == "assignment_statement")
-        }
-        // A function, or a value worked out over several lines; not `let x = 3`.
-        #[cfg(feature = "fsharp")]
-        (Lang::FSharp, "function_or_value_defn") => {
-            let mut cursor = node.walk();
-            node.named_children(&mut cursor).any(|c| c.kind() == "function_declaration_left")
-                || node.start_position().row < last_row(node)
-        }
-        _ => return None,
+/// Where a definition's body starts, which is where its label stops, when
+/// the query doesn't say.
+fn body(node: Node) -> Option<Node> {
+    node.child_by_field_name("body").or_else(|| node.child_by_field_name("block")).or_else(|| {
+        // Kotlin's bodies are children rather than fields.
+        let mut cursor = node.walk();
+        node.named_children(&mut cursor).find(|c| c.kind().ends_with("_body"))
     })
-}
-
-fn test_call(callee: Option<Node>, text: &str) -> bool {
-    callee.is_some_and(|c| c.kind() == "identifier" && TEST_CALLS.contains(&&text[c.byte_range()]))
-}
-
-/// Where a definition's body starts, which is where its label stops.
-fn body<'t>(lang: Lang, node: Node<'t>) -> Option<Node<'t>> {
-    match (lang, node.kind()) {
-        (Lang::JavaScript | Lang::TypeScript | Lang::Tsx, "call_expression") => {
-            let args = node.child_by_field_name("arguments")?;
-            let last = args.named_child((args.named_child_count() as u32).checked_sub(1)?)?;
-            matches!(last.kind(), "arrow_function" | "function_expression")
-                .then(|| last.child_by_field_name("body"))
-                .flatten()
-        }
-        (Lang::Ruby, "call") => node.child_by_field_name("block"),
-        _ => node.child_by_field_name("body").or_else(|| node.child_by_field_name("block")).or_else(|| {
-            // Kotlin's bodies are children rather than fields.
-            let mut cursor = node.walk();
-            node.named_children(&mut cursor).find(|c| c.kind().ends_with("_body"))
-        }),
-    }
 }
 
 /// The 0-based row of a node's last character: a node that ends with its
@@ -381,11 +272,10 @@ mod tests {
     }
 
     #[test]
-    fn every_kind_exists_in_its_grammar() {
+    fn every_scopes_query_compiles() {
         for &lang in Lang::ALL {
-            let grammar = lang.grammar();
-            for kind in lang.kinds().iter().chain(lang.special_kinds()) {
-                assert_ne!(grammar.id_for_node_kind(kind, true), 0, "{lang:?} has no `{kind}` nodes");
+            if let Err(e) = Query::new(&lang.grammar(), lang.scopes_source()) {
+                panic!("{lang:?}'s scopes.scm: {e}");
             }
         }
     }
