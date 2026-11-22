@@ -1,7 +1,7 @@
 //! Fixtures shared by the app's tests.
 
 use super::{Action, App};
-use crate::diff::{Diff, DiffLine, FileDiff, FileStatus, Hunk, LineKind};
+use crate::diff::{Diff, DiffLine, FileDiff, FileStatus, Hunk, LineKind, Sources};
 use crate::input::InputAction;
 use crate::review::ReviewState;
 
@@ -63,6 +63,32 @@ pub fn app_with(files: Vec<FileDiff>) -> App {
 pub fn sample_app() -> App {
     app_with(vec![file("a.rs", &[3, 2]), file("b.rs", &[4])])
 }
+
+/// a.rs changes an import (hunk 0) and a function (hunk 1); b.rs only
+/// its imports.
+pub fn plumbing_app() -> App {
+    use std::sync::Arc;
+    let lines = |text: &str| Some(Arc::new(text.lines().map(str::to_string).collect::<Vec<_>>()));
+    let old = "use a::B;\nuse c::D;\n\nfn f() {}\n";
+    let new = "use a::B;\nuse e::F;\n\nfn f() { 1 }\n";
+    let at = |line: u32, content: &str| {
+        let mut f = file_at("x", &[(line, content)]).hunks.remove(0);
+        f.lines.insert(0, DiffLine { kind: LineKind::Removed, old_no: Some(line), new_no: None, content: "-".into() });
+        f
+    };
+    let mut imports = at(2, "use e::F;");
+    imports.lines[0].content = "use c::D;".into();
+    let mut code = at(4, "fn f() { 1 }");
+    code.lines[0].content = "fn f() {}".into();
+    let mut a = file("a.rs", &[]);
+    a.hunks = vec![imports.clone(), code];
+    let mut b = file("b.rs", &[]);
+    b.hunks = vec![imports];
+    let sources = || Sources { old: lines(old), new: lines(new) };
+    let diff = Diff::new(vec![a, b]).with_sources(vec![sources(), sources()]);
+    App::new(String::new(), diff, ReviewState::default())
+}
+
 
 /// `(page, cursor row)`.
 pub fn position(app: &App) -> (usize, usize) {

@@ -214,6 +214,8 @@ pub struct HunkSummary {
     /// Diff lines with their sign; empty for generated files.
     pub lines: Vec<String>,
     pub generated: bool,
+    /// Only imports, exports and the like: shown, but marked as such.
+    pub plumbing: bool,
 }
 
 /// Lines shown per hunk; past that the organizer gets a count. Plenty to tell
@@ -228,11 +230,11 @@ impl OrganizeRequest {
 
     /// The hunks of `files` only, like one layer of a stack.
     pub fn from_files(title: &str, diff: &Diff, files: Range<usize>) -> Self {
-        let hunks = diff.files[files]
-            .iter()
-            .flat_map(|file| {
+        let hunks = files
+            .flat_map(|f| {
+                let file = &diff.files[f];
                 let generated = file.looks_generated();
-                file.hunks.iter().map(move |hunk| HunkSummary {
+                file.hunks.iter().enumerate().map(move |(h, hunk)| HunkSummary {
                     id: hunk.id.clone(),
                     path: file.path().to_string(),
                     header: hunk.header.clone(),
@@ -252,6 +254,7 @@ impl OrganizeRequest {
                             .collect()
                     },
                     generated,
+                    plumbing: !generated && diff.is_plumbing(f, h),
                 })
             })
             .collect();
@@ -266,6 +269,9 @@ impl OrganizeRequest {
             if hunk.generated {
                 out += "(generated file, content omitted)\n";
                 continue;
+            }
+            if hunk.plumbing {
+                out += "(plumbing: only imports, exports or the like)\n";
             }
             for line in hunk.lines.iter().take(MAX_LINES_PER_HUNK) {
                 out += line;
@@ -312,6 +318,19 @@ mod tests {
             })
             .collect();
         Diff::new(files)
+    }
+
+    #[test]
+    fn prompt_marks_plumbing() {
+        use crate::diff::Sources;
+        let source = |line: &str| Some(std::sync::Arc::new(vec![line.to_string()]));
+        let diff = diff(&[("src/a.rs", &["use a::B;"]), ("src/b.rs", &["fn b() {}"])]).with_sources(vec![
+            Sources { old: None, new: source("use a::B;") },
+            Sources { old: None, new: source("fn b() {}") },
+        ]);
+        let prompt = OrganizeRequest::from_diff("x", &diff).to_prompt();
+        assert!(prompt.contains("src/a.rs @@ -1 +1 @@\n(plumbing: only imports, exports or the like)\n+use a::B;\n"));
+        assert_eq!(prompt.matches("(plumbing").count(), 1);
     }
 
     #[test]
