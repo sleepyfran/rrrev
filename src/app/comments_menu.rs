@@ -133,6 +133,9 @@ impl App {
             .or_else(|| self.diff.files.iter().position(|f| f.path() == path));
         if let Some(file) = file {
             self.collapsed[file] = false;
+            if let Some(h) = self.diff.files[file].hunks.iter().position(|h| h.id == hunk) {
+                self.unfold_hunk(file, h);
+            }
             self.rebuild_rows();
         }
         let mut found = self.jump_to_comment_row(id);

@@ -96,6 +96,7 @@ impl App {
         self.message = Some(match result {
             Ok(()) => {
                 self.diff.forget_outlines(name);
+                self.fold_new_plumbing();
                 format!("Enabled {name}")
             }
             Err(e) => format!("error: cannot enable {name}: {e:#}"),

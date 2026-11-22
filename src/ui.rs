@@ -770,7 +770,11 @@ fn render_files_sidebar(frame: &mut Frame, area: Rect, app: &App, popup: bool) -
             progress_mark(app.file_progress(idx), &app.palette),
             Span::raw(format!("{fold} ")),
             Span::raw(dir.to_string()).dim(),
-            Span::raw(name.to_string()),
+            if app.diff.is_plumbing_file(idx) {
+                Span::styled(name.to_string(), Style::new().fg(p.magenta))
+            } else {
+                Span::raw(name.to_string())
+            },
             Span::raw(" ".repeat(pad)),
             Span::styled(format!(" +{added}"), Style::new().fg(p.green)),
             Span::styled(format!(" -{removed}"), Style::new().fg(p.red)),
@@ -885,11 +889,16 @@ fn row_line(app: &App, row: Row) -> Line<'static> {
                 Span::raw(" "),
                 progress_mark(app.file_progress(file), &app.palette),
             ];
+            // Only a file that's nothing but plumbing says so up here; plumbing
+            // in a file with more to it shows on its hunks.
+            if app.diff.is_plumbing_file(file) {
+                spans.push(Span::raw(" "));
+                spans.push(plumbing_badge(&app.palette));
+            }
             if f.is_binary {
                 spans.push(Span::raw(" (binary)").dim());
             } else if collapsed {
-                let reason = if f.looks_generated() { "generated, " } else { "" };
-                spans.push(Span::raw(format!(" ({reason}{} lines folded · za to unfold)", f.line_count())).dim());
+                spans.push(Span::raw(format!(" ({} lines folded · za to unfold)", f.line_count())).dim());
             }
             Line::from(spans)
         }
@@ -909,6 +918,21 @@ fn row_line(app: &App, row: Row) -> Line<'static> {
             if let Some(scope) = app.diff.hunk_scope(file, hunk) {
                 spans.push(Span::raw(" "));
                 spans.push(Span::styled(scope, Style::new().bold()));
+            }
+            // Plumbing in a file with more to it: marked on the hunk, and
+            // folded to this header until opened.
+            if app.diff.is_plumbing(file, hunk) && !app.diff.is_plumbing_file(file) {
+                let style = Style::new().fg(p.magenta).italic();
+                if app.is_hunk_folded(file, hunk) {
+                    let h = app.hunk(file, hunk);
+                    let count = |kind| h.lines.iter().filter(|l| l.kind == kind && !l.content.trim().is_empty()).count();
+                    let (added, removed) = (count(LineKind::Added), count(LineKind::Removed));
+                    spans.push(Span::styled(format!("  ▸ plumbing +{added} −{removed}"), style));
+                    spans.push(Span::raw(" · za to unfold").dim());
+                    let line = Line::from(spans);
+                    return if reviewed { line.patch_style(Style::new().dim()) } else { line };
+                }
+                spans.push(Span::styled("  ▾ plumbing", style));
             }
             let (above, below) = app.hidden_around(file, hunk);
             let mut hidden = Vec::new();
@@ -939,6 +963,11 @@ fn row_line(app: &App, row: Row) -> Line<'static> {
             unreachable!("drawn by row_lines")
         }
     }
+}
+
+/// The tag on a file that only changes imports, exports or a lockfile.
+fn plumbing_badge(p: &Palette) -> Span<'static> {
+    Span::styled(" Plumbing ", Style::new().fg(p.magenta).reversed())
 }
 
 /// Puts `gutter` before the first line of `text`, wrapped to the room left

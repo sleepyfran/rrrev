@@ -69,6 +69,9 @@ pub struct App {
     pub rows: Vec<Row>,
     /// Per file: whether its hunks are folded away.
     pub collapsed: Vec<bool>,
+    /// Per file and hunk: whether the hunk is folded to its header, as
+    /// plumbing hunks start.
+    pub hunk_folds: Vec<Vec<bool>>,
     pub cursor: usize,
     /// The column the cursor wants on code rows; see `column.rs`.
     pub column: usize,
@@ -157,6 +160,7 @@ impl App {
             page: 0,
             rows: Vec::new(),
             collapsed: Vec::new(),
+            hunk_folds: Vec::new(),
             cursor: 0,
             column: 0,
             scroll: 0,
@@ -195,10 +199,13 @@ impl App {
             hover: None,
             should_quit: false,
         };
-        // Generated files and files already reviewed start out of the way.
+        // Plumbing, generated files and files already reviewed start out of
+        // the way: a file that's all plumbing folds whole, while plumbing in
+        // a file with more to it folds hunk by hunk.
         app.collapsed = (0..app.diff.files.len())
-            .map(|f| app.diff.files[f].looks_generated() || app.file_progress(f).is_complete())
+            .map(|f| app.diff.is_plumbing_file(f) || app.file_progress(f).is_complete())
             .collect();
+        app.hunk_folds = (0..app.diff.files.len()).map(|f| app.plumbing_folds(f)).collect();
         // A stack follows its layers, each in its plan's groups once
         // organized; a review that has a plan picks up in it.
         let followed = app.follow_plan();
@@ -343,7 +350,7 @@ impl App {
             Action::ToggleVerdict => self.show_verdict = true,
             Action::PickTheme => self.open_theme_picker(),
             Action::Select => match self.current_row() {
-                Some(Row::File { .. }) => self.toggle_fold(),
+                Some(Row::File { .. } | Row::Hunk { .. }) => self.toggle_fold(),
                 Some(Row::Line { .. } | Row::Context { .. }) => self.open_file_view(),
                 _ => {}
             },
