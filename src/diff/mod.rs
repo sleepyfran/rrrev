@@ -1,6 +1,7 @@
 //! Source-agnostic diff model, plus the trait every diff source implements.
 
 pub mod git;
+pub mod plumbing;
 pub mod scope;
 pub mod stack;
 pub mod words;
@@ -37,6 +38,9 @@ pub struct Diff {
     /// Per file, the old and new sides' outlines, parsed the first time a
     /// line's scopes are asked for: `None` for a language with no grammar.
     outlines: Vec<[OnceLock<Option<Vec<scope::Scope>>>; 2]>,
+    /// Per file, which lines of the old and new sides are plumbing, found
+    /// the first time a hunk asks: `None` for a language with no grammar.
+    plumbing: Vec<[OnceLock<Option<Vec<bool>>>; 2]>,
 }
 
 /// A file's full text, line by line.
@@ -89,13 +93,14 @@ impl Diff {
             }
         }
         let words = files.iter().map(|f| f.hunks.iter().map(|h| words::changes(&h.lines)).collect()).collect();
-        Diff { files, sections: Vec::new(), sources: Vec::new(), words, outlines: Vec::new() }
+        Diff { files, sections: Vec::new(), sources: Vec::new(), words, outlines: Vec::new(), plumbing: Vec::new() }
     }
 
     /// The same diff, with the files' full text.
     pub fn with_sources(self, sources: Vec<Sources>) -> Self {
         let outlines = sources.iter().map(|_| Default::default()).collect();
-        Diff { sources, outlines, ..self }
+        let plumbing = sources.iter().map(|_| Default::default()).collect();
+        Diff { sources, outlines, plumbing, ..self }
     }
 
     /// The byte ranges of a line's content that changed, word by word.
@@ -156,19 +161,68 @@ impl Diff {
         }
     }
 
-    /// Drops the outlines of the files in `language`, to parse them again
-    /// with a grammar built since they were asked for.
+    /// Drops the outlines and plumbing of the files in `language`, to parse
+    /// them again with a grammar built since they were asked for.
     pub fn forget_outlines(&mut self, language: &str) {
         let registry = crate::languages::Registry::global();
-        for (f, sides) in self.files.iter().zip(&mut self.outlines) {
-            // In `Side` order, as `scopes_at` reads them.
+        for (file, f) in self.files.iter().enumerate() {
+            // In `Side` order, as `scopes_at` and `is_plumbing` read them.
             let paths = [f.old_path.as_deref(), f.new_path.as_deref()];
-            for (outline, path) in sides.iter_mut().zip(paths) {
+            for (side, path) in paths.into_iter().enumerate() {
                 if registry.for_path(path.unwrap_or(f.path())).is_some_and(|l| l.name == language) {
-                    *outline = OnceLock::new();
+                    if let Some(sides) = self.outlines.get_mut(file) {
+                        sides[side] = OnceLock::new();
+                    }
+                    if let Some(sides) = self.plumbing.get_mut(file) {
+                        sides[side] = OnceLock::new();
+                    }
                 }
             }
         }
+    }
+
+    /// Whether a hunk only changes plumbing: every line it adds or removes,
+    /// blank ones aside, is an import, an export or the like on its own
+    /// side; or the file is a lockfile. `false` when unsure, e.g. for a
+    /// language with no grammar here.
+    pub fn is_plumbing(&self, file: usize, hunk: usize) -> bool {
+        let f = &self.files[file];
+        if f.looks_generated() {
+            return true;
+        }
+        let Some(sides) = self.plumbing.get(file) else { return false };
+        let sources = &self.sources[file];
+        let lines = |side: Side| {
+            let (source, path) = match side {
+                Side::Old => (sources.old.as_ref(), f.old_path.as_deref()),
+                Side::New => (sources.new.as_ref(), f.new_path.as_deref()),
+            };
+            let source = source?;
+            sides[side as usize].get_or_init(|| plumbing::lines(path.unwrap_or(f.path()), source)).as_deref()
+        };
+        let mut changed = false;
+        for line in &self.files[file].hunks[hunk].lines {
+            let (side, no) = match line.kind {
+                LineKind::Added => (Side::New, line.new_no),
+                LineKind::Removed => (Side::Old, line.old_no),
+                _ => continue,
+            };
+            if line.content.trim().is_empty() {
+                continue;
+            }
+            let plumbing = no.zip(lines(side)).and_then(|(no, lines)| lines.get((no as usize).checked_sub(1)?).copied());
+            if plumbing != Some(true) {
+                return false;
+            }
+            changed = true;
+        }
+        changed
+    }
+
+    /// Whether a file has hunks and they're all plumbing.
+    pub fn is_plumbing_file(&self, file: usize) -> bool {
+        let hunks = self.files[file].hunks.len();
+        hunks > 0 && (0..hunks).all(|h| self.is_plumbing(file, h))
     }
 
     /// What a hunk is in: the innermost definition around its first changed
@@ -432,5 +486,42 @@ mod tests {
         let ids = ids(&diff);
         assert_ne!(ids[0], ids[1]);
         assert!(ids[1].0.ends_with("-2"));
+    }
+
+    #[test]
+    fn plumbing_hunks_change_only_imports() {
+        let lines = |text: &str| Some(Arc::new(text.lines().map(str::to_string).collect::<Vec<_>>()));
+        let old = "use a::B;\nuse c::D;\n\nfn f() {}\n";
+        let new = "use a::B;\nuse e::F;\n\nfn f() { 1 }\n";
+        let imports = hunk(2, vec![
+            DiffLine { kind: LineKind::Removed, old_no: Some(2), new_no: None, content: "use c::D;".into() },
+            DiffLine { kind: LineKind::Added, old_no: None, new_no: Some(2), content: "use e::F;".into() },
+            DiffLine { kind: LineKind::Context, old_no: Some(3), new_no: Some(3), content: String::new() },
+        ]);
+        let code = hunk(4, vec![
+            DiffLine { kind: LineKind::Removed, old_no: Some(4), new_no: None, content: "fn f() {}".into() },
+            DiffLine { kind: LineKind::Added, old_no: None, new_no: Some(4), content: "fn f() { 1 }".into() },
+        ]);
+        let blank = hunk(3, vec![DiffLine { kind: LineKind::Added, old_no: None, new_no: Some(3), content: String::new() }]);
+        let diff = Diff::new(vec![
+            file("a.rs", vec![imports.clone(), code]),
+            file("b.rs", vec![imports.clone()]),
+            file("Cargo.lock", vec![blank.clone()]),
+            file("c.md", vec![imports]),
+            file("d.rs", vec![blank]),
+        ])
+        .with_sources(vec![
+            Sources { old: lines(old), new: lines(new) },
+            Sources { old: lines(old), new: lines(new) },
+            Sources::default(),
+            Sources { old: lines(old), new: lines(new) },
+            Sources { old: lines(old), new: lines(new) },
+        ]);
+        assert!(diff.is_plumbing(0, 0) && !diff.is_plumbing(0, 1));
+        assert!(!diff.is_plumbing_file(0) && diff.is_plumbing_file(1));
+        // Lockfiles are plumbing whatever they say.
+        assert!(diff.is_plumbing_file(2));
+        // No grammar, no guess; and only blank lines are no change at all.
+        assert!(!diff.is_plumbing(3, 0) && !diff.is_plumbing(4, 0));
     }
 }

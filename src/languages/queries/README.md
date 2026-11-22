@@ -29,6 +29,17 @@ MIT), at the commit `languages.toml` pins, with small fixes where its order
 assumed the first pattern wins. Kotlin's grammar ships none, so its file is
 rrrev's own.
 
+## `plumbing.scm`
+
+Imports, exports and the like: lines that wire code together without doing
+anything. A hunk whose every changed line sits inside a `@plumbing` capture
+(blank lines aside) is a plumbing hunk, and starts folded. Keep these strict,
+since a capture that's too wide hides real changes:
+
+- `@plumbing`: an import, a re-export, a package line, an include.
+
+Captures starting with `_` are for predicates only.
+
 ## Inheriting
 
 A first line `; inherits: a, b` puts those languages' queries of the same kind

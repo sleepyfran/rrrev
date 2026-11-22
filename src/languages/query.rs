@@ -1,5 +1,6 @@
 //! The tree-sitter queries that ship with rrrev, in `queries/<language>/`:
-//! `scopes.scm` for breadcrumbs and `ze`, `highlights.scm` for colours.
+//! `scopes.scm` for breadcrumbs and `ze`, `highlights.scm` for colours,
+//! `plumbing.scm` for the imports and exports that fold away.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -45,6 +46,22 @@ static FILES: &[(&str, &str)] = files![
     "lua" / "highlights",
     "fsharp" / "scopes",
     "fsharp" / "highlights",
+    "rust" / "plumbing",
+    "python" / "plumbing",
+    "ecma" / "plumbing",
+    "javascript" / "plumbing",
+    "typescript" / "plumbing",
+    "tsx" / "plumbing",
+    "go" / "plumbing",
+    "java" / "plumbing",
+    "c" / "plumbing",
+    "cpp" / "plumbing",
+    "csharp" / "plumbing",
+    "ruby" / "plumbing",
+    "swift" / "plumbing",
+    "kotlin" / "plumbing",
+    "lua" / "plumbing",
+    "fsharp" / "plumbing",
 ];
 
 /// A query's text, with what it inherits first: a first line
@@ -86,7 +103,7 @@ mod tests {
         for &name in grammar::LINKED {
             assert!(registry.get(name).is_some(), "{name} isn't in languages.toml");
             let grammar = grammar::get(name).unwrap();
-            for kind in ["scopes", "highlights"] {
+            for kind in ["scopes", "highlights", "plumbing"] {
                 let text = source(name, kind).unwrap_or_else(|| panic!("no {name}/{kind}.scm"));
                 if let Err(e) = Query::new(&grammar, &text) {
                     panic!("{name}/{kind}.scm: {e}");
