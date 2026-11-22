@@ -121,6 +121,10 @@ impl App {
                 let end = self.hunk(file, hunk).lines.len().saturating_sub(1);
                 Some(CommentTarget::New { file, hunk, start: 0, end })
             }
+            Row::Plumbing { file, hunk, start } => {
+                let end = self.run_at(file, hunk, start)?.end - 1;
+                Some(CommentTarget::New { file, hunk, start, end })
+            }
             Row::Comment { id, .. } => Some(CommentTarget::Edit { id }),
             Row::Note { note, .. } => {
                 let n = self.notes.get(note)?;

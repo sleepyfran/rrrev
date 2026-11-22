@@ -21,6 +21,9 @@ pub enum Row {
     Comment { file: usize, id: u64, line: usize },
     /// An agent note (an index into `App::notes`), under the code it's about.
     Note { file: usize, hunk: usize, note: usize },
+    /// A folded run of plumbing lines in a hunk that also changes code,
+    /// standing for the hunk's lines from `start` on (see `plumbing_runs`).
+    Plumbing { file: usize, hunk: usize, start: usize },
 }
 
 impl Row {
@@ -32,16 +35,19 @@ impl Row {
             | Row::Line { file, .. }
             | Row::Context { file, .. }
             | Row::Comment { file, .. }
-            | Row::Note { file, .. } => Some(file),
+            | Row::Note { file, .. }
+            | Row::Plumbing { file, .. } => Some(file),
         }
     }
 
     pub fn hunk(self) -> Option<usize> {
         match self {
             Row::Group { .. } | Row::File { .. } | Row::Comment { .. } => None,
-            Row::Hunk { hunk, .. } | Row::Line { hunk, .. } | Row::Context { hunk, .. } | Row::Note { hunk, .. } => {
-                Some(hunk)
-            }
+            Row::Hunk { hunk, .. }
+            | Row::Line { hunk, .. }
+            | Row::Context { hunk, .. }
+            | Row::Note { hunk, .. }
+            | Row::Plumbing { hunk, .. } => Some(hunk),
         }
     }
 
@@ -183,9 +189,16 @@ impl App {
         let h = &self.diff.files[file].hunks[hunk];
         let last = h.lines.len().saturating_sub(1);
         let (above, below) = self.context_lines(file, hunk);
+        let folded: Vec<_> = self.diff.plumbing_runs(file, hunk).into_iter().filter(|r| self.is_run_folded(file, hunk, r)).collect();
         rows.push(Row::Hunk { file, hunk });
         rows.extend(above.into_iter().map(|no| Row::Context { file, hunk, no }));
         for line in 0..h.lines.len() {
+            if let Some(run) = folded.iter().find(|r| r.contains(&line)) {
+                if run.start == line {
+                    rows.push(Row::Plumbing { file, hunk, start: line });
+                }
+                continue;
+            }
             // A hidden removal's comments and notes stay, under the line above.
             if self.show_removals || h.lines[line].kind != LineKind::Removed {
                 rows.push(Row::Line { file, hunk, line });
@@ -237,7 +250,12 @@ impl App {
             let folded = current.and_then(Row::file).is_some_and(|f| self.collapsed[f]);
             let folded_hunk = current.and_then(|r| Some((r.file()?, r.hunk()?))).filter(|&(f, h)| self.is_hunk_folded(f, h));
             let hunk_header = folded_hunk.and_then(|(file, hunk)| self.rows.iter().position(|r| *r == Row::Hunk { file, hunk }));
-            match (header, hunk_header) {
+            let run = match current {
+                Some(Row::Line { file, hunk, line }) => self.run_at(file, hunk, line).map(|r| Row::Plumbing { file, hunk, start: r.start }),
+                _ => None,
+            };
+            let run = run.and_then(|r| self.rows.iter().position(|row| *row == r));
+            match (header, hunk_header.or(run)) {
                 (Some(idx), _) if folded => idx,
                 (_, Some(idx)) => idx,
                 _ => self.cursor.min(self.rows.len() - 1),
@@ -283,7 +301,9 @@ impl App {
     /// `za`: on a hunk header, folds or unfolds that hunk; anywhere else,
     /// the file.
     pub(super) fn toggle_fold(&mut self) {
-        if let Some(Row::Hunk { file, hunk }) = self.current_row() {
+        if let Some((file, hunk, run)) = self.current_run() {
+            self.set_fold(!self.is_run_folded(file, hunk, &run));
+        } else if let Some(Row::Hunk { file, hunk }) = self.current_row() {
             self.set_fold(!self.is_hunk_folded(file, hunk));
         } else if let Some(file) = self.current_file() {
             self.set_fold(!self.collapsed[file]);
@@ -291,7 +311,19 @@ impl App {
     }
 
     pub(super) fn set_fold(&mut self, collapsed: bool) {
-        if let Some(Row::Hunk { file, hunk }) = self.current_row() {
+        if let Some((file, hunk, run)) = self.current_run() {
+            if collapsed {
+                self.open_runs.remove(&(file, hunk, run.start));
+            } else {
+                self.open_runs.insert((file, hunk, run.start));
+            }
+            self.rebuild_rows();
+            // Opened: onto its first line, rather than wherever the
+            // header's row lands.
+            if !collapsed && let Some(idx) = self.rows.iter().position(|r| *r == Row::Line { file, hunk, line: run.start }) {
+                self.cursor = idx;
+            }
+        } else if let Some(Row::Hunk { file, hunk }) = self.current_row() {
             self.hunk_folds[file][hunk] = collapsed;
             self.rebuild_rows();
         } else if let Some(file) = self.current_file() {
@@ -307,7 +339,40 @@ impl App {
         for file in 0..self.hunk_folds.len() {
             self.hunk_folds[file] = if collapsed { self.plumbing_folds(file) } else { vec![false; self.hunk_folds[file].len()] };
         }
+        self.open_runs.clear();
+        if !collapsed {
+            for (file, f) in self.diff.files.iter().enumerate() {
+                for hunk in 0..f.hunks.len() {
+                    let runs = self.diff.plumbing_runs(file, hunk);
+                    self.open_runs.extend(runs.into_iter().map(|r| (file, hunk, r.start)));
+                }
+            }
+        }
         self.rebuild_rows();
+    }
+
+    /// The plumbing run in a hunk that holds `line`, if any.
+    pub fn run_at(&self, file: usize, hunk: usize, line: usize) -> Option<std::ops::Range<usize>> {
+        self.diff.plumbing_runs(file, hunk).into_iter().find(|r| r.contains(&line))
+    }
+
+    /// The run under the cursor: a folded one's row, or a line of an open one.
+    fn current_run(&self) -> Option<(usize, usize, std::ops::Range<usize>)> {
+        match self.current_row()? {
+            Row::Plumbing { file, hunk, start } | Row::Line { file, hunk, line: start } => {
+                Some((file, hunk, self.run_at(file, hunk, start)?))
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether a plumbing run shows as one row: until opened, and unless a
+    /// comment or agent note sits on one of its lines.
+    pub fn is_run_folded(&self, file: usize, hunk: usize, run: &std::ops::Range<usize>) -> bool {
+        let id = &self.hunk(file, hunk).id;
+        let commented = self.review.comments().iter().any(|c| c.hunk == *id && c.start < run.end && run.start <= c.end);
+        let noted = self.notes.iter().any(|n| (n.file, n.hunk) == (file, hunk) && run.contains(&n.line));
+        !self.open_runs.contains(&(file, hunk, run.start)) && !commented && !noted
     }
 
     pub fn is_hunk_folded(&self, file: usize, hunk: usize) -> bool {
@@ -456,7 +521,7 @@ impl App {
                 let Some(note) = self.notes.get(note) else { return 1 };
                 (self.comment_column(), NOTE_LABEL.chars().count() + note.text.chars().count())
             }
-            Row::Group { .. } | Row::File { .. } | Row::Hunk { .. } => return 1,
+            Row::Group { .. } | Row::File { .. } | Row::Hunk { .. } | Row::Plumbing { .. } => return 1,
         };
         wrapped_height(text, self.text_room(column))
     }
@@ -630,6 +695,36 @@ mod tests {
         assert_eq!(app.hunk_folds, [vec![false, false], vec![false]]);
         app.update(Action::CloseAllFolds);
         assert_eq!(app.hunk_folds, [vec![true, false], vec![false]]);
+    }
+
+    #[test]
+    fn plumbing_runs_fold_inside_a_hunk_with_code() {
+        let mut app = App::new(String::new(), crate::diff::mixed_diff(), crate::review::ReviewState::default());
+        let line = |line| Row::Line { file: 0, hunk: 0, line };
+        let run = Row::Plumbing { file: 0, hunk: 0, start: 3 };
+        // Header, hunk, three lines of context, the run, then the rest.
+        assert_eq!(app.rows[2..7], [line(0), line(1), line(2), run, line(8)]);
+        assert_eq!(app.rows.len(), 2 + 3 + 1 + 7);
+
+        // za on the run opens it onto its first line; za there folds it.
+        app.update(Action::Down(5));
+        assert_eq!(app.current_row(), Some(run));
+        app.update(Action::ToggleFold);
+        assert_eq!(app.current_row(), Some(line(3)));
+        assert_eq!(app.rows.len(), 2 + 15);
+        app.update(Action::Down(2));
+        app.update(Action::ToggleFold);
+        assert_eq!(app.current_row(), Some(run));
+
+        // A comment on the run keeps it open.
+        app.update(Action::StartComment);
+        crate::app::test_support::type_text(&mut app, "why?");
+        app.update_input(crate::input::InputAction::Submit);
+        assert!(app.rows.contains(&line(3)) && !app.rows.contains(&run));
+
+        // Its lines count as plumbing until read.
+        let stats = app.line_stats();
+        assert_eq!((stats.plumbing, stats.unseen), (3, 4));
     }
 
     #[test]

@@ -18,7 +18,8 @@ pub struct LineStats {
     pub good: usize,
     /// On screen at some point, in hunks not marked yet.
     pub read: usize,
-    /// In plumbing hunks not marked yet, which need no reading.
+    /// Plumbing not marked yet and not read, which needs no reading: whole
+    /// hunks, and runs of it in hunks that also change code.
     pub plumbing: usize,
     /// Never on screen.
     pub unseen: usize,
@@ -65,10 +66,11 @@ impl App {
             for (h, hunk) in file.hunks.iter().enumerate() {
                 let reviewed = self.review.is_reviewed(&hunk.id);
                 let plumbing = self.diff.is_plumbing(f, h);
+                let runs = if reviewed || plumbing { Vec::new() } else { self.diff.plumbing_runs(f, h) };
                 for (i, _) in hunk.lines.iter().enumerate().filter(|(_, l)| is_change(l.kind)) {
                     if reviewed {
                         stats.good += 1;
-                    } else if plumbing {
+                    } else if plumbing || (runs.iter().any(|r| r.contains(&i)) && !self.review.is_seen(&hunk.id, i)) {
                         stats.plumbing += 1;
                     } else if self.review.is_seen(&hunk.id, i) {
                         stats.read += 1;
@@ -160,6 +162,12 @@ impl App {
                     let lines = &self.hunk(file, hunk).lines;
                     let text = lines.iter().map(|l| format!("{}{}", sign(l.kind), l.content)).collect::<Vec<_>>();
                     (text.join("\n"), "the hunk".into())
+                }
+                Some(Row::Plumbing { file, hunk, start }) => {
+                    let run = self.run_at(file, hunk, start).unwrap_or(start..start + 1);
+                    let lines = &self.hunk(file, hunk).lines[run];
+                    let text = lines.iter().map(|l| format!("{}{}", sign(l.kind), l.content)).collect::<Vec<_>>();
+                    (text.join("\n"), format!("{} lines", lines.len()))
                 }
                 Some(Row::Comment { id, .. }) => match self.review.comment(id) {
                     Some(c) => (c.text.clone(), "the comment".into()),

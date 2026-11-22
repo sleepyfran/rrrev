@@ -959,6 +959,19 @@ fn row_line(app: &App, row: Row) -> Line<'static> {
             let line = Line::from(spans);
             if reviewed { line.patch_style(Style::new().dim()) } else { line }
         }
+        Row::Plumbing { file, hunk, start } => {
+            let h = app.hunk(file, hunk);
+            let end = app.run_at(file, hunk, start).map_or(start + 1, |r| r.end);
+            let lines = &h.lines[start..end.min(h.lines.len())];
+            let count = |kind| lines.iter().filter(|l| l.kind == kind && !l.content.trim().is_empty()).count();
+            let (added, removed) = (count(LineKind::Added), count(LineKind::Removed));
+            let line = Line::from(vec![
+                Span::raw(" ".repeat(app.code_column().saturating_sub(2))),
+                Span::styled(format!("▸ plumbing +{added} −{removed}"), Style::new().fg(p.magenta).italic()),
+                Span::raw(format!(" · {} lines folded · za to unfold", lines.len())).dim(),
+            ]);
+            if app.is_reviewed(file, hunk) { line.patch_style(Style::new().dim()) } else { line }
+        }
         Row::Line { .. } | Row::Context { .. } | Row::Comment { .. } | Row::Note { .. } => {
             unreachable!("drawn by row_lines")
         }
@@ -1278,7 +1291,9 @@ fn render_breadcrumbs(frame: &mut Frame, area: Rect, app: &App) {
         return;
     };
     let scopes: Vec<String> = match row {
-        Row::Line { file, hunk, line } => app.diff.scopes(file, hunk, line).into_iter().map(|s| s.label).collect(),
+        Row::Line { file, hunk, line } | Row::Plumbing { file, hunk, start: line } => {
+            app.diff.scopes(file, hunk, line).into_iter().map(|s| s.label).collect()
+        }
         Row::Hunk { file, hunk } | Row::Note { file, hunk, .. } => {
             let line = match row {
                 Row::Note { note, .. } => app.notes.get(note).map_or(0, |n| n.line),

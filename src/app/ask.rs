@@ -160,6 +160,7 @@ impl App {
                     (n.file, n.hunk, n.line, n.line)
                 }
                 Row::Hunk { file, hunk } => (file, hunk, 0, self.hunk(file, hunk).lines.len().checked_sub(1)?),
+                Row::Plumbing { file, hunk, start } => (file, hunk, start, self.run_at(file, hunk, start)?.end - 1),
                 Row::Context { file, hunk, no } => return Some(self.context_target(file, hunk, no)),
                 Row::Group { .. } | Row::File { .. } | Row::Comment { .. } => return None,
             },

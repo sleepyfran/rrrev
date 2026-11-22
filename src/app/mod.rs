@@ -72,6 +72,9 @@ pub struct App {
     /// Per file and hunk: whether the hunk is folded to its header, as
     /// plumbing hunks start.
     pub hunk_folds: Vec<Vec<bool>>,
+    /// Plumbing runs opened by hand, by file, hunk and first line; the rest
+    /// stay folded.
+    pub open_runs: std::collections::HashSet<(usize, usize, usize)>,
     pub cursor: usize,
     /// The column the cursor wants on code rows; see `column.rs`.
     pub column: usize,
@@ -161,6 +164,7 @@ impl App {
             rows: Vec::new(),
             collapsed: Vec::new(),
             hunk_folds: Vec::new(),
+            open_runs: Default::default(),
             cursor: 0,
             column: 0,
             scroll: 0,
@@ -350,7 +354,7 @@ impl App {
             Action::ToggleVerdict => self.show_verdict = true,
             Action::PickTheme => self.open_theme_picker(),
             Action::Select => match self.current_row() {
-                Some(Row::File { .. } | Row::Hunk { .. }) => self.toggle_fold(),
+                Some(Row::File { .. } | Row::Hunk { .. } | Row::Plumbing { .. }) => self.toggle_fold(),
                 Some(Row::Line { .. } | Row::Context { .. }) => self.open_file_view(),
                 _ => {}
             },
