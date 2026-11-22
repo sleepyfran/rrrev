@@ -49,7 +49,8 @@ pub enum Action {
     OpenAllFolds,
     CloseAllFolds,
     ToggleReviewed,
-    /// `R`: everything on the current page, a file or a plan group.
+    /// `R`: everything on the current page, a file or a plan group; in the
+    /// stack, the file under the cursor.
     TogglePageReviewed,
     /// `gs` / `gp` / `gf`: the stack's layers, the plan, or the files.
     ShowView(View),

@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use super::{App, Row};
+use super::{App, Row, View};
 
 /// Reviewed and total hunk counts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,18 +65,33 @@ impl App {
                 self.set_hunks_reviewed(&[(file, hunk)], !reviewed);
             }
             Some(Row::Group { .. }) => self.toggle_page_reviewed(),
-            Some(Row::File { file }) => {
-                let hunks: Vec<_> = self.page_hunks(self.page).into_iter().filter(|&(f, _)| f == file).collect();
-                self.toggle_hunks_reviewed(&hunks);
-            }
+            Some(Row::File { file }) => self.toggle_file_on_page_reviewed(file),
             Some(Row::Comment { .. }) | None => {}
         }
     }
 
-    /// `R`: everything on the current page.
-    pub(super) fn toggle_page_reviewed(&mut self) {
+    /// `R`: everything on the current page. In the stack a page is a whole
+    /// layer, so there it's just the file under the cursor, or the page when
+    /// the cursor isn't on a file.
+    pub(super) fn toggle_page_or_file_reviewed(&mut self) {
+        match (self.view, self.current_file()) {
+            (View::Stack, Some(file)) => self.toggle_file_on_page_reviewed(file),
+            _ => self.toggle_page_reviewed(),
+        }
+    }
+
+    /// Everything on the current page.
+    fn toggle_page_reviewed(&mut self) {
         if self.page < self.page_count() {
             let hunks = self.page_hunks(self.page);
+            self.toggle_hunks_reviewed(&hunks);
+        }
+    }
+
+    /// `file`'s hunks on the current page.
+    fn toggle_file_on_page_reviewed(&mut self, file: usize) {
+        if self.page < self.page_count() {
+            let hunks: Vec<_> = self.page_hunks(self.page).into_iter().filter(|&(f, _)| f == file).collect();
             self.toggle_hunks_reviewed(&hunks);
         }
     }

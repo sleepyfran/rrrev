@@ -836,6 +836,20 @@ mod tests {
     }
 
     #[test]
+    fn capital_r_in_a_stack_reviews_only_the_file_under_the_cursor() {
+        let mut app = stacked_app();
+        app.update(Action::NextLayer(1));
+        let b = app.rows.iter().position(|r| *r == Row::Hunk { file: 2, hunk: 0 }).unwrap();
+        app.cursor = b;
+        app.update(Action::TogglePageReviewed);
+        assert!(app.is_reviewed(2, 0));
+        assert!(!app.is_reviewed(1, 0));
+
+        app.update(Action::TogglePageReviewed);
+        assert!(!app.is_reviewed(2, 0));
+    }
+
+    #[test]
     fn layer_jumps_work_in_the_stack_and_the_files() {
         let mut app = stacked_app();
         organize_with(&mut app, &[("Base", &[(0, 0)])]);

@@ -56,7 +56,7 @@ pub const SECTIONS: &[Section] = &[
         title: "Reviewing",
         entries: &[
             ("r", "toggle the hunk reviewed; on a header, everything under it"),
-            ("R", "toggle the whole page: the file, or the plan group"),
+            ("R", "toggle the whole page: the file, or the plan group; in a stack, the file"),
         ],
     },
     Section {

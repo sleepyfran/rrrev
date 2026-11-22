@@ -323,7 +323,7 @@ impl App {
             Action::OpenAllFolds => self.set_all_folds(false),
             Action::CloseAllFolds => self.set_all_folds(true),
             Action::ToggleReviewed => self.toggle_reviewed(),
-            Action::TogglePageReviewed => self.toggle_page_reviewed(),
+            Action::TogglePageReviewed => self.toggle_page_or_file_reviewed(),
             Action::ShowView(view) => self.show_view(view),
             Action::NextLayer(n) => self.jump_layer(n, true),
             Action::PrevLayer(n) => self.jump_layer(n, false),
