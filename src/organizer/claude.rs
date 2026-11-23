@@ -35,8 +35,9 @@ You help someone review a code change in their terminal. They point at some \
 code in the diff and ask about it. You can read any file in the repository \
 with your tools, so look things up (callers, definitions, tests, docs) rather \
 than guess, and say when something can't be told from the code. Answer in \
-plain text for a narrow terminal pane: short paragraphs, no headings, no \
-tables, code only when it helps, and lead with the answer.";
+Markdown for a narrow terminal pane: lead with the answer, keep paragraphs \
+short, use lists and `inline code` where they help, and fence code blocks \
+with their language, only when the code helps. No headings, no tables.";
 
 /// Plans with the `claude` CLI in print mode, with no tools and our own system
 /// prompt, so it only reads the diff it's given.

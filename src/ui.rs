@@ -15,6 +15,7 @@ use crate::app::{
 };
 use crate::diff::{FileStatus, LineKind, Side, scope};
 use crate::help;
+use crate::markdown;
 use crate::highlight::{Highlighter, Segment};
 use crate::review::VerdictKind;
 use crate::text::wrap_words;
@@ -86,7 +87,7 @@ pub fn render(frame: &mut Frame, app: &mut App, highlighter: &mut Highlighter, a
         anim.slide(frame.buffer_mut(), rows_area);
     }
     if let Some((area, docked_right)) = ask_area {
-        render_ask_panel(frame, area, app, docked_right);
+        render_ask_panel(frame, area, app, highlighter, docked_right);
     }
     let cursor = comment_box.map(|area| render_comment_box(frame, area, app));
     if let Some(unroll) = anim.popup(frame.buffer_mut(), Popup::Comment, comment_box, None)
@@ -1336,7 +1337,7 @@ fn render_breadcrumbs(frame: &mut Frame, area: Rect, app: &App) {
 /// Questions about the code and their answers, with the question being
 /// typed at the bottom. The latest exchange shows from its question down,
 /// and `C-e` / `C-y` scroll from there.
-fn render_ask_panel(frame: &mut Frame, area: Rect, app: &mut App, docked_right: bool) {
+fn render_ask_panel(frame: &mut Frame, area: Rect, app: &mut App, highlighter: &mut Highlighter, docked_right: bool) {
     let p = app.palette;
     let typing = matches!(app.mode, Mode::Ask { .. });
     let border = if typing { Style::new().fg(p.magenta) } else { Style::new().fg(p.muted) };
@@ -1398,18 +1399,7 @@ fn render_ask_panel(frame: &mut Frame, area: Rect, app: &mut App, docked_right: 
                 lines.push(Line::from(format!("{} reading the code… {elapsed}s", spinner(started))).dim());
             }
             Answer::Done(text) => {
-                for paragraph in text.lines() {
-                    if paragraph.trim().is_empty() {
-                        lines.push(Line::default());
-                        continue;
-                    }
-                    // Keep code and list indentation; wrap the rest.
-                    let indent: String = paragraph.chars().take_while(|c| c.is_whitespace()).collect();
-                    let room = width.saturating_sub(indent.chars().count()).max(8);
-                    for piece in wrap_words(paragraph, room) {
-                        lines.push(Line::from(format!("{indent}{piece}")));
-                    }
-                }
+                lines.extend(markdown::render(text, width, &p, &mut |tag, source| highlighter.snippet(tag, source)));
             }
             Answer::Failed(error) => {
                 for piece in wrap_words(&format!("error: {error}"), width) {

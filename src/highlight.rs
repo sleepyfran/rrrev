@@ -39,6 +39,8 @@ pub struct Highlighter {
     sources: HashMap<(usize, Side), Vec<Vec<Segment>>>,
     /// Per path and side: each line of a file shown whole in the file view.
     files: HashMap<(String, bool), Vec<Vec<Segment>>>,
+    /// Per language and text: each line of a code block in an answer.
+    snippets: HashMap<(String, String), Vec<Vec<Segment>>>,
 }
 
 impl Highlighter {
@@ -51,6 +53,7 @@ impl Highlighter {
             cache: HashMap::new(),
             sources: HashMap::new(),
             files: HashMap::new(),
+            snippets: HashMap::new(),
         }
     }
 
@@ -65,6 +68,7 @@ impl Highlighter {
             self.cache.clear();
             self.sources.clear();
             self.files.clear();
+            self.snippets.clear();
         }
     }
 
@@ -76,6 +80,7 @@ impl Highlighter {
         self.cache.retain(|(file, _), _| !is(diff.files[*file].path()));
         self.sources.retain(|(file, _), _| !is(diff.files[*file].path()));
         self.files.retain(|(path, _), _| !is(path));
+        self.snippets.retain(|(name, _), _| name != language);
     }
 
     /// The tint behind words that changed within a changed line.
@@ -109,6 +114,27 @@ impl Highlighter {
             if source.len() <= MAX_SOURCE_LINES { highlight(syntax, path, source).unwrap_or_default() } else { Vec::new() }
         });
         lines.get(index).map_or(&[], Vec::as_slice)
+    }
+
+    /// The segments of each line of a code snippet, like a fenced block in
+    /// an answer, in the language its tag names (`rust`) or that files with
+    /// that extension are in (`rs`); empty if there's no grammar for it.
+    pub fn snippet(&mut self, tag: &str, lines: &[String]) -> Vec<Vec<Segment>> {
+        let registry = Registry::global();
+        let tag = tag.to_ascii_lowercase();
+        let Some(language) = registry.get(&tag).or_else(|| registry.for_path(&format!("snippet.{tag}"))) else {
+            return Vec::new();
+        };
+        let path = match (language.extensions.first(), language.filenames.first()) {
+            (Some(ext), _) => format!("snippet.{ext}"),
+            (None, Some(name)) => name.clone(),
+            (None, None) => return Vec::new(),
+        };
+        let syntax = &self.syntax;
+        self.snippets
+            .entry((language.name.clone(), lines.join("\n")))
+            .or_insert_with(|| highlight(syntax, &path, lines).unwrap_or_default())
+            .clone()
     }
 
     /// Line `no` (1-based) of one side of a file, highlighted with the rest

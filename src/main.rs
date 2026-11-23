@@ -12,6 +12,7 @@ mod input;
 mod keymap;
 mod languages;
 mod lsp;
+mod markdown;
 mod organizer;
 mod review;
 mod text;
