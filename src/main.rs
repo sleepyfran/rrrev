@@ -307,6 +307,10 @@ fn run(
                 if let Some(dismiss) = keymap::confirm_action(key) {
                     app.answer_dismiss_copied(dismiss);
                 }
+            } else if app.ask.confirm_clear {
+                if let Some(clear) = keymap::confirm_action(key) {
+                    app.answer_clear_ask(clear);
+                }
             } else if app.is_typing() {
                 if let Some(action) = keymap::input_action(key) {
                     app.update_input(action);

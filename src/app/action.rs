@@ -82,6 +82,8 @@ pub enum Action {
     Ask,
     /// `A`: show / hide the ask panel.
     ToggleAskPanel,
+    /// Asks whether to forget every question and answer in the ask panel.
+    ClearAsk,
     /// `C-e` / `C-y`: scroll the ask panel.
     PanelDown(usize),
     PanelUp(usize),

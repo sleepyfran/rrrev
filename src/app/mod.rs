@@ -247,9 +247,10 @@ impl App {
             self.update_help(action);
             return;
         }
-        if self.dismiss_prompt.is_some() || self.language_prompt.is_some() {
-            // Answered through `answer_dismiss_copied` or
-            // `answer_enable_language`; nothing else gets through.
+        if self.dismiss_prompt.is_some() || self.language_prompt.is_some() || self.ask.confirm_clear {
+            // Answered through `answer_dismiss_copied`,
+            // `answer_enable_language` or `answer_clear_ask`; nothing else
+            // gets through.
             return;
         }
         if self.hover.is_some() {
@@ -346,6 +347,7 @@ impl App {
             Action::ToggleRemovals => self.toggle_removals(),
             Action::Ask => self.start_ask(),
             Action::ToggleAskPanel => self.toggle_ask_panel(),
+            Action::ClearAsk => self.ask_to_clear(),
             Action::PanelDown(n) => self.ask.scroll = self.ask.scroll.saturating_add(n),
             Action::PanelUp(n) => self.ask.scroll = self.ask.scroll.saturating_sub(n),
             Action::Yank => self.yank(),

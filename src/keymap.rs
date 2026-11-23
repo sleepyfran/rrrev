@@ -124,6 +124,7 @@ impl KeyHandler {
             (None, KeyCode::Char('?')) => Action::ToggleHelp,
             (None, KeyCode::Char('a')) => Action::Ask,
             (None, KeyCode::Char('A')) => Action::ToggleAskPanel,
+            (None, KeyCode::Char('X')) => Action::ClearAsk,
             (None, KeyCode::Char('y')) => Action::Yank,
             (None, KeyCode::Char('Y')) => Action::CopyForAgent,
             (None, KeyCode::Char('S')) => Action::ToggleVerdict,

@@ -65,6 +65,7 @@ impl App {
         self.mode != Mode::Normal
             || self.help_scroll.is_some()
             || self.dismiss_prompt.is_some()
+            || self.ask.confirm_clear
             || self.language_prompt.is_some()
             || self.hover.is_some()
             || self.references.is_some()

@@ -136,7 +136,13 @@ pub fn render(frame: &mut Frame, app: &mut App, highlighter: &mut Highlighter, a
     let under = frame.buffer_mut().clone();
     let language = app.language_prompt.is_some().then(|| render_language_prompt(frame, frame.area(), app));
     anim.popup(frame.buffer_mut(), Popup::Language, language, Some(&under));
-    let confirm = app.dismiss_prompt.is_some().then(|| render_dismiss_prompt(frame, frame.area(), app));
+    let confirm = if app.dismiss_prompt.is_some() {
+        Some(render_dismiss_prompt(frame, frame.area(), app))
+    } else if app.ask.confirm_clear {
+        Some(render_clear_ask_prompt(frame, frame.area(), app))
+    } else {
+        None
+    };
     anim.popup(frame.buffer_mut(), Popup::Confirm, confirm, Some(&under));
 }
 
@@ -331,6 +337,39 @@ fn render_dismiss_prompt(frame: &mut Frame, area: Rect, app: &App) -> Rect {
         .border_type(BorderType::Thick)
         .border_style(Style::new().fg(p.yellow).bold())
         .title(Span::styled(" Copied ", Style::new().bold()));
+    let inner = block.inner(rect);
+    clear(frame, rect, &p);
+    frame.render_widget(block, rect);
+    frame.render_widget(Paragraph::new(lines), inner);
+    rect
+}
+
+/// After `X` or `:ask clear`: whether to forget the ask panel's history.
+/// Returns where it was drawn.
+fn render_clear_ask_prompt(frame: &mut Frame, area: Rect, app: &App) -> Rect {
+    let p = app.palette;
+    let n = app.ask.entries.len();
+    let what = if n == 1 { "the question and its answer".to_string() } else { format!("all {n} questions and answers") };
+    let mut lines = vec![Line::default(), Line::from(format!("  Forget {what}?  ")).bold()];
+    if app.ask.running.is_some() {
+        lines.push(Line::from("  The one being answered is called off.  ").dim());
+    }
+    lines.extend([
+        Line::default(),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled(" y ", Style::new().fg(p.on_accent).bg(p.red).bold()),
+            Span::raw(" clear   "),
+            Span::styled(" n ", Style::new().fg(p.on_accent).bg(p.muted).bold()),
+            Span::raw(" keep them"),
+        ]),
+    ]);
+    let width = (lines.iter().map(Line::width).max().unwrap_or(0) as u16 + 2).min(area.width);
+    let rect = centered(area, width, lines.len() as u16 + 3);
+    let block = Block::bordered()
+        .border_type(BorderType::Thick)
+        .border_style(Style::new().fg(p.red).bold())
+        .title(Span::styled(" Clear history ", Style::new().bold()));
     let inner = block.inner(rect);
     clear(frame, rect, &p);
     frame.render_widget(block, rect);
@@ -1343,7 +1382,7 @@ fn render_ask_panel(frame: &mut Frame, area: Rect, app: &mut App, highlighter: &
     let border = if typing { Style::new().fg(p.magenta) } else { Style::new().fg(p.muted) };
     // Docked right it's set off by a line on its left; under the diff, on top.
     let borders = if docked_right { Borders::LEFT } else { Borders::TOP };
-    let hint = if typing { " Enter ask · Alt-Enter newline · Esc cancel " } else { " a ask · C-e/C-y scroll · A/Esc hide " };
+    let hint = if typing { " Enter ask · Alt-Enter newline · Esc cancel " } else { " a ask · C-e/C-y scroll · X clear · A/Esc hide " };
     let block = Block::new()
         .borders(borders)
         .border_style(border)
@@ -1654,6 +1693,7 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
         _ if app.show_verdict => " VERDICT ",
         _ if app.language_prompt.is_some() => " LANGUAGE ",
         _ if app.dismiss_prompt.is_some() => " COPIED ",
+        _ if app.ask.confirm_clear => " CLEAR ",
         _ if app.comments_menu.is_some() => " COMMENTS ",
         _ if app.references.is_some() => " REFERENCES ",
         _ if app.theme_picker.is_some() => " THEME ",
@@ -1721,7 +1761,7 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
                 {
                     " "
                 }
-                _ if app.dismiss_prompt.is_some() || app.language_prompt.is_some() => " ",
+                _ if app.dismiss_prompt.is_some() || app.language_prompt.is_some() || app.ask.confirm_clear => " ",
                 _ if app.file_view.is_some() => " ? help  ]c [c changes  / search  q back to the diff ",
                 _ if matches!(app.current_row(), Some(Row::Note { .. })) => {
                     " c comment with this  dd dismiss  a ask about it  y copy "

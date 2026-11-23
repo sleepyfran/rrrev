@@ -77,7 +77,8 @@ pub const SECTIONS: &[Section] = &[
             ("a", "ask about the line, selection or hunk; Claude can read the whole repository"),
             ("A", "show / hide the answers; Esc hides them too"),
             ("C-e / C-y", "scroll the answers"),
-            (":ask cancel / clear", "stop the question being answered / forget them all"),
+            ("X", "forget every question and answer, after a y / n"),
+            (":ask cancel / clear", "stop the question being answered / forget them all (asks first)"),
         ],
     },
     Section {

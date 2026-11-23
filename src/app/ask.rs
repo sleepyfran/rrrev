@@ -17,6 +17,8 @@ pub struct AskPanel {
     pub running: Option<Job>,
     /// Lines scrolled down from the top of the latest question.
     pub scroll: usize,
+    /// Whether the "clear the history?" question is up.
+    pub confirm_clear: bool,
     next_job: u64,
 }
 
@@ -136,17 +138,35 @@ impl App {
                 }
                 None => self.message = Some("Not answering anything".to_string()),
             },
-            ["clear"] => {
-                if let Some(job) = self.ask.running.take() {
-                    self.effect = Some(Effect::CancelAsk { job: job.id });
-                }
-                self.ask.entries.clear();
-                self.ask.open = false;
-                self.message = Some("Questions cleared".to_string());
-            }
+            ["clear"] => self.ask_to_clear(),
             [] => self.start_ask(),
             _ => self.message = Some("error: usage: :ask [cancel|clear]".to_string()),
         }
+    }
+
+    /// `X` or `:ask clear`: asks before forgetting every question and answer.
+    pub(super) fn ask_to_clear(&mut self) {
+        if self.ask.entries.is_empty() {
+            self.message = Some("Nothing asked yet".to_string());
+            return;
+        }
+        self.ask.confirm_clear = true;
+    }
+
+    /// Answers the "clear the history?" question: forgets every question
+    /// and answer, calling off the one being answered, or keeps them.
+    pub fn answer_clear_ask(&mut self, clear: bool) {
+        self.message = None;
+        if !std::mem::take(&mut self.ask.confirm_clear) || !clear {
+            return;
+        }
+        if let Some(job) = self.ask.running.take() {
+            self.effect = Some(Effect::CancelAsk { job: job.id });
+        }
+        self.ask.entries.clear();
+        self.ask.scroll = 0;
+        self.ask.open = false;
+        self.message = Some("Questions cleared".to_string());
     }
 
     /// What the cursor points at, for a question.
@@ -256,8 +276,37 @@ mod tests {
         assert_eq!(app.effect.take(), Some(Effect::CancelAsk { job }));
         app.finish_ask(job, Ok("late".into()));
         assert_eq!(app.ask.entries[0].answer, Answer::Cancelled);
+    }
+
+    #[test]
+    fn clearing_asks_first() {
+        let mut app = sample_app();
+        // Nothing to clear yet.
+        app.update(Action::ClearAsk);
+        assert!(!app.ask.confirm_clear);
+
+        app.update(Action::Down(2));
+        let (job, _) = ask(&mut app, "q");
+        app.update(Action::ClearAsk);
+        assert!(app.ask.confirm_clear);
+        // While it's up, nothing else gets through.
+        app.update(Action::ToggleAskPanel);
+        assert!(app.ask.open);
+        // No keeps everything.
+        app.answer_clear_ask(false);
+        assert!(!app.ask.confirm_clear);
+        assert_eq!(app.ask.entries.len(), 1);
+        assert_eq!(app.effect, None);
+
+        // Yes forgets everything and calls off the running question.
         command(&mut app, "ask clear");
-        assert!(app.ask.entries.is_empty() && !app.ask.open);
+        assert!(app.ask.confirm_clear);
+        app.answer_clear_ask(true);
+        assert_eq!(app.effect.take(), Some(Effect::CancelAsk { job }));
+        assert!(app.ask.entries.is_empty() && !app.ask.open && app.ask.running.is_none());
+        // The late answer goes nowhere.
+        app.finish_ask(job, Ok("late".into()));
+        assert!(app.ask.entries.is_empty());
     }
 
     #[test]
