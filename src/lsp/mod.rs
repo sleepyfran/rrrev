@@ -72,7 +72,7 @@ impl Lsp {
     /// The server for a file, started if needed.
     pub fn server_for(&mut self, path: &str) -> Option<usize> {
         let language = self.registry.for_path(path)?;
-        let lsp = language.lsp.as_ref()?;
+        let lsp = language.server()?;
         let root = project_root(&self.workdir, path, &lsp.roots);
         let key = (language.name.clone(), root.clone());
         if let Some(&index) = self.by_root.get(&key)

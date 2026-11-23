@@ -47,7 +47,7 @@ pub fn list(registry: &Registry) -> String {
             Status::Available => "not enabled".to_string(),
             Status::NoGrammar => "no grammar".to_string(),
         };
-        let server = match &language.lsp {
+        let server = match language.server() {
             None => "no server".to_string(),
             Some(lsp) if lsp.find().is_some() => format!("{} found", lsp.command),
             Some(lsp) => format!("{} not in Mason", lsp.command),
@@ -78,7 +78,7 @@ pub fn enable(language: &Language) -> Result<String> {
     result?;
 
     let mut out = format!("Enabled {name}: {}", target.display());
-    match &language.lsp {
+    match language.server() {
         Some(lsp) if lsp.find().is_none() => {
             let _ = write!(
                 out,

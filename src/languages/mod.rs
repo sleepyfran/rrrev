@@ -44,6 +44,23 @@ pub struct Lsp {
     pub roots: Vec<String>,
 }
 
+/// One server or several, in order of preference.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum Servers {
+    One(Lsp),
+    Many(Vec<Lsp>),
+}
+
+impl Servers {
+    fn into_vec(self) -> Vec<Lsp> {
+        match self {
+            Self::One(lsp) => vec![lsp],
+            Self::Many(list) => list,
+        }
+    }
+}
+
 impl Lsp {
     /// The server's executable: a full path as given, or the command in
     /// Mason's bin folder. rrrev never looks on `PATH` and never installs
@@ -80,10 +97,17 @@ pub struct Language {
     /// Whole file names, for files without an extension like `Gemfile`.
     pub filenames: Vec<String>,
     pub grammar: Option<Grammar>,
-    pub lsp: Option<Lsp>,
+    /// The servers that can speak it, in order of preference.
+    pub lsp: Vec<Lsp>,
 }
 
 impl Language {
+    /// The server to run: the first one that's installed, else the first
+    /// one (so messages name what the user would install).
+    pub fn server(&self) -> Option<&Lsp> {
+        self.lsp.iter().find(|l| l.find().is_some()).or(self.lsp.first())
+    }
+
     fn matches(&self, name: &str) -> bool {
         self.filenames.iter().any(|f| f == name)
             || name.rsplit_once('.').is_some_and(|(_, ext)| self.extensions.iter().any(|e| e == ext))
@@ -99,7 +123,7 @@ struct Entry {
     extensions: Option<Vec<String>>,
     filenames: Option<Vec<String>>,
     grammar: Option<Grammar>,
-    lsp: Option<Lsp>,
+    lsp: Option<Servers>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -166,15 +190,15 @@ impl Registry {
                 if entry.grammar.is_some() {
                     known.grammar = entry.grammar;
                 }
-                if entry.lsp.is_some() {
-                    known.lsp = entry.lsp;
+                if let Some(servers) = entry.lsp {
+                    known.lsp = servers.into_vec();
                 }
             } else {
                 let language = Language {
                     extensions: entry.extensions.unwrap_or_default(),
                     filenames: entry.filenames.unwrap_or_default(),
                     grammar: entry.grammar,
-                    lsp: entry.lsp,
+                    lsp: entry.lsp.map(Servers::into_vec).unwrap_or_default(),
                     name: entry.name,
                 };
                 anyhow::ensure!(
@@ -224,7 +248,7 @@ mod tests {
         assert_eq!(name_for(&registry, "README.md"), None);
         assert_eq!(name_for(&registry, "Makefile"), None);
         let rust = registry.get("rust").unwrap();
-        assert_eq!(rust.lsp.as_ref().unwrap().command, "rust-analyzer");
+        assert_eq!(rust.server().unwrap().command, "rust-analyzer");
         assert!(registry.iter().all(|l| l.grammar.as_ref().is_some_and(|g| g.rev.len() == 40)));
     }
 
@@ -245,12 +269,22 @@ mod tests {
             )
             .unwrap();
         let kotlin = registry.get("kotlin").unwrap();
-        assert_eq!(kotlin.lsp.as_ref().unwrap().command, "/opt/kotlin-lsp/bin/kotlin-lsp");
-        assert!(kotlin.lsp.as_ref().unwrap().args.is_empty());
+        assert_eq!(kotlin.server().unwrap().command, "/opt/kotlin-lsp/bin/kotlin-lsp");
+        assert!(kotlin.server().unwrap().args.is_empty());
         assert_eq!(kotlin.extensions, ["kt", "kts"]);
         assert!(kotlin.grammar.is_some());
         assert_eq!(name_for(&registry, "build.zig").as_deref(), Some("zig"));
         assert_eq!(registry.get("zig").unwrap().grammar, None);
+    }
+
+    #[test]
+    fn typescript_prefers_tsgo_and_falls_back() {
+        let registry = Registry::builtin();
+        for name in ["javascript", "typescript", "tsx"] {
+            let commands: Vec<_> = registry.get(name).unwrap().lsp.iter().map(|l| l.command.as_str()).collect();
+            assert_eq!(commands, ["tsgo", "typescript-language-server"], "{name}");
+        }
+        assert_eq!(registry.get("tsx").unwrap().lsp[0].args, ["--lsp", "--stdio"]);
     }
 
     #[test]

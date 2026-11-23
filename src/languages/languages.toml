@@ -1,5 +1,6 @@
 # Every language rrrev knows: which files are in it, where its tree-sitter
-# grammar comes from, and the LSP server that speaks it. Override or add
+# grammar comes from, and the LSP server that speaks it (`lsp` can be a list; the first one
+# installed wins). Override or add
 # entries in ~/.config/rrrev/languages.toml, in the same format; an entry
 # with the same `name` changes only the fields it sets.
 #
@@ -23,19 +24,28 @@ lsp = { command = "pyright-langserver", args = ["--stdio"], roots = ["pyproject.
 name = "javascript"
 extensions = ["js", "mjs", "cjs", "jsx"]
 grammar = { git = "https://github.com/tree-sitter/tree-sitter-javascript", rev = "44c892e0be055ac465d5eeddae6d3e194424e7de" }
-lsp = { command = "typescript-language-server", args = ["--stdio"], roots = ["package.json", "jsconfig.json"] }
+lsp = [
+    { command = "tsgo", args = ["--lsp", "--stdio"], roots = ["package.json", "jsconfig.json"] },
+    { command = "typescript-language-server", args = ["--stdio"], roots = ["package.json", "jsconfig.json"] },
+]
 
 [[language]]
 name = "typescript"
 extensions = ["ts", "mts", "cts"]
 grammar = { git = "https://github.com/tree-sitter/tree-sitter-typescript", rev = "f975a621f4e7f532fe322e13c4f79495e0a7b2e7", path = "typescript" }
-lsp = { command = "typescript-language-server", args = ["--stdio"], roots = ["package.json", "tsconfig.json"] }
+lsp = [
+    { command = "tsgo", args = ["--lsp", "--stdio"], roots = ["package.json", "tsconfig.json"] },
+    { command = "typescript-language-server", args = ["--stdio"], roots = ["package.json", "tsconfig.json"] },
+]
 
 [[language]]
 name = "tsx"
 extensions = ["tsx"]
 grammar = { git = "https://github.com/tree-sitter/tree-sitter-typescript", rev = "f975a621f4e7f532fe322e13c4f79495e0a7b2e7", path = "tsx" }
-lsp = { command = "typescript-language-server", args = ["--stdio"], roots = ["package.json", "tsconfig.json"] }
+lsp = [
+    { command = "tsgo", args = ["--lsp", "--stdio"], roots = ["package.json", "tsconfig.json"] },
+    { command = "typescript-language-server", args = ["--stdio"], roots = ["package.json", "tsconfig.json"] },
+]
 
 [[language]]
 name = "go"
