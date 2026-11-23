@@ -170,13 +170,16 @@ impl App {
     }
 
     /// Its line in the diff when the diff shows it, else the file view.
+    /// Already in the file view, it stays there: whoever is reading whole
+    /// files wants the next one, not a hunk.
     pub(super) fn go_to_target(&mut self, target: &Target) {
         let column = target.lines.get(target.line).map_or(0, |l| {
             l.get(..target.column)
                 .map_or(l.chars().count(), |before| before.chars().count())
         });
-        if let Some((page, row)) = self.shown_at(target) {
-            self.file_view = None;
+        if self.file_view.is_none()
+            && let Some((page, row)) = self.shown_at(target)
+        {
             self.open_page(page, row);
             self.column = column;
             self.scroll = row.saturating_sub(self.viewport_height / 2);
@@ -331,6 +334,38 @@ mod tests {
         assert_eq!(app.line(file, hunk, line).new_no, Some(no));
         assert_eq!(app.column, 4);
         assert_eq!(app.message.as_deref(), Some("1 of 2 places · may be off"));
+    }
+
+    #[test]
+    fn stays_in_the_file_view_even_for_lines_the_diff_shows() {
+        let mut app = sample_app();
+        let (file, no) = (0..app.rows.len())
+            .rev()
+            .find_map(|i| match app.rows[i] {
+                Row::Line { file, hunk, line } => {
+                    app.line(file, hunk, line).new_no.map(|n| (file, n))
+                }
+                _ => None,
+            })
+            .unwrap();
+        let path = app.diff.files[file].new_path.clone().unwrap();
+        let lines: Vec<String> = (0..no).map(|_| "    x".to_string()).collect();
+        let t = Target {
+            path: path.clone(),
+            line: no as usize - 1,
+            column: 4,
+            lines: Arc::new(lines),
+        };
+        // Open the file view somewhere else first, as if with Enter.
+        let other = target("src/other.rs", 0, 0, &["fn a() {}"]);
+        app.finish_go_to(GoTo::Definition, Ok(vec![other]), None);
+        assert!(app.file_view.is_some());
+        app.finish_go_to(GoTo::Definition, Ok(vec![t]), None);
+        let view = app.file_view.as_ref().expect("still the file view");
+        assert_eq!(
+            (view.path.as_str(), view.line_no(), view.cursor_column()),
+            (path.as_str(), no, 4)
+        );
     }
 
     #[test]
