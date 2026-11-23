@@ -1,4 +1,5 @@
-//! Themes ported from doom-themes (https://github.com/doomemacs/themes, MIT).
+//! Themes ported from doom-themes (https://github.com/doomemacs/themes, MIT),
+//! and GitHub's from primer/github-vscode-theme, laid out the same way.
 //!
 //! Each one keeps its theme's own palette and face mapping as written in its
 //! `doom-<name>-theme.el`, with that theme's defaults for the options that
@@ -62,6 +63,10 @@ pub struct Doom {
     pub functions: Rgb,
     pub keywords: Rgb,
     pub methods: Rgb,
+    /// Markup tags.
+    pub tags: Rgb,
+    /// Object properties and fields.
+    pub properties: Rgb,
     pub operators: Rgb,
     pub types: Rgb,
     pub strings: Rgb,
@@ -99,6 +104,8 @@ pub const ONE: Doom = {
         functions: magenta,
         keywords: blue,
         methods: cyan,
+        tags: cyan,
+        properties: blend(blue, fg, 0.6),
         operators: blue,
         types: yellow,
         strings: green,
@@ -136,6 +143,8 @@ pub const ONE_LIGHT: Doom = {
         functions: magenta,
         keywords: red,
         methods: cyan,
+        tags: cyan,
+        properties: blend(red, fg, 0.6),
         operators: blue,
         types: yellow,
         strings: green,
@@ -172,6 +181,8 @@ pub const NORD: Doom = {
         functions: cyan,
         keywords: blue,
         methods: cyan,
+        tags: cyan,
+        properties: blend(blue, fg, 0.6),
         operators: blue,
         types: teal,
         strings: green,
@@ -210,6 +221,8 @@ pub const NORD_LIGHT: Doom = {
         functions: teal,
         keywords: blue,
         methods: teal,
+        tags: teal,
+        properties: blend(blue, fg, 0.6),
         operators: blue,
         types: yellow,
         strings: green,
@@ -247,6 +260,8 @@ pub const GRUVBOX: Doom = {
         functions: green,
         keywords: red,
         methods: green,
+        tags: green,
+        properties: blend(red, fg, 0.6),
         operators: fg,
         types: yellow,
         strings: green,
@@ -284,6 +299,8 @@ pub const GRUVBOX_LIGHT: Doom = {
         functions: yellow,
         keywords: red,
         methods: cyan,
+        tags: cyan,
+        properties: blend(red, fg, 0.6),
         operators: blue,
         types: violet,
         strings: green,
@@ -322,6 +339,8 @@ pub const SOLARIZED_DARK: Doom = {
         functions: blue,
         keywords: green,
         methods: cyan,
+        tags: cyan,
+        properties: blend(green, fg, 0.6),
         operators: orange,
         types: yellow,
         strings: cyan,
@@ -360,6 +379,8 @@ pub const SOLARIZED_LIGHT: Doom = {
         functions: magenta,
         keywords: green,
         methods: cyan,
+        tags: cyan,
+        properties: blend(green, fg, 0.6),
         operators: blue,
         types: yellow,
         strings: cyan,
@@ -397,6 +418,8 @@ pub const TOMORROW_NIGHT: Doom = {
         functions: blue,
         keywords: violet,
         methods: blue,
+        tags: blue,
+        properties: blend(violet, fg, 0.6),
         operators: fg,
         types: yellow,
         strings: green,
@@ -434,6 +457,8 @@ pub const TOMORROW_DAY: Doom = {
         functions: blue,
         keywords: violet,
         methods: blue,
+        tags: blue,
+        properties: blend(violet, fg, 0.6),
         operators: fg,
         types: darken(yellow, 0.2),
         strings: green,
@@ -441,6 +466,94 @@ pub const TOMORROW_DAY: Doom = {
         numbers: orange,
         vc_modified: lighten(yellow, 0.4),
         vc_added: lighten(green, 0.4),
+        vc_deleted: red,
+    }
+};
+
+// Not doom themes: GitHub's, from primer/github-vscode-theme (MIT), whose
+// colours are Primer's. Laid out as doom themes so the same mapping applies,
+// with the colours its `tokenColors` give each kind of token.
+
+pub const GITHUB_DARK: Doom = {
+    let (bg, fg, bg_alt) = (hex(0x0d1117), hex(0xe6edf3), hex(0x161b22));
+    // Primer's dark scale: gray 3, red 3, orange 2, green 3, yellow 3.
+    let (red, orange, green, yellow) = (hex(0xff7b72), hex(0xffa657), hex(0x3fb950), hex(0xd29922));
+    // Blue 2, purple 3, and blue 2 again: GitHub has no cyan.
+    let (blue, magenta, cyan) = (hex(0x79c0ff), hex(0xbc8cff), hex(0x79c0ff));
+    let (comments, purple, tag) = (hex(0x8b949e), hex(0xd2a8ff), hex(0x7ee787));
+    Doom {
+        bg,
+        fg,
+        bg_alt,
+        red,
+        orange,
+        green,
+        yellow,
+        blue,
+        magenta,
+        cyan,
+        // `accent.fg`.
+        highlight: hex(0x2f81f7),
+        // Primer's gray 7.
+        region: hex(0x21262d),
+        builtin: blue,
+        comments,
+        doc_comments: comments,
+        constants: blue,
+        functions: purple,
+        keywords: red,
+        methods: purple,
+        tags: tag,
+        properties: fg,
+        operators: red,
+        types: orange,
+        strings: hex(0xa5d6ff),
+        variables: fg,
+        numbers: blue,
+        vc_modified: yellow,
+        vc_added: green,
+        vc_deleted: red,
+    }
+};
+
+pub const GITHUB_LIGHT: Doom = {
+    let (bg, fg, bg_alt) = (hex(0xffffff), hex(0x1f2328), hex(0xf6f8fa));
+    // Primer's light scale: gray 5, red 5, orange 6, green 5, yellow 5.
+    let (red, orange, green, yellow) = (hex(0xcf222e), hex(0x953800), hex(0x1a7f37), hex(0x9a6700));
+    // Blue 6, purple 5, and blue 6 again: GitHub has no cyan.
+    let (blue, magenta, cyan) = (hex(0x0550ae), hex(0x8250df), hex(0x0550ae));
+    let (comments, tag) = (hex(0x6e7781), hex(0x116329));
+    Doom {
+        bg,
+        fg,
+        bg_alt,
+        red,
+        orange,
+        green,
+        yellow,
+        blue,
+        magenta,
+        cyan,
+        // `accent.fg`.
+        highlight: hex(0x0969da),
+        // Primer's gray 1.
+        region: hex(0xeaeef2),
+        builtin: blue,
+        comments,
+        doc_comments: comments,
+        constants: blue,
+        functions: magenta,
+        keywords: red,
+        methods: magenta,
+        tags: tag,
+        properties: fg,
+        operators: red,
+        types: orange,
+        strings: hex(0x0a3069),
+        variables: fg,
+        numbers: blue,
+        vc_modified: yellow,
+        vc_added: green,
         vc_deleted: red,
     }
 };
@@ -476,6 +589,8 @@ const fn ocean(bg: Rgb, fg: Rgb, comments: Rgb) -> Doom {
         functions: blue,
         keywords: magenta,
         methods: blue,
+        tags: blue,
+        properties: blend(magenta, fg, 0.6),
         operators: cyan,
         types: yellow,
         strings: green,

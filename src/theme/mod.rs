@@ -1,5 +1,5 @@
-//! Colour themes: the terminal's own colours, or one of the doom-themes
-//! ported in `doom.rs`. Each theme has a dark and a light variant, and the
+//! Colour themes: the terminal's own colours, or one of the doom-themes (or
+//! GitHub's) ported in `doom.rs`. Each theme has a dark and a light variant, and the
 //! OS's mode picks between them: you choose the theme, not the variant. A
 //! theme gives the UI its [`Palette`] and the highlighter its syntax colours.
 
@@ -39,8 +39,8 @@ const fn doom(
     }
 }
 
-/// Every theme, in the order the picker lists them. Only doom themes that
-/// come in both a dark and a light variant are here.
+/// Every theme, in the order the picker lists them. Only themes that come in
+/// both a dark and a light variant are here.
 pub static THEMES: &[Theme] = &[
     Theme {
         id: "terminal",
@@ -76,6 +76,12 @@ pub static THEMES: &[Theme] = &[
         "Tomorrow",
         ("doom-tomorrow-night", &doom::TOMORROW_NIGHT),
         ("doom-tomorrow-day", &doom::TOMORROW_DAY),
+    ),
+    doom(
+        "github",
+        "GitHub",
+        ("github-dark", &doom::GITHUB_DARK),
+        ("github-light", &doom::GITHUB_LIGHT),
     ),
 ];
 
@@ -262,8 +268,6 @@ pub struct Syntax {
 
 impl Syntax {
     fn from_doom(d: &Doom, adjust: fn(Rgb) -> Rgb) -> Syntax {
-        // As doom's `font-lock-property-name-face`.
-        let property = blend(d.keywords, d.fg, 0.6);
         let bold = Modifier::BOLD;
         let none = Modifier::empty();
         let faces: &[(&[&'static str], Rgb, Modifier)] = &[
@@ -344,7 +348,7 @@ impl Syntax {
                 d.operators,
                 none,
             ),
-            (&["tag"], d.methods, none),
+            (&["tag"], d.tags, none),
             (&["tag.attribute"], d.types, none),
             (
                 &[
@@ -353,7 +357,7 @@ impl Syntax {
                     "field",
                     "variable.member",
                 ],
-                property,
+                d.properties,
                 none,
             ),
         ];

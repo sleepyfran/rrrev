@@ -258,7 +258,7 @@ pub const SECTIONS: &[Section] = &[
             (":export [md|json] [path]", "write the comments to a file"),
             (
                 ":theme [name]",
-                "the theme picker, or straight to a theme: terminal, one, nord, gruvbox, solarized, tomorrow",
+                "the theme picker, or straight to a theme: terminal, one, nord, gruvbox, solarized, tomorrow, github",
             ),
             (
                 ":lsp [restart]",
