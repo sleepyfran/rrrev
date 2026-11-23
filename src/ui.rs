@@ -178,12 +178,14 @@ fn render_review(
     app.set_viewport(rows_area.width as usize, rows_area.height as usize);
     if let Some(view) = &app.file_view {
         render_file_crumbs(frame, crumbs, app, view);
-        render_file_view(frame, rows_area, app, view, highlighter);
+        let cell = render_file_view(frame, rows_area, app, view, highlighter);
+        app.cursor_cell = cell;
     } else {
         render_breadcrumbs(frame, crumbs, app);
         let scroll = anim.scroll(app);
         let rows = render_body(frame, rows_area, app, highlighter, scroll);
         let shown: Vec<Row> = rows.iter().map(|(row, _)| *row).collect();
+        app.cursor_cell = diff_cursor_cell(app, &rows);
         app.mark_seen(&shown);
         anim.glint_rows(frame.buffer_mut(), &rows);
         anim.slide(frame.buffer_mut(), rows_area);
@@ -401,7 +403,8 @@ fn render_references(frame: &mut Frame, area: Rect, app: &App) -> Rect {
     rect
 }
 
-/// `K`'s box, in the middle of the code: the server's text, wrapped.
+/// `gh`'s box: the server's text, wrapped, over the symbol it's
+/// about (or in the middle of the code when the symbol isn't on screen).
 /// Returns where it was drawn.
 fn render_hover(frame: &mut Frame, area: Rect, app: &App) -> Rect {
     let p = app.palette;
@@ -426,7 +429,10 @@ fn render_hover(frame: &mut Frame, area: Rect, app: &App) -> Rect {
     let height = (lines.len() as u16 + 2)
         .min(area.height.saturating_sub(2))
         .max(3);
-    let rect = centered(area, width, height);
+    let rect = match app.cursor_cell {
+        Some(cell) => anchored(area, cell, width, height),
+        None => centered(area, width, height),
+    };
     let block = Block::bordered()
         .border_style(Style::new().fg(p.blue))
         .title_bottom(Line::from(" j/k scroll · any other key closes ").dim());
@@ -840,6 +846,31 @@ fn status_style(status: FileStatus, p: &Palette) -> Style {
         FileStatus::Other => p.magenta,
     };
     Style::new().fg(color).bold()
+}
+
+/// A box of `width` by `height` over the cell `at` in `area`: ending on the
+/// row above it, or starting on the row below when there's more room there.
+/// It begins at the cell's column, moved left as far as it takes to fit, and
+/// is cut short to the room it has.
+fn anchored(area: Rect, (x, y): (u16, u16), width: u16, height: u16) -> Rect {
+    let width = width.min(area.width);
+    let above = y.saturating_sub(area.y);
+    let below = area.bottom().saturating_sub(y + 1);
+    let (top, height) = if height <= above || above >= below {
+        let height = height.min(above);
+        (y - height, height)
+    } else {
+        (y + 1, height.min(below))
+    };
+    if height < 3 {
+        return centered(area, width, height.max(3));
+    }
+    Rect {
+        x: x.clamp(area.x, area.right().saturating_sub(width)),
+        y: top,
+        width,
+        height,
+    }
 }
 
 fn centered(area: Rect, width: u16, height: u16) -> Rect {
@@ -1789,7 +1820,7 @@ fn render_file_view(
     app: &App,
     view: &FileView,
     highlighter: &mut Highlighter,
-) {
+) -> Option<(u16, u16)> {
     let p = app.palette;
     let width = view.lines.len().to_string().len();
     let gutter_width = (width + 4) as u16;
@@ -1854,6 +1885,28 @@ fn render_file_view(
     };
     frame.render_widget(Paragraph::new(gutter), gutter_area);
     frame.render_widget(Paragraph::new(text).scroll((0, left as u16)), text_area);
+    let row = view.caret.line.checked_sub(view.scroll)?;
+    let across = before.checked_sub(left)?;
+    (row < area.height as usize && across < room)
+        .then(|| (text_area.x + across as u16, area.y + row as u16))
+}
+
+/// Where the cursor's character sits on screen in the diff: the row it's on,
+/// then down and across as many wrapped lines as the code before it fills.
+fn diff_cursor_cell(app: &App, drawn: &[(Row, Rect)]) -> Option<(u16, u16)> {
+    let row = app.rows.get(app.cursor)?;
+    let (_, rect) = drawn.iter().find(|(r, _)| r == row)?;
+    let spot = app.cursor_spot().ok()?;
+    let room = (rect.width as usize).checked_sub(app.code_column())?;
+    let before = display_width(spot.text.get(..spot.column).unwrap_or(&spot.text));
+    let y = rect.y + (before / room.max(1)) as u16;
+    let x = rect.x + (app.code_column() + before % room.max(1)) as u16;
+    (y < rect.bottom()).then_some((x, y))
+}
+
+/// How many columns `text` takes once drawn: tabs are four.
+fn display_width(text: &str) -> usize {
+    text.chars().map(|c| if c == '\t' { 4 } else { 1 }).sum()
 }
 
 /// The path of the file under the cursor and the definitions around it,
@@ -2537,6 +2590,74 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn anchors_boxes_above_the_symbol_or_below_when_there_is_no_room() {
+        let area = Rect::new(0, 0, 100, 30);
+        // Plenty of room above: the box ends on the row above the cell.
+        assert_eq!(anchored(area, (10, 20), 40, 6), Rect::new(10, 14, 40, 6));
+        // Near the top: it goes below instead.
+        assert_eq!(anchored(area, (10, 2), 40, 6), Rect::new(10, 3, 40, 6));
+        // Near the right edge: moved left to fit.
+        assert_eq!(anchored(area, (90, 20), 40, 6), Rect::new(60, 14, 40, 6));
+        // Taller than either side: cut to the larger one.
+        assert_eq!(anchored(area, (10, 10), 40, 25), Rect::new(10, 11, 40, 19));
+        // Nowhere with room for a box: in the middle.
+        let tiny = Rect::new(0, 0, 100, 3);
+        assert_eq!(anchored(tiny, (10, 1), 40, 3), centered(tiny, 40, 3));
+    }
+
+    #[test]
+    fn draws_the_hover_box_over_the_symbol() {
+        use crate::app::Action;
+        use crate::app::test_support::sample_app;
+        use crate::theme::Theme;
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut app = sample_app();
+        let mut highlighter =
+            Highlighter::new(Theme::terminal(), crate::appearance::Appearance::Dark);
+        let mut anim = Animator::new(false);
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        // Down to a line of code, then ask about it.
+        app.update(Action::Down(3));
+        app.update(Action::Hover);
+        app.effect = None;
+        app.finish_hover(Ok("fn a()\n\nDocs".into()), None);
+        terminal
+            .draw(|frame| render(frame, &mut app, &mut highlighter, &mut anim, ""))
+            .unwrap();
+
+        let (_, y) = app.cursor_cell.expect("the cursor is on screen");
+        let buffer = terminal.backend().buffer();
+        let row_text = |row: u16| -> String {
+            (0..120)
+                .map(|x| buffer[(x, row)].symbol().to_string())
+                .collect()
+        };
+        // Near the top there's more room below, so the box starts on the row
+        // right under the code line.
+        // It starts left of the cursor if it would run off the right edge, so
+        // the cursor's column is always under or over the box.
+        let (x, _) = app.cursor_cell.unwrap();
+        let top = row_text(y + 1);
+        let left = top
+            .chars()
+            .position(|c| c == '┌')
+            .expect("the box's corner");
+        let right = top
+            .chars()
+            .position(|c| c == '┐')
+            .expect("the box's corner");
+        assert!((left..=right).contains(&(x as usize)), "{top}");
+        assert!((y + 1..40).any(|row| row_text(row).contains("Docs")));
+        assert!((y + 1..40).any(|row| row_text(row).contains("j/k scroll")));
+    }
+
+    #[test]
+    fn counts_tabs_as_four_columns() {
+        assert_eq!(display_width("a\tb"), 6);
+    }
 
     #[test]
     fn paints_the_theme_and_lists_every_theme_in_the_picker() {

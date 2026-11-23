@@ -67,6 +67,7 @@ impl KeyHandler {
             (Some('g'), KeyCode::Char('y')) => Action::GoTo(GoTo::TypeDefinition),
             (Some('g'), KeyCode::Char('i')) => Action::GoTo(GoTo::Implementation),
             (Some('g'), KeyCode::Char('r')) => Action::References,
+            (Some('g'), KeyCode::Char('h')) => Action::Hover,
             (Some('g'), KeyCode::Char('w')) => Action::OpenWalkthrough,
             (Some(']'), KeyCode::Char('s')) => Action::NextLayer(n),
             (Some('['), KeyCode::Char('s')) => Action::PrevLayer(n),
@@ -123,7 +124,6 @@ impl KeyHandler {
             (None, KeyCode::Enter) => Action::Select,
             (None, KeyCode::Char('s')) => Action::ToggleSidebar,
             (None, KeyCode::Char('r')) => Action::ToggleReviewed,
-            (None, KeyCode::Char('K')) => Action::Hover,
             (None, KeyCode::Char('R')) => Action::TogglePageReviewed,
             (None, KeyCode::Char('V' | 'v')) => Action::StartVisual,
             (None, KeyCode::Char('c')) => Action::StartComment,
@@ -333,7 +333,7 @@ mod tests {
             Some(Action::GoTo(GoTo::Implementation))
         );
         assert_eq!(press(&mut h, "gr"), Some(Action::References));
-        assert_eq!(press(&mut h, "K"), Some(Action::Hover));
+        assert_eq!(press(&mut h, "gh"), Some(Action::Hover));
     }
 
     #[test]

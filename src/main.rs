@@ -567,7 +567,7 @@ fn ask(
     }
 }
 
-/// Sends a request about `spot` (`gd`, `gr`, `K`…). Returns the server and
+/// Sends a request about `spot` (`gd`, `gr`, `gh`…). Returns the server and
 /// request id, and a note for when the code on disk isn't what's shown.
 fn ask_about(
     lsp: &mut lsp::Lsp,

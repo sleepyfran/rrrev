@@ -70,7 +70,7 @@ impl App {
 
     /// The code under the cursor, as the language server sees it: only the
     /// new side, which is what's on disk.
-    pub(super) fn cursor_spot(&self) -> Result<Spot, &'static str> {
+    pub fn cursor_spot(&self) -> Result<Spot, &'static str> {
         const OLD: &str = "Removed lines aren't in the code the language server sees";
         if let Some(view) = &self.file_view {
             if view.side == Side::Old {

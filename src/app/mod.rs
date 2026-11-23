@@ -25,7 +25,7 @@ mod view;
 mod walkthrough;
 
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 pub use action::{Action, Effect, GoTo, Spot, VerdictAction, WalkthroughAction};
 pub use ask::{Answer, AskPanel};
@@ -149,8 +149,12 @@ pub struct App {
     jumps: Vec<goto::Jump>,
     /// `gr`'s list, while it's open.
     pub references: Option<ReferencesMenu>,
-    /// `K`'s box, while it's open.
+    /// `gh`'s box, while it's open.
     pub hover: Option<Hover>,
+    /// Where the cursor's character was drawn last frame (column, row), so
+    /// the hover box can sit by the symbol it's about. `None` when it's off
+    /// screen.
+    pub cursor_cell: Option<(u16, u16)>,
     pub should_quit: bool,
 }
 
@@ -215,6 +219,7 @@ impl App {
             jumps: Vec::new(),
             references: None,
             hover: None,
+            cursor_cell: None,
             should_quit: false,
         };
         // Plumbing, generated files and files already reviewed start out of

@@ -61,7 +61,7 @@ pub const SECTIONS: &[Section] = &[
                 "every reference to the symbol under the cursor; ● marks those the diff shows, Tab lists only them, Enter goes there",
             ),
             (
-                "K",
+                "gh",
                 "what the language server says about the symbol under the cursor: its type, signature and docs",
             ),
             ("C-o", "back to where gd or gr jumped from"),

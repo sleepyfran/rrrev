@@ -10,7 +10,7 @@ With the current state of development we spend almost all of our time reviewing 
 
 - Review any set of changes, from uncommitted work to staged changes, the last N commits, a single commit, commit..ranges, everything since a commit, or a branch against the branch it split off. Oh, and did I mention you can also review each layer of a stack at a time quickly?
 - Treesitter highlighting, word-level tints for what changed, `-` to hide deletions (to focus on the current state of the file) and auto line wrapping when your terminal panel is not wide enough.
-- Get context beyond the hunk via the built-in LSP (if you need to navigate to the definition, get references, etc.) or simply expand the whole function with `ze`. `[e` and `]e` to read 20 more lines or press `Return` to get the full file.
+- Get context beyond the hunk via the built-in LSP (if you need to navigate to the definition, get references, etc.) or simply expand the whole function with `ze`. `[e` and `]e` to read 20 more lines or press `Return` to get the full file. You can also use `gh` on any symbol to get its documentation and types.
 - I heard you like AI, so I put AI on your AI code: use `:organize` to get your agent (Claude only for now, potentially configurable in the future) to build a review plan with notes shown inline or press `a` to ask about the line, selection or hunk under the cursor. You an also use `:walkthrough` to get a slide presentation from your agent, running you through the changes as if it was a PowerPoint.
 - No wall of changed imports: hunks that only touch imports, exports and the like (found with the language's tree-sitter grammar) start folded and are marked as plumbing and count automatically as done.
 - Track your progress with a built-in way of marking files and hunks as reviewed with `r`, or get a end verdict and summary of how far you've made it with `S`.
@@ -40,7 +40,7 @@ The binary ends up at `target/release/rrrev`. Run `cargo test` to run the tests.
 ### Extras
 
 - **Syntax highlighting and breadcrumbs:** `rrrev lang enable <name>` fetches a grammar and builds it into `~/.local/share/rrrev/grammars`, which needs `git` and a C compiler (`cc`, or `c++` for grammars with C++ scanners). `rrrev lang list` shows supported languages.
-- **Language servers (`gd`, `gr`, `K`):** rrrev looks for servers in Neovim's Mason folder (`~/.local/share/nvim/mason/bin`).
+- **Language servers (`gd`, `gr`, `gh`):** rrrev looks for servers in Neovim's Mason folder (`~/.local/share/nvim/mason/bin`).
 - **AI features (`:organize`, `a`):** these need the `claude` CLI on your `PATH`. Set `RRREV_CLAUDE` to point at a different binary.
 - **Stack review:** `rrrev stack` needs `gh stack`.
 

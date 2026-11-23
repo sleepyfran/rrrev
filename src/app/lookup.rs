@@ -1,4 +1,4 @@
-//! `gr` and `K`: the list of a symbol's references, marking those the diff
+//! `gr` and `gh`: the list of a symbol's references, marking those the diff
 //! shows, and what the language server says about a symbol.
 
 use super::goto::Target;
@@ -43,7 +43,7 @@ impl ReferencesMenu {
     }
 }
 
-/// What `K` showed: the server's text, a line at a time.
+/// What `gh` showed: the server's text, a line at a time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hover {
     pub lines: Vec<String>,
@@ -147,7 +147,7 @@ impl App {
         }
     }
 
-    /// The server's answer to `K`, as text to read.
+    /// The server's answer to `gh`, as text to read.
     pub fn finish_hover(&mut self, text: Result<String, String>, note: Option<&str>) {
         match text {
             Err(e) => self.message = Some(format!("error: {e}")),

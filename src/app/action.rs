@@ -117,7 +117,7 @@ pub enum Action {
     GoTo(GoTo),
     /// `gr`: every reference to the symbol under the cursor.
     References,
-    /// `K`: what the language server says about the symbol under the cursor.
+    /// `gh`: what the language server says about the symbol under the cursor.
     Hover,
     /// `C-o`: back to where the cursor jumped from.
     JumpBack,
