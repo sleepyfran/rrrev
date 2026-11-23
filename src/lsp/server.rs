@@ -1,7 +1,7 @@
 //! One running language server: its process, a thread writing to it, a
 //! thread reading from it, and what rrrev knows of its state.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -47,7 +47,8 @@ pub struct Server {
     abandoned: Vec<u64>,
     /// Notifications held until `initialize` is answered.
     queued: Vec<Value>,
-    opened: HashSet<PathBuf>,
+    /// Files sent with `didOpen`, and the version of their text last sent.
+    opened: HashMap<PathBuf, i32>,
     initialize: u64,
 }
 
@@ -142,7 +143,7 @@ impl Server {
             pending: HashMap::new(),
             abandoned: Vec::new(),
             queued: Vec::new(),
-            opened: HashSet::new(),
+            opened: HashMap::new(),
             initialize: 0,
         };
         server.initialize = server.request("initialize", initialize_params(root));
@@ -186,15 +187,33 @@ impl Server {
 
     /// Tells the server about a file, once, with its text from disk.
     pub fn open(&mut self, path: &Path, language_id: &str) {
-        if !self.opened.insert(path.to_path_buf()) {
+        if self.opened.contains_key(path) {
             return;
         }
+        self.opened.insert(path.to_path_buf(), 1);
         let Ok(text) = std::fs::read_to_string(path) else {
             return;
         };
         self.notify(
             "textDocument/didOpen",
             json!({"textDocument": {"uri": uri(path), "languageId": language_id, "version": 1, "text": text}}),
+        );
+    }
+
+    /// Sends a file's new text from disk, if the server has it open. The
+    /// whole text, which every server takes whatever sync it asked for.
+    pub fn changed(&mut self, path: &Path) {
+        let Some(version) = self.opened.get_mut(path) else {
+            return;
+        };
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return;
+        };
+        *version += 1;
+        let version = *version;
+        self.notify(
+            "textDocument/didChange",
+            json!({"textDocument": {"uri": uri(path), "version": version}, "contentChanges": [{"text": text}]}),
         );
     }
 

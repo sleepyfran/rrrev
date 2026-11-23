@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::stdout;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -45,8 +45,8 @@ use anim::Animator;
 use app::{App, Effect};
 use appearance::Appearance;
 use ask::Assistant;
-use diff::DiffSource;
 use diff::git::{DiffSpec, GitSource};
+use diff::{DiffSource, Sources};
 use export::{CommentSink, FileSink, Format};
 use highlight::Highlighter;
 use keymap::KeyHandler;
@@ -202,6 +202,7 @@ fn main() -> Result<()> {
         &mut terminal,
         &mut app,
         &state_file,
+        &source,
         Ai {
             organizer,
             narrator,
@@ -252,6 +253,7 @@ fn run(
     terminal: &mut DefaultTerminal,
     app: &mut App,
     state_file: &Path,
+    source: &GitSource,
     ai: Ai,
     mut highlighter: Highlighter,
     lsp: &mut lsp::Lsp,
@@ -383,6 +385,36 @@ fn run(
                     app.message = Some(format!("error: {e:#}"));
                 }
                 app.finish_editor(text.ok().flatten());
+            }
+            Some(Effect::OpenInNeovim {
+                path,
+                line,
+                column,
+                contents,
+            }) => {
+                let file = source.workdir().join(&path);
+                // Edits are only worth making to the text on screen: a file
+                // on disk that's moved on from it (or a commit that isn't
+                // checked out) stays shut.
+                if read_source(&file).as_ref() != Some(&contents) {
+                    app.message = Some(format!(
+                        "{path} on disk isn't the version shown, so there's nothing here to edit"
+                    ));
+                } else if let Err(e) =
+                    open_in_neovim(terminal, source.workdir(), &file, line, column)
+                {
+                    app.message = Some(format!("error: {e:#}"));
+                } else {
+                    match source.load() {
+                        Ok(diff) => {
+                            app.reload(diff, read_source(&file));
+                            highlighter.forget_files();
+                            lsp.changed(&path);
+                            open_in_servers(lsp, app);
+                        }
+                        Err(e) => app.message = Some(format!("error: could not reload: {e:#}")),
+                    }
+                }
             }
             Some(Effect::Export { format, path }) => {
                 let path = path.unwrap_or_else(|| default_export_path(state_file, format));
@@ -664,27 +696,64 @@ fn edit_in_editor(terminal: &mut DefaultTerminal, initial: &str) -> Result<Optio
         .or_else(|_| std::env::var("EDITOR"))
         .unwrap_or_else(|_| "vi".to_string());
 
-    disable_raw_mode()?;
-    execute!(stdout(), LeaveAlternateScreen)?;
     // Through the shell so an editor with arguments (`code --wait`) works;
     // the path goes in as `$1` so it's never parsed as shell syntax.
-    let status = Command::new("sh")
-        .arg("-c")
-        .arg(format!("{editor} \"$1\""))
-        .arg("sh")
-        .arg(&path)
-        .status();
-    enable_raw_mode()?;
-    execute!(stdout(), EnterAlternateScreen)?;
-    terminal.clear()?;
-
-    let status = status.with_context(|| format!("cannot run editor `{editor}`"))?;
+    let status = hand_over(
+        terminal,
+        Command::new("sh")
+            .arg("-c")
+            .arg(format!("{editor} \"$1\""))
+            .arg("sh")
+            .arg(&path),
+    )?
+    .with_context(|| format!("cannot run editor `{editor}`"))?;
     let text = status
         .success()
         .then(|| fs::read_to_string(&path))
         .transpose()?;
     let _ = fs::remove_file(&path);
     Ok(text)
+}
+
+/// Runs `command` in rrrev's terminal, the screen handed over until it
+/// exits and taken back after. The outer `Result` is the terminal's, the
+/// inner one whether `command` could run at all.
+fn hand_over(
+    terminal: &mut DefaultTerminal,
+    command: &mut Command,
+) -> Result<std::io::Result<ExitStatus>> {
+    disable_raw_mode()?;
+    execute!(stdout(), LeaveAlternateScreen)?;
+    let status = command.status();
+    enable_raw_mode()?;
+    execute!(stdout(), EnterAlternateScreen)?;
+    terminal.clear()?;
+    Ok(status)
+}
+
+/// Opens `file` in Neovim at `line` and `column`, from `workdir`.
+fn open_in_neovim(
+    terminal: &mut DefaultTerminal,
+    workdir: &Path,
+    file: &Path,
+    line: u32,
+    column: usize,
+) -> Result<()> {
+    hand_over(
+        terminal,
+        Command::new("nvim")
+            .current_dir(workdir)
+            .arg(format!("+call cursor({line}, {column})"))
+            .arg("--")
+            .arg(file),
+    )?
+    .context("cannot run `nvim`")?;
+    Ok(())
+}
+
+/// A file's text as the diff splits it, or `None` if it can't be read.
+fn read_source(path: &Path) -> Option<diff::Source> {
+    fs::read(path).ok().map(|bytes| Sources::lines(&bytes))
 }
 
 #[cfg(test)]

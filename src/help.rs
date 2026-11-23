@@ -53,6 +53,10 @@ pub const SECTIONS: &[Section] = &[
                 "the same motions and / search; ]c / [c next / previous change; q or Esc back to the diff",
             ),
             (
+                "Enter in the file",
+                "edit it in Neovim at the cursor; when it quits the diff reloads with your edits. Only the version on disk opens, not the old side or another commit",
+            ),
+            (
                 "gd / gy / gi",
                 "the definition, type or implementation of the symbol under the cursor, from its language server: in the diff when it shows that line, else in the file",
             ),

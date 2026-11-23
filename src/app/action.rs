@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use super::View;
 use super::column::FindChar;
 use crate::ask::AskRequest;
+use crate::diff::Source;
 use crate::export::Format;
 use crate::organizer::OrganizeRequest;
 use crate::theme::Theme;
@@ -186,6 +187,17 @@ pub enum Effect {
     /// Edit the comment being written in `$EDITOR`, then call `finish_editor`.
     OpenEditor {
         initial: String,
+    },
+    /// Enter in the file view: open the file in Neovim at `line` (1-based)
+    /// and `column` (a 1-based byte), handing it the terminal until it
+    /// quits, then reload the diff. `contents` is the text the view shows:
+    /// a file on disk that isn't that version doesn't open, as its edits
+    /// wouldn't be to what's on screen.
+    OpenInNeovim {
+        path: String,
+        line: u32,
+        column: usize,
+        contents: Source,
     },
     Export {
         format: Format,

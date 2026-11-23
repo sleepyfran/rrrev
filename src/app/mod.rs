@@ -18,6 +18,7 @@ mod mode;
 mod navigation;
 mod notes;
 mod plan;
+mod reload;
 mod search;
 mod theme;
 mod verdict;

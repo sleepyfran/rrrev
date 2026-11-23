@@ -73,6 +73,15 @@ impl Lsp {
         self.servers[index].open(&full, language_id(&language.name));
     }
 
+    /// Tells the server that has a file (relative to the working folder)
+    /// open that it changed on disk, so its answers follow the new text.
+    pub fn changed(&mut self, path: &str) {
+        let full = self.workdir.join(path);
+        for server in &mut self.servers {
+            server.changed(&full);
+        }
+    }
+
     /// The server for a file, started if needed.
     pub fn server_for(&mut self, path: &str) -> Option<usize> {
         let language = self.registry.for_path(path)?;
@@ -459,6 +468,17 @@ mod tests {
         let open = fake.read(&mut lsp);
         assert_eq!(open["method"], "textDocument/didOpen");
         assert_eq!(open["params"]["textDocument"]["text"], "fn main() {}\n");
+
+        // Edited on disk: the whole new text, a version up.
+        std::fs::write(dir.path().join("a.rs"), "fn main() { 1 }\n").unwrap();
+        lsp.changed("a.rs");
+        let change = fake.read(&mut lsp);
+        assert_eq!(change["method"], "textDocument/didChange");
+        assert_eq!(change["params"]["textDocument"]["version"], 2);
+        assert_eq!(
+            change["params"]["contentChanges"][0]["text"],
+            "fn main() { 1 }\n"
+        );
         assert_eq!(lsp.servers[index].encoding, server::Encoding::Utf8);
         assert_eq!(lsp.status(), None);
 

@@ -2561,7 +2561,7 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
                     " ? help  l next  h previous  r reviewed  Enter go there  q close "
                 }
                 _ if app.file_view.is_some() => {
-                    " ? help  ]c [c changes  / search  q back to the diff "
+                    " ? help  ]c [c changes  / search  Enter nvim  q back to the diff "
                 }
                 _ if matches!(app.current_row(), Some(Row::Note { .. })) => {
                     " c comment with this  dd dismiss  a ask about it  y copy "

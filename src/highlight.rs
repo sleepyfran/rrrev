@@ -72,6 +72,14 @@ impl Highlighter {
         }
     }
 
+    /// Drops everything highlighted from the diff and its files, which
+    /// hangs on their text and positions, for when they're loaded again.
+    pub fn forget_files(&mut self) {
+        self.cache.clear();
+        self.sources.clear();
+        self.files.clear();
+    }
+
     /// Drops what was highlighted in `language`, to highlight it again with
     /// a grammar built since.
     pub fn forget(&mut self, diff: &Diff, language: &str) {

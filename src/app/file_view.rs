@@ -1,9 +1,10 @@
 //! The file view: a whole file, read-only, with the same cursor as the diff
 //! and the diff's changes marked in its gutter. Enter on a code line opens
-//! it there; `q` or `Esc` goes back to the diff where it was.
+//! it there; Enter again opens it in Neovim; `q` or `Esc` goes back to the
+//! diff where it was.
 
 use super::column::Caret;
-use super::{Action, App, Row};
+use super::{Action, App, Effect, Row};
 use crate::app::find_matches;
 use crate::diff::{FileDiff, LineKind, Side, Source};
 
@@ -281,6 +282,21 @@ impl App {
             Action::SearchNext(n) => self.search_next(n, true),
             Action::SearchPrev(n) => self.search_next(n, false),
             Action::ToggleHelp => self.help_scroll = Some(0),
+            Action::Select if view.side == Side::Old => {
+                self.message = Some(format!(
+                    "The old {} isn't on disk to edit; open it from a line that's still there",
+                    view.path
+                ))
+            }
+            Action::Select => {
+                let column = view.caret.bytes(&view.lines[..]).map_or(0, |b| b.start);
+                self.effect = Some(Effect::OpenInNeovim {
+                    path: view.path.clone(),
+                    line: view.line_no(),
+                    column: column + 1,
+                    contents: view.lines.clone(),
+                });
+            }
             Action::Cancel if highlighting => self.clear_search_highlight(),
             Action::Cancel | Action::Quit => self.file_view = None,
             Action::JumpBack => self.jump_back(),
@@ -442,6 +458,38 @@ mod tests {
         assert!(app.file_view.is_none());
         assert!(!app.should_quit);
         assert_eq!(app.cursor, 4);
+    }
+
+    #[test]
+    fn enter_in_the_file_opens_it_in_neovim() {
+        let mut app = sample_app();
+        app.cursor = 4; // `+ new();`
+        app.update(Action::Select);
+        app.update(Action::WordForward { n: 1, big: false });
+        app.update(Action::Select);
+        let Some(Effect::OpenInNeovim {
+            path,
+            line,
+            column,
+            contents,
+        }) = app.effect.take()
+        else {
+            panic!("expected Neovim to open");
+        };
+        assert_eq!((path.as_str(), line, column), ("a.rs", 2, 5));
+        assert_eq!(contents[1], "    new();");
+        // The file view stays open for when Neovim quits.
+        assert!(app.file_view.is_some());
+    }
+
+    #[test]
+    fn the_old_side_does_not_open_in_neovim() {
+        let mut app = sample_app();
+        app.cursor = 6; // `- gone();`
+        app.update(Action::Select);
+        app.update(Action::Select);
+        assert_eq!(app.effect, None);
+        assert!(app.message.as_deref().unwrap().contains("isn't on disk"));
     }
 
     #[test]
