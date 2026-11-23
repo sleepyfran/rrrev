@@ -62,7 +62,9 @@ impl Server {
         log: &Path,
         events: Sender<Event>,
     ) -> Result<Server> {
-        let stderr = std::fs::File::create(log).map(Stdio::from).unwrap_or_else(|_| Stdio::null());
+        let stderr = std::fs::File::create(log)
+            .map(Stdio::from)
+            .unwrap_or_else(|_| Stdio::null());
         let mut child = Command::new(command)
             .args(args)
             .current_dir(root)
@@ -74,8 +76,18 @@ impl Server {
             .with_context(|| format!("cannot start {}", command.display()))?;
         let stdin = child.stdin.take().context("no stdin")?;
         let stdout = child.stdout.take().context("no stdout")?;
-        let name = command.file_name().map_or_else(|| lang.to_string(), |n| n.to_string_lossy().into_owned());
-        Ok(Server::connect(id, &name, root, stdout, stdin, Some(child), events))
+        let name = command
+            .file_name()
+            .map_or_else(|| lang.to_string(), |n| n.to_string_lossy().into_owned());
+        Ok(Server::connect(
+            id,
+            &name,
+            root,
+            stdout,
+            stdin,
+            Some(child),
+            events,
+        ))
     }
 
     /// A server over any pipe pair, as tests use. Sends `initialize`.
@@ -102,7 +114,13 @@ impl Server {
             let why = loop {
                 match transport::read(&mut input) {
                     Ok(Some(message)) => {
-                        if events.send(Event::Message { server: id, message }).is_err() {
+                        if events
+                            .send(Event::Message {
+                                server: id,
+                                message,
+                            })
+                            .is_err()
+                        {
                             return;
                         }
                     }
@@ -171,7 +189,9 @@ impl Server {
         if !self.opened.insert(path.to_path_buf()) {
             return;
         }
-        let Ok(text) = std::fs::read_to_string(path) else { return };
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return;
+        };
         self.notify(
             "textDocument/didOpen",
             json!({"textDocument": {"uri": uri(path), "languageId": language_id, "version": 1, "text": text}}),
@@ -191,9 +211,9 @@ impl Server {
                         let items = message["params"]["items"].as_array().map_or(0, Vec::len);
                         Ok(Value::Array(vec![Value::Null; items]))
                     }
-                    "window/workDoneProgress/create" | "client/registerCapability" | "client/unregisterCapability" => {
-                        Ok(Value::Null)
-                    }
+                    "window/workDoneProgress/create"
+                    | "client/registerCapability"
+                    | "client/unregisterCapability" => Ok(Value::Null),
                     "workspace/workspaceFolders" => Ok(json!([folder(&self.root)])),
                     _ => Err(method.to_string()),
                 };
@@ -235,7 +255,9 @@ impl Server {
                     self.encoding = Encoding::Utf8;
                 }
                 self.state = State::Ready;
-                let _ = self.outgoing.send(json!({"jsonrpc": "2.0", "method": "initialized", "params": {}}));
+                let _ = self
+                    .outgoing
+                    .send(json!({"jsonrpc": "2.0", "method": "initialized", "params": {}}));
                 for message in std::mem::take(&mut self.queued) {
                     let _ = self.outgoing.send(message);
                 }
@@ -277,7 +299,12 @@ impl Server {
         }
         self.progress.clear();
         let initialize = self.initialize;
-        self.abandoned.extend(self.pending.drain().map(|(id, _)| id).filter(|&id| id != initialize));
+        self.abandoned.extend(
+            self.pending
+                .drain()
+                .map(|(id, _)| id)
+                .filter(|&id| id != initialize),
+        );
     }
 
     /// The requests that went unanswered when the connection closed, once.
@@ -310,7 +337,9 @@ impl Server {
     pub fn shutdown(&mut self, grace: Duration) {
         if self.state == State::Ready {
             self.request("shutdown", Value::Null);
-            let _ = self.outgoing.send(json!({"jsonrpc": "2.0", "method": "exit"}));
+            let _ = self
+                .outgoing
+                .send(json!({"jsonrpc": "2.0", "method": "exit"}));
         }
         if let Some(mut child) = self.child.take() {
             let until = Instant::now() + grace;
@@ -338,7 +367,9 @@ fn path_with_mason() -> std::ffi::OsString {
 }
 
 fn folder(root: &Path) -> Value {
-    let name = root.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    let name = root
+        .file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
     json!({"uri": uri(root), "name": name})
 }
 

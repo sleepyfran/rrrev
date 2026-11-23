@@ -24,7 +24,11 @@ const MAX_LABEL: usize = 60;
 /// The definitions in `outline` (every definition in a file, in the order
 /// they start) that hold `line`, outermost first.
 pub fn within(outline: &[Scope], line: u32) -> Vec<Scope> {
-    outline.iter().filter(|s| s.line <= line && line <= s.end).cloned().collect()
+    outline
+        .iter()
+        .filter(|s| s.line <= line && line <= s.end)
+        .cloned()
+        .collect()
 }
 
 /// The label without its opening brace, cut to fit a breadcrumb.
@@ -44,9 +48,21 @@ mod tests {
 
     #[test]
     fn within_keeps_the_scopes_holding_the_line() {
-        let scope = |line, end, label: &str| Scope { line, end, label: label.into() };
-        let outline = [scope(1, 10, "impl A"), scope(2, 4, "fn a()"), scope(6, 9, "fn b()"), scope(12, 14, "fn c()")];
-        assert_eq!(within(&outline, 7), [scope(1, 10, "impl A"), scope(6, 9, "fn b()")]);
+        let scope = |line, end, label: &str| Scope {
+            line,
+            end,
+            label: label.into(),
+        };
+        let outline = [
+            scope(1, 10, "impl A"),
+            scope(2, 4, "fn a()"),
+            scope(6, 9, "fn b()"),
+            scope(12, 14, "fn c()"),
+        ];
+        assert_eq!(
+            within(&outline, 7),
+            [scope(1, 10, "impl A"), scope(6, 9, "fn b()")]
+        );
         assert_eq!(within(&outline, 1), [scope(1, 10, "impl A")]);
         assert!(within(&outline, 11).is_empty());
     }

@@ -15,8 +15,14 @@ use crate::theme::Palette;
 pub type CodeHighlighter<'a> = dyn FnMut(&str, &[String]) -> Vec<Vec<Segment>> + 'a;
 
 /// `text` as lines at most `width` columns wide.
-pub fn render(text: &str, width: usize, palette: &Palette, code: &mut CodeHighlighter) -> Vec<Line<'static>> {
-    let options = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
+pub fn render(
+    text: &str,
+    width: usize,
+    palette: &Palette,
+    code: &mut CodeHighlighter,
+) -> Vec<Line<'static>> {
+    let options =
+        Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
     let mut renderer = Renderer {
         width: width.max(1),
         p: palette,
@@ -45,7 +51,10 @@ pub fn render(text: &str, width: usize, palette: &Palette, code: &mut CodeHighli
 enum Container {
     Quote,
     /// `marker` starts the item's first line and its width in spaces the rest.
-    Item { marker: String, used: bool },
+    Item {
+        marker: String,
+        used: bool,
+    },
 }
 
 #[derive(Default)]
@@ -87,7 +96,9 @@ impl Renderer<'_, '_> {
         match event {
             Event::Start(tag) => self.start(tag),
             Event::End(tag) => self.end(tag),
-            Event::Text(text) | Event::InlineHtml(text) | Event::InlineMath(text) => self.text(&text, self.style()),
+            Event::Text(text) | Event::InlineHtml(text) | Event::InlineMath(text) => {
+                self.text(&text, self.style())
+            }
             Event::Html(text) | Event::DisplayMath(text) => {
                 for line in text.lines() {
                     self.text(line, self.style());
@@ -100,10 +111,17 @@ impl Renderer<'_, '_> {
             Event::Rule => {
                 self.block();
                 let room = self.room();
-                self.emit(vec![Span::styled("─".repeat(room), Style::new().fg(self.p.muted))]);
+                self.emit(vec![Span::styled(
+                    "─".repeat(room),
+                    Style::new().fg(self.p.muted),
+                )]);
             }
             Event::TaskListMarker(done) => {
-                let (mark, style) = if done { ("✓ ", Style::new().fg(self.p.green)) } else { ("☐ ", Style::new()) };
+                let (mark, style) = if done {
+                    ("✓ ", Style::new().fg(self.p.green))
+                } else {
+                    ("☐ ", Style::new())
+                };
                 self.inline.push(Span::styled(mark, style));
             }
             Event::FootnoteReference(name) => self.text(&format!("[{name}]"), self.style().dim()),
@@ -116,7 +134,11 @@ impl Renderer<'_, '_> {
             Tag::Heading { level, .. } => {
                 self.block();
                 let style = Style::new().fg(self.p.blue).bold();
-                self.styles.push(if level == HeadingLevel::H1 { style.underlined() } else { style });
+                self.styles.push(if level == HeadingLevel::H1 {
+                    style.underlined()
+                } else {
+                    style
+                });
             }
             Tag::BlockQuote(_) => {
                 self.block();
@@ -126,7 +148,9 @@ impl Renderer<'_, '_> {
             Tag::CodeBlock(kind) => {
                 self.block();
                 let language = match kind {
-                    CodeBlockKind::Fenced(info) => info.split([' ', ',', '{']).next().unwrap_or("").to_string(),
+                    CodeBlockKind::Fenced(info) => {
+                        info.split([' ', ',', '{']).next().unwrap_or("").to_string()
+                    }
                     CodeBlockKind::Indented => String::new(),
                 };
                 self.code_block = Some((language, String::new()));
@@ -149,7 +173,10 @@ impl Renderer<'_, '_> {
                     }
                     _ => "• ".to_string(),
                 };
-                self.containers.push(Container::Item { marker, used: false });
+                self.containers.push(Container::Item {
+                    marker,
+                    used: false,
+                });
             }
             Tag::Table(_) => {
                 self.block();
@@ -223,7 +250,10 @@ impl Renderer<'_, '_> {
             TagEnd::Link | TagEnd::Image => {
                 self.styles.pop();
                 if let Some((url, start)) = self.links.pop() {
-                    let text: String = self.inline[start..].iter().map(|s| s.content.as_ref()).collect();
+                    let text: String = self.inline[start..]
+                        .iter()
+                        .map(|s| s.content.as_ref())
+                        .collect();
                     if !url.is_empty() && text != url && !url.starts_with('#') {
                         self.text(&format!(" ({url})"), self.style().dim());
                     }
@@ -247,8 +277,16 @@ impl Renderer<'_, '_> {
     /// after what came before, unless it opens a list item.
     fn block(&mut self) {
         self.flush();
-        let fresh_item = matches!(self.containers.last(), Some(Container::Item { used: false, .. }));
-        if fresh_item || self.lines.last().is_none_or(|l| l.width() == 0 || is_bar_only(l)) {
+        let fresh_item = matches!(
+            self.containers.last(),
+            Some(Container::Item { used: false, .. })
+        );
+        if fresh_item
+            || self
+                .lines
+                .last()
+                .is_none_or(|l| l.width() == 0 || is_bar_only(l))
+        {
             return;
         }
         let bars: Vec<Span> = self
@@ -281,7 +319,11 @@ impl Renderer<'_, '_> {
             match container {
                 Container::Quote => spans.push(Span::styled("│ ", Style::new().fg(self.p.muted))),
                 Container::Item { marker, used } => {
-                    let text = if *used { " ".repeat(marker.chars().count()) } else { marker.clone() };
+                    let text = if *used {
+                        " ".repeat(marker.chars().count())
+                    } else {
+                        marker.clone()
+                    };
                     spans.push(Span::styled(text, Style::new().fg(self.p.magenta)));
                     *used = true;
                 }
@@ -303,9 +345,19 @@ impl Renderer<'_, '_> {
     }
 
     fn end_code_block(&mut self) {
-        let Some((language, text)) = self.code_block.take() else { return };
-        let source: Vec<String> = text.trim_end_matches('\n').split('\n').map(|l| l.replace('\t', "    ")).collect();
-        let highlighted = if language.is_empty() { Vec::new() } else { (self.code)(&language, &source) };
+        let Some((language, text)) = self.code_block.take() else {
+            return;
+        };
+        let source: Vec<String> = text
+            .trim_end_matches('\n')
+            .split('\n')
+            .map(|l| l.replace('\t', "    "))
+            .collect();
+        let highlighted = if language.is_empty() {
+            Vec::new()
+        } else {
+            (self.code)(&language, &source)
+        };
         let gutter = Style::new().fg(self.p.muted);
         let room = self.room().saturating_sub(2).max(1);
         for (i, line) in source.iter().enumerate() {
@@ -315,7 +367,11 @@ impl Renderer<'_, '_> {
             };
             for piece in split_segments(segments, room) {
                 let mut spans = vec![Span::styled("▎ ", gutter)];
-                spans.extend(piece.into_iter().map(|(style, text)| Span::styled(text, style)));
+                spans.extend(
+                    piece
+                        .into_iter()
+                        .map(|(style, text)| Span::styled(text, style)),
+                );
                 self.emit(spans);
             }
         }
@@ -327,7 +383,15 @@ impl Renderer<'_, '_> {
         let width = |cell: &[Span]| cell.iter().map(Span::width).sum::<usize>();
         let columns = table.rows.iter().map(Vec::len).max().unwrap_or(0);
         let widths: Vec<usize> = (0..columns)
-            .map(|c| table.rows.iter().filter_map(|r| r.get(c)).map(|cell| width(cell)).max().unwrap_or(0))
+            .map(|c| {
+                table
+                    .rows
+                    .iter()
+                    .filter_map(|r| r.get(c))
+                    .map(|cell| width(cell))
+                    .max()
+                    .unwrap_or(0)
+            })
             .collect();
         let separator = Style::new().fg(self.p.muted);
         let room = self.room();
@@ -353,7 +417,10 @@ impl Renderer<'_, '_> {
             return;
         }
         let (header, body) = match table.head {
-            true => (table.rows.first().cloned().unwrap_or_default(), &table.rows[1.min(table.rows.len())..]),
+            true => (
+                table.rows.first().cloned().unwrap_or_default(),
+                &table.rows[1.min(table.rows.len())..],
+            ),
             false => (Vec::new(), &table.rows[..]),
         };
         for (r, row) in body.iter().enumerate() {
@@ -376,7 +443,9 @@ impl Renderer<'_, '_> {
 }
 
 fn is_bar_only(line: &Line) -> bool {
-    line.spans.iter().all(|s| s.content.trim().is_empty() || s.content == "│")
+    line.spans
+        .iter()
+        .all(|s| s.content.trim().is_empty() || s.content == "│")
 }
 
 /// Greedy word wrap of styled text to `width` columns; a word longer than a
@@ -426,7 +495,14 @@ fn wrap(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> {
     if !line.is_empty() {
         lines.push(line);
     }
-    lines.into_iter().map(|l| l.into_iter().map(|(style, text)| Span::styled(text, style)).collect()).collect()
+    lines
+        .into_iter()
+        .map(|l| {
+            l.into_iter()
+                .map(|(style, text)| Span::styled(text, style))
+                .collect()
+        })
+        .collect()
 }
 
 /// Cuts a line of segments every `width` characters.
@@ -456,7 +532,10 @@ mod tests {
     use ratatui::style::Modifier;
 
     fn plain(text: &str, width: usize) -> Vec<String> {
-        lines(text, width).iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect()).collect()
+        lines(text, width)
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect()
     }
 
     fn lines(text: &str, width: usize) -> Vec<Line<'static>> {
@@ -467,12 +546,19 @@ mod tests {
     #[test]
     fn wraps_paragraphs_keeping_inline_styles() {
         let out = lines("It calls **`floor`** on the\nslice, then *returns*.", 16);
-        let text: Vec<String> = out.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect()).collect();
+        let text: Vec<String> = out
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
         assert_eq!(text, ["It calls floor", "on the slice,", "then returns."]);
         let floor = out[0].spans.iter().find(|s| s.content == "floor").unwrap();
         assert!(floor.style.add_modifier.contains(Modifier::BOLD));
         assert!(floor.style.fg.is_some());
-        let returns = out[2].spans.iter().find(|s| s.content == "returns").unwrap();
+        let returns = out[2]
+            .spans
+            .iter()
+            .find(|s| s.content == "returns")
+            .unwrap();
         assert!(returns.style.add_modifier.contains(Modifier::ITALIC));
     }
 
@@ -481,7 +567,18 @@ mod tests {
         let text = "# Title\n\nFirst.\n\n- one two three\n- four\n  1. five\n\n> quoted";
         assert_eq!(
             plain(text, 12),
-            ["Title", "", "First.", "", "• one two", "  three", "• four", "  1. five", "", "│ quoted"]
+            [
+                "Title",
+                "",
+                "First.",
+                "",
+                "• one two",
+                "  three",
+                "• four",
+                "  1. five",
+                "",
+                "│ quoted"
+            ]
         );
     }
 
@@ -490,12 +587,29 @@ mod tests {
         let palette = Theme::terminal().palette(Appearance::Dark);
         let keyword = Style::new().fg(palette.red);
         let mut asked = Vec::new();
-        let out = render("```rust\nfn  a() {}\n\tb\n```", 20, &palette, &mut |lang, src| {
-            asked.push((lang.to_string(), src.to_vec()));
-            vec![vec![(keyword, "fn".into()), (Style::new(), "  a() {}".into())]]
-        });
-        assert_eq!(asked, [("rust".to_string(), vec!["fn  a() {}".to_string(), "    b".to_string()])]);
-        let text: Vec<String> = out.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect()).collect();
+        let out = render(
+            "```rust\nfn  a() {}\n\tb\n```",
+            20,
+            &palette,
+            &mut |lang, src| {
+                asked.push((lang.to_string(), src.to_vec()));
+                vec![vec![
+                    (keyword, "fn".into()),
+                    (Style::new(), "  a() {}".into()),
+                ]]
+            },
+        );
+        assert_eq!(
+            asked,
+            [(
+                "rust".to_string(),
+                vec!["fn  a() {}".to_string(), "    b".to_string()]
+            )]
+        );
+        let text: Vec<String> = out
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
         assert_eq!(text, ["▎ fn  a() {}", "▎     b"]);
         assert_eq!(out[0].spans[1].style, keyword);
     }
@@ -508,7 +622,10 @@ mod tests {
 
     #[test]
     fn links_show_where_they_go() {
-        assert_eq!(plain("See [the docs](https://x.dev).", 80), ["See the docs (https://x.dev)."]);
+        assert_eq!(
+            plain("See [the docs](https://x.dev).", 80),
+            ["See the docs (https://x.dev)."]
+        );
         assert_eq!(plain("<https://x.dev>", 80), ["https://x.dev"]);
     }
 

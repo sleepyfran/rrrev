@@ -90,7 +90,9 @@ impl App {
     /// `:<n>`: the first row at or after line `n` of the new file.
     pub(super) fn go_to_line(&mut self, n: u32) {
         let target = self.rows.iter().position(|row| match *row {
-            Row::Line { file, hunk, line } => self.line(file, hunk, line).new_no.is_some_and(|no| no >= n),
+            Row::Line { file, hunk, line } => {
+                self.line(file, hunk, line).new_no.is_some_and(|no| no >= n)
+            }
             _ => false,
         });
         match target {
@@ -114,11 +116,16 @@ impl App {
     /// Every `(page, row)` a cross-page jump can land on, in page order:
     /// rows matching `row_stop`, and headers of folded files where
     /// `folded_stop` says something is hidden.
-    pub(super) fn stops(&self, row_stop: impl Fn(&Row) -> bool, folded_stop: impl Fn(usize) -> bool) -> Vec<(usize, usize)> {
+    pub(super) fn stops(
+        &self,
+        row_stop: impl Fn(&Row) -> bool,
+        folded_stop: impl Fn(usize) -> bool,
+    ) -> Vec<(usize, usize)> {
         let mut stops = Vec::new();
         for page in 0..self.page_count() {
             for (idx, row) in self.page_rows(page).into_iter().enumerate() {
-                let hides_one = matches!(row, Row::File { file } if self.collapsed[file] && folded_stop(file));
+                let hides_one =
+                    matches!(row, Row::File { file } if self.collapsed[file] && folded_stop(file));
                 if hides_one || row_stop(&row) {
                     stops.push((page, idx));
                 }
@@ -129,14 +136,21 @@ impl App {
 
     /// Jumps `n` stops forward or back, switching pages if needed. Returns
     /// false when there's no stop in that direction.
-    pub(super) fn jump_to_stop(&mut self, stops: &[(usize, usize)], n: usize, forward: bool) -> bool {
+    pub(super) fn jump_to_stop(
+        &mut self,
+        stops: &[(usize, usize)],
+        n: usize,
+        forward: bool,
+    ) -> bool {
         let here = (self.page, self.cursor);
         let target = if forward {
             stops.iter().filter(|&&s| s > here).take(n).last()
         } else {
             stops.iter().rev().filter(|&&s| s < here).take(n).last()
         };
-        let Some(&(page, row)) = target else { return false };
+        let Some(&(page, row)) = target else {
+            return false;
+        };
         self.open_page(page, row);
         self.scroll = row;
         true
@@ -231,7 +245,11 @@ mod tests {
 
     #[test]
     fn unreviewed_jumps_stop_at_folded_files_with_work_left() {
-        let mut app = app_with(vec![file("a.rs", &[1]), file("b.rs", &[2]), file("Cargo.lock", &[2])]);
+        let mut app = app_with(vec![
+            file("a.rs", &[1]),
+            file("b.rs", &[2]),
+            file("Cargo.lock", &[2]),
+        ]);
         app.collapsed[1] = true;
         app.rebuild_rows();
         app.update(Action::NextUnreviewed(1));
@@ -262,7 +280,10 @@ mod tests {
         app.update(Action::NextComment(1));
         assert_eq!(position(&app), (1, 3));
         app.update(Action::NextComment(1));
-        assert_eq!(app.message.as_deref(), Some("No more comments or notes in this direction"));
+        assert_eq!(
+            app.message.as_deref(),
+            Some("No more comments or notes in this direction")
+        );
         app.update(Action::PrevComment(1));
         assert_eq!(position(&app), (0, 7));
     }

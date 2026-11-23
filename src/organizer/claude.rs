@@ -59,7 +59,14 @@ impl ClaudeCli {
 
 impl Organizer for ClaudeCli {
     fn organize(&self, request: &OrganizeRequest, cancel: &Cancel) -> Result<Plan> {
-        let args = ["--tools", "", "--system-prompt", SYSTEM_PROMPT, "--json-schema", SCHEMA];
+        let args = [
+            "--tools",
+            "",
+            "--system-prompt",
+            SYSTEM_PROMPT,
+            "--json-schema",
+            SCHEMA,
+        ];
         let (stdout, outcome) = self.run(&args, request.to_prompt(), cancel)?;
         let parsed = parse_response(&stdout);
         self.finish(outcome, &stdout, parsed)
@@ -70,7 +77,12 @@ impl Assistant for ClaudeCli {
     /// Read-only tools, so it can look around the repository it runs in but
     /// never change it.
     fn ask(&self, request: &AskRequest, cancel: &Cancel) -> Result<String> {
-        let args = ["--tools", "Read,Grep,Glob", "--system-prompt", ASK_SYSTEM_PROMPT];
+        let args = [
+            "--tools",
+            "Read,Grep,Glob",
+            "--system-prompt",
+            ASK_SYSTEM_PROMPT,
+        ];
         let (stdout, outcome) = self.run(&args, request.to_prompt(), cancel)?;
         let parsed = parse_text(&stdout);
         self.finish(outcome, &stdout, parsed)
@@ -90,7 +102,9 @@ impl ClaudeCli {
     /// it exits or `cancel` fires. Returns what it printed.
     fn run(&self, args: &[&str], prompt: String, cancel: &Cancel) -> Result<(String, Outcome)> {
         let mut command = Command::new(&self.program);
-        command.args(["-p", "--output-format", "json", "--no-session-persistence"]).args(args);
+        command
+            .args(["-p", "--output-format", "json", "--no-session-persistence"])
+            .args(args);
         if let Some(model) = &self.model {
             command.args(["--model", model]);
         }
@@ -122,12 +136,23 @@ impl ClaudeCli {
         let stdout = stdout.join().expect("stdout reader panicked")?;
         let stderr = stderr.join().expect("stderr reader panicked")?;
         let written = writer.join().expect("stdin writer panicked");
-        Ok((stdout, Outcome { status, stderr, written }))
+        Ok((
+            stdout,
+            Outcome {
+                status,
+                stderr,
+                written,
+            },
+        ))
     }
 
     /// The parsed answer of a successful run, or why the run failed.
     fn finish<T>(&self, outcome: Outcome, stdout: &str, parsed: Result<T>) -> Result<T> {
-        let Outcome { status, stderr, written } = outcome;
+        let Outcome {
+            status,
+            stderr,
+            written,
+        } = outcome;
         if status.success() {
             written?;
             return parsed;
@@ -145,7 +170,9 @@ impl ClaudeCli {
 /// How often a running organizer checks whether it was cancelled.
 const POLL: Duration = Duration::from_millis(50);
 
-fn read_in_background(mut pipe: impl Read + Send + 'static) -> thread::JoinHandle<std::io::Result<String>> {
+fn read_in_background(
+    mut pipe: impl Read + Send + 'static,
+) -> thread::JoinHandle<std::io::Result<String>> {
     thread::spawn(move || {
         let mut bytes = Vec::new();
         pipe.read_to_end(&mut bytes)?;
@@ -161,9 +188,13 @@ fn parse_text(stdout: &str) -> Result<String> {
         is_error: bool,
         result: Option<String>,
     }
-    let envelope: Envelope = serde_json::from_str(stdout.trim()).context("unexpected output from claude")?;
+    let envelope: Envelope =
+        serde_json::from_str(stdout.trim()).context("unexpected output from claude")?;
     match (envelope.is_error, envelope.result) {
-        (true, result) => bail!("{}", result.unwrap_or_else(|| "claude reported an error".to_string())),
+        (true, result) => bail!(
+            "{}",
+            result.unwrap_or_else(|| "claude reported an error".to_string())
+        ),
         (false, Some(text)) if !text.trim().is_empty() => Ok(text.trim().to_string()),
         (false, _) => bail!("claude gave no answer"),
     }
@@ -178,9 +209,15 @@ fn parse_response(stdout: &str) -> Result<Plan> {
         result: Option<String>,
         structured_output: Option<Plan>,
     }
-    let envelope: Envelope = serde_json::from_str(stdout.trim()).context("unexpected output from claude")?;
+    let envelope: Envelope =
+        serde_json::from_str(stdout.trim()).context("unexpected output from claude")?;
     if envelope.is_error {
-        bail!("{}", envelope.result.unwrap_or_else(|| "claude reported an error".to_string()));
+        bail!(
+            "{}",
+            envelope
+                .result
+                .unwrap_or_else(|| "claude reported an error".to_string())
+        );
     }
     match (envelope.structured_output, envelope.result) {
         (Some(plan), _) => Ok(plan),
@@ -195,11 +232,14 @@ mod tests {
     use super::*;
     use crate::diff::Diff;
 
-    const PLAN_JSON: &str = r#"{"groups":[{"title":"Core","rationale":"Types first.","hunks":["abc"]}]}"#;
+    const PLAN_JSON: &str =
+        r#"{"groups":[{"title":"Core","rationale":"Types first.","hunks":["abc"]}]}"#;
 
     #[test]
     fn reads_structured_output() {
-        let stdout = format!(r#"{{"type":"result","is_error":false,"result":"…","structured_output":{PLAN_JSON}}}"#);
+        let stdout = format!(
+            r#"{{"type":"result","is_error":false,"result":"…","structured_output":{PLAN_JSON}}}"#
+        );
         let plan = parse_response(&stdout).unwrap();
         assert_eq!(plan.groups[0].title, "Core");
         assert_eq!(plan.groups[0].hunks[0].as_str(), "abc");
@@ -216,7 +256,12 @@ mod tests {
         let stdout = r#"{"is_error":false,"result":"  It rounds down.\n"}"#;
         assert_eq!(parse_text(stdout).unwrap(), "It rounds down.");
         assert!(parse_text(r#"{"is_error":false,"result":""}"#).is_err());
-        assert_eq!(parse_text(r#"{"is_error":true,"result":"nope"}"#).unwrap_err().to_string(), "nope");
+        assert_eq!(
+            parse_text(r#"{"is_error":true,"result":"nope"}"#)
+                .unwrap_err()
+                .to_string(),
+            "nope"
+        );
     }
 
     #[test]
@@ -225,13 +270,21 @@ mod tests {
         let plan = parse_response(stdout).unwrap();
         assert_eq!(plan.notes[0].line, Some(12));
         // Plans saved before notes existed still load.
-        assert!(parse_response(&format!(r#"{{"structured_output":{PLAN_JSON}}}"#)).unwrap().notes.is_empty());
+        assert!(
+            parse_response(&format!(r#"{{"structured_output":{PLAN_JSON}}}"#))
+                .unwrap()
+                .notes
+                .is_empty()
+        );
     }
 
     #[test]
     fn reports_errors() {
         let stdout = r#"{"is_error":true,"result":"Credit balance is too low"}"#;
-        assert_eq!(parse_response(stdout).unwrap_err().to_string(), "Credit balance is too low");
+        assert_eq!(
+            parse_response(stdout).unwrap_err().to_string(),
+            "Credit balance is too low"
+        );
         assert!(parse_response("not json").is_err());
     }
 
@@ -255,11 +308,20 @@ mod tests {
         .unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-        let cli = ClaudeCli { program: script.display().to_string(), model: Some("sonnet".into()) };
+        let cli = ClaudeCli {
+            program: script.display().to_string(),
+            model: Some("sonnet".into()),
+        };
         let request = OrganizeRequest::from_diff("test", &Diff::default());
-        assert_eq!(cli.organize(&request, &Cancel::default()).unwrap().groups[0].title, "Core");
+        assert_eq!(
+            cli.organize(&request, &Cancel::default()).unwrap().groups[0].title,
+            "Core"
+        );
 
-        let missing = ClaudeCli { program: dir.path().join("nope").display().to_string(), model: None };
+        let missing = ClaudeCli {
+            program: dir.path().join("nope").display().to_string(),
+            model: None,
+        };
         let error = missing.organize(&request, &Cancel::default()).unwrap_err();
         assert!(error.to_string().starts_with("cannot run"));
     }
@@ -274,7 +336,10 @@ mod tests {
         std::fs::write(&script, "#!/bin/sh\nexec sleep 30\n").unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-        let cli = ClaudeCli { program: script.display().to_string(), model: None };
+        let cli = ClaudeCli {
+            program: script.display().to_string(),
+            model: None,
+        };
         let cancel = Cancel::default();
         let canceller = cancel.clone();
         thread::spawn(move || {

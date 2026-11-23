@@ -11,29 +11,89 @@ const MAX_LOOKBACK: usize = 5000;
 
 /// Words that, after modifiers, open a definition worth naming.
 const DEFINITION_WORDS: &[&str] = &[
-    "fn", "function", "func", "def", "class", "struct", "enum", "trait", "impl", "mod", "module", "interface",
-    "type", "namespace", "object", "union", "macro_rules!", "describe", "it", "test", "fun", "sub", "proc",
-    "method", "record", "protocol", "extension", "actor", "contract",
+    "fn",
+    "function",
+    "func",
+    "def",
+    "class",
+    "struct",
+    "enum",
+    "trait",
+    "impl",
+    "mod",
+    "module",
+    "interface",
+    "type",
+    "namespace",
+    "object",
+    "union",
+    "macro_rules!",
+    "describe",
+    "it",
+    "test",
+    "fun",
+    "sub",
+    "proc",
+    "method",
+    "record",
+    "protocol",
+    "extension",
+    "actor",
+    "contract",
 ];
 
 /// Words that may come before the definition word.
 const MODIFIERS: &[&str] = &[
-    "pub", "pub(crate)", "pub(super)", "export", "default", "async", "static", "private", "public", "protected",
-    "internal", "const", "unsafe", "extern", "abstract", "override", "final", "virtual", "inline", "open",
-    "sealed", "data", "suspend", "declare", "readonly", "partial", "@objc",
+    "pub",
+    "pub(crate)",
+    "pub(super)",
+    "export",
+    "default",
+    "async",
+    "static",
+    "private",
+    "public",
+    "protected",
+    "internal",
+    "const",
+    "unsafe",
+    "extern",
+    "abstract",
+    "override",
+    "final",
+    "virtual",
+    "inline",
+    "open",
+    "sealed",
+    "data",
+    "suspend",
+    "declare",
+    "readonly",
+    "partial",
+    "@objc",
 ];
 
 /// The definitions enclosing `line` (1-based) in `source`, outermost first.
 pub fn enclosing(source: &[String], line: u32) -> Vec<Scope> {
-    let Some(target) = (line as usize).checked_sub(1).filter(|&i| i < source.len()) else { return Vec::new() };
+    let Some(target) = (line as usize).checked_sub(1).filter(|&i| i < source.len()) else {
+        return Vec::new();
+    };
     // The line's own indentation, or the next non-blank one's for a blank line.
-    let Some(mut bound) = source[target..].iter().find(|l| !l.trim().is_empty()).map(|l| indent(l)) else {
+    let Some(mut bound) = source[target..]
+        .iter()
+        .find(|l| !l.trim().is_empty())
+        .map(|l| indent(l))
+    else {
         return Vec::new();
     };
     // A definition's own line belongs to it, so it shows as its own scope.
     let mut scopes = Vec::new();
     if let Some(label) = definition(&source[target]) {
-        scopes.push(Scope { line, end: scope_end(source, target), label });
+        scopes.push(Scope {
+            line,
+            end: scope_end(source, target),
+            label,
+        });
     }
     let floor = target.saturating_sub(MAX_LOOKBACK);
     for i in (floor..target).rev() {
@@ -47,7 +107,11 @@ pub fn enclosing(source: &[String], line: u32) -> Vec<Scope> {
         }
         bound = level;
         if let Some(label) = definition(text) {
-            scopes.push(Scope { line: i as u32 + 1, end: scope_end(source, i), label });
+            scopes.push(Scope {
+                line: i as u32 + 1,
+                end: scope_end(source, i),
+                label,
+            });
         }
         if level == 0 {
             break;
@@ -66,20 +130,32 @@ fn scope_end(source: &[String], start: usize) -> u32 {
         if trimmed.is_empty() || indent(text) > level {
             continue;
         }
-        let closes = trimmed.starts_with(['}', ')', ']']) || trimmed == "end" || trimmed.starts_with("end ");
-        return if closes { i as u32 + 1 } else { last_solid(source, start, i) };
+        let closes =
+            trimmed.starts_with(['}', ')', ']']) || trimmed == "end" || trimmed.starts_with("end ");
+        return if closes {
+            i as u32 + 1
+        } else {
+            last_solid(source, start, i)
+        };
     }
     last_solid(source, start, source.len())
 }
 
 /// 1-based number of the last non-blank line in `start..before`.
 fn last_solid(source: &[String], start: usize, before: usize) -> u32 {
-    (start..before).rev().find(|&i| !source[i].trim().is_empty()).unwrap_or(start) as u32 + 1
+    (start..before)
+        .rev()
+        .find(|&i| !source[i].trim().is_empty())
+        .unwrap_or(start) as u32
+        + 1
 }
 
 /// Columns of leading whitespace, a tab counting as four.
 fn indent(line: &str) -> usize {
-    line.chars().take_while(|c| c.is_whitespace()).map(|c| if c == '\t' { 4 } else { 1 }).sum()
+    line.chars()
+        .take_while(|c| c.is_whitespace())
+        .map(|c| if c == '\t' { 4 } else { 1 })
+        .sum()
 }
 
 /// The line as a breadcrumb label, if it opens a definition.
@@ -89,12 +165,16 @@ fn definition(line: &str) -> Option<String> {
     if trimmed.ends_with(';') {
         return None;
     }
-    if trimmed.starts_with("//") || trimmed.starts_with('#') && !trimmed.starts_with("#[") || trimmed.starts_with("/*")
+    if trimmed.starts_with("//")
+        || trimmed.starts_with('#') && !trimmed.starts_with("#[")
+        || trimmed.starts_with("/*")
         || trimmed.starts_with('*')
     {
         return None;
     }
-    let mut words = trimmed.split_whitespace().skip_while(|w| MODIFIERS.contains(w) || w.starts_with("pub("));
+    let mut words = trimmed
+        .split_whitespace()
+        .skip_while(|w| MODIFIERS.contains(w) || w.starts_with("pub("));
     let first = words.next()?;
     let keyword = first.split(['(', '<', '{', ':']).next().unwrap_or(first);
     let named = DEFINITION_WORDS.contains(&keyword)
@@ -106,8 +186,10 @@ fn definition(line: &str) -> Option<String> {
 /// `name(args) {` or `name(args): T {`, as in JS/TS classes, C-likes and Go
 /// methods, without keywords such as `if` or `for` that look the same.
 fn looks_like_method(line: &str) -> bool {
-    const NOT_DEFINITIONS: &[&str] =
-        &["if", "for", "while", "switch", "match", "catch", "return", "else", "do", "try", "with", "loop", "elif"];
+    const NOT_DEFINITIONS: &[&str] = &[
+        "if", "for", "while", "switch", "match", "catch", "return", "else", "do", "try", "with",
+        "loop", "elif",
+    ];
     if !line.ends_with('{') || !line.contains('(') {
         return false;
     }
@@ -116,11 +198,20 @@ fn looks_like_method(line: &str) -> bool {
     !name.is_empty()
         && !head.contains('=')
         && !head.contains('.')
-        && name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$' || c == '*' || c == ':' || c == '<' || c == '>')
+        && name.chars().all(|c| {
+            c.is_alphanumeric()
+                || c == '_'
+                || c == '$'
+                || c == '*'
+                || c == ':'
+                || c == '<'
+                || c == '>'
+        })
         && !NOT_DEFINITIONS.contains(&name)
-        && !head.split_whitespace().any(|w| NOT_DEFINITIONS.contains(&w))
+        && !head
+            .split_whitespace()
+            .any(|w| NOT_DEFINITIONS.contains(&w))
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -136,7 +227,10 @@ mod tests {
     }
 
     fn labels(source: &[String], line: u32) -> Vec<String> {
-        enclosing(source, line).into_iter().map(|s| s.label).collect()
+        enclosing(source, line)
+            .into_iter()
+            .map(|s| s.label)
+            .collect()
     }
 
     const RUST: &str = "\
@@ -156,9 +250,21 @@ impl PathCache {
     #[test]
     fn finds_rust_impls_and_functions() {
         let src = source(RUST);
-        assert_eq!(labels(&src, 7), ["impl PathCache", "pub fn shorten(&self, path: &str) -> String"]);
+        assert_eq!(
+            labels(&src, 7),
+            [
+                "impl PathCache",
+                "pub fn shorten(&self, path: &str) -> String"
+            ]
+        );
         // The definition line itself is inside its own scope.
-        assert_eq!(labels(&src, 5), ["impl PathCache", "pub fn shorten(&self, path: &str) -> String"]);
+        assert_eq!(
+            labels(&src, 5),
+            [
+                "impl PathCache",
+                "pub fn shorten(&self, path: &str) -> String"
+            ]
+        );
         assert_eq!(labels(&src, 1), Vec::<String>::new());
         let f = innermost(&src, 7).unwrap();
         assert_eq!((f.line, f.end), (5, 10));
@@ -172,7 +278,11 @@ impl PathCache {
         );
         assert_eq!(
             labels(&src, 6),
-            ["export default function fffExtension(pi: ExtensionAPI)", "class A", "run(a: number): void"]
+            [
+                "export default function fffExtension(pi: ExtensionAPI)",
+                "class A",
+                "run(a: number): void"
+            ]
         );
         let outer = enclosing(&src, 2).remove(0);
         assert_eq!((outer.line, outer.end), (1, 10));
@@ -180,7 +290,8 @@ impl PathCache {
 
     #[test]
     fn finds_python_defs_by_indentation() {
-        let src = source("class A:\n    def run(self):\n        x = 1\n\n        return x\n\ny = 2\n");
+        let src =
+            source("class A:\n    def run(self):\n        x = 1\n\n        return x\n\ny = 2\n");
         assert_eq!(labels(&src, 5), ["class A", "def run(self)"]);
         let run = innermost(&src, 3).unwrap();
         assert_eq!((run.line, run.end), (2, 5));
@@ -196,7 +307,9 @@ impl PathCache {
 
     #[test]
     fn control_flow_is_not_a_scope() {
-        let src = source("fn main() {\n    for x in y {\n        if x {\n            z();\n        }\n    }\n}\n");
+        let src = source(
+            "fn main() {\n    for x in y {\n        if x {\n            z();\n        }\n    }\n}\n",
+        );
         assert_eq!(labels(&src, 4), ["fn main()"]);
     }
 

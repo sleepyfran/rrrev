@@ -43,7 +43,12 @@ pub fn file_at(path: &str, hunks: &[(u32, &str)]) -> FileDiff {
         old_lines: 0,
         new_start: no,
         new_lines: 1,
-        lines: vec![DiffLine { kind: LineKind::Added, old_no: None, new_no: Some(no), content: content.into() }],
+        lines: vec![DiffLine {
+            kind: LineKind::Added,
+            old_no: None,
+            new_no: Some(no),
+            content: content.into(),
+        }],
     };
     FileDiff {
         old_path: Some(path.into()),
@@ -68,12 +73,24 @@ pub fn sample_app() -> App {
 /// its imports.
 pub fn plumbing_app() -> App {
     use std::sync::Arc;
-    let lines = |text: &str| Some(Arc::new(text.lines().map(str::to_string).collect::<Vec<_>>()));
+    let lines = |text: &str| {
+        Some(Arc::new(
+            text.lines().map(str::to_string).collect::<Vec<_>>(),
+        ))
+    };
     let old = "use a::B;\nuse c::D;\n\nfn f() {}\n";
     let new = "use a::B;\nuse e::F;\n\nfn f() { 1 }\n";
     let at = |line: u32, content: &str| {
         let mut f = file_at("x", &[(line, content)]).hunks.remove(0);
-        f.lines.insert(0, DiffLine { kind: LineKind::Removed, old_no: Some(line), new_no: None, content: "-".into() });
+        f.lines.insert(
+            0,
+            DiffLine {
+                kind: LineKind::Removed,
+                old_no: Some(line),
+                new_no: None,
+                content: "-".into(),
+            },
+        );
         f
     };
     let mut imports = at(2, "use e::F;");
@@ -84,11 +101,13 @@ pub fn plumbing_app() -> App {
     a.hunks = vec![imports.clone(), code];
     let mut b = file("b.rs", &[]);
     b.hunks = vec![imports];
-    let sources = || Sources { old: lines(old), new: lines(new) };
+    let sources = || Sources {
+        old: lines(old),
+        new: lines(new),
+    };
     let diff = Diff::new(vec![a, b]).with_sources(vec![sources(), sources()]);
     App::new(String::new(), diff, ReviewState::default())
 }
-
 
 /// `(page, cursor row)`.
 pub fn position(app: &App) -> (usize, usize) {

@@ -19,14 +19,28 @@ pub enum View {
 pub enum Mode {
     Normal,
     /// Line-wise selection from `anchor` (a row index) to the cursor.
-    Visual { anchor: usize },
-    Comment { target: CommentTarget, input: TextInput },
-    Command { input: TextInput },
-    Search { input: TextInput },
+    Visual {
+        anchor: usize,
+    },
+    Comment {
+        target: CommentTarget,
+        input: TextInput,
+    },
+    Command {
+        input: TextInput,
+    },
+    Search {
+        input: TextInput,
+    },
     /// Typing a question about `target` for the ask panel.
-    Ask { target: AskTarget, input: TextInput },
+    Ask {
+        target: AskTarget,
+        input: TextInput,
+    },
     /// Typing the verdict's message to the author.
-    VerdictMessage { input: TextInput },
+    VerdictMessage {
+        input: TextInput,
+    },
 }
 
 /// What a question is about: a line, a selection or a hunk.
@@ -45,6 +59,13 @@ pub struct AskTarget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommentTarget {
     /// Inclusive range of line indices within one hunk.
-    New { file: usize, hunk: usize, start: usize, end: usize },
-    Edit { id: u64 },
+    New {
+        file: usize,
+        hunk: usize,
+        start: usize,
+        end: usize,
+    },
+    Edit {
+        id: u64,
+    },
 }

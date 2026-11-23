@@ -12,7 +12,13 @@ pub fn find_matches(text: &str, query: &str) -> Vec<Range<usize>> {
         return Vec::new();
     }
     let ignore_case = !query.chars().any(char::is_uppercase);
-    let same = |a: char, b: char| if ignore_case { a.to_lowercase().eq(b.to_lowercase()) } else { a == b };
+    let same = |a: char, b: char| {
+        if ignore_case {
+            a.to_lowercase().eq(b.to_lowercase())
+        } else {
+            a == b
+        }
+    };
     let mut matches = Vec::new();
     let mut from = 0;
     for (start, _) in text.char_indices() {
@@ -38,11 +44,15 @@ pub fn find_matches(text: &str, query: &str) -> Vec<Range<usize>> {
 
 impl App {
     pub(super) fn start_search(&mut self) {
-        self.mode = Mode::Search { input: TextInput::default() };
+        self.mode = Mode::Search {
+            input: TextInput::default(),
+        };
     }
 
     pub(super) fn search_input(&mut self, action: InputAction) {
-        let Mode::Search { input } = &mut self.mode else { return };
+        let Mode::Search { input } = &mut self.mode else {
+            return;
+        };
         match action {
             InputAction::Submit => {
                 let query = input.text().to_string();
@@ -70,7 +80,10 @@ impl App {
         if self.search_file_view(&query, n, forward) {
             return;
         }
-        let stops = self.stops(|row| self.row_matches(*row, &query), |file| self.file_matches(file, &query));
+        let stops = self.stops(
+            |row| self.row_matches(*row, &query),
+            |file| self.file_matches(file, &query),
+        );
         let Some(&wrapped) = (if forward { stops.first() } else { stops.last() }) else {
             self.message = Some(format!("Pattern not found: {query}"));
             return;
@@ -79,8 +92,12 @@ impl App {
             self.open_page(wrapped.0, wrapped.1);
             self.scroll = wrapped.1;
             self.message = Some(
-                if forward { "search hit BOTTOM, continuing at TOP" } else { "search hit TOP, continuing at BOTTOM" }
-                    .to_string(),
+                if forward {
+                    "search hit BOTTOM, continuing at TOP"
+                } else {
+                    "search hit TOP, continuing at BOTTOM"
+                }
+                .to_string(),
             );
         }
         self.column_on_match(&query);
@@ -104,7 +121,9 @@ impl App {
             Row::Hunk { file, hunk } => self.hunk(file, hunk).header.clone(),
             Row::Line { file, hunk, line } => self.line(file, hunk, line).content.clone(),
             Row::Context { file, no, .. } => super::context_text(&self.diff, file, no)?.to_string(),
-            Row::Comment { id, line, .. } => self.review.comment(id)?.text.lines().nth(line)?.to_string(),
+            Row::Comment { id, line, .. } => {
+                self.review.comment(id)?.text.lines().nth(line)?.to_string()
+            }
             Row::Note { note, .. } => self.notes.get(note)?.text.clone(),
             Row::Plumbing { .. } => return None,
         })
@@ -114,22 +133,31 @@ impl App {
     fn row_matches(&self, row: Row, query: &str) -> bool {
         if let Row::Hunk { file, hunk } = row
             && self.is_hunk_folded(file, hunk)
-            && self.hunk(file, hunk).lines.iter().any(|l| !find_matches(&l.content, query).is_empty())
+            && self
+                .hunk(file, hunk)
+                .lines
+                .iter()
+                .any(|l| !find_matches(&l.content, query).is_empty())
         {
             return true;
         }
         if let Row::Plumbing { file, hunk, start } = row {
             let run = self.run_at(file, hunk, start).unwrap_or(start..start + 1);
             let lines = &self.hunk(file, hunk).lines[run];
-            return lines.iter().any(|l| !find_matches(&l.content, query).is_empty());
+            return lines
+                .iter()
+                .any(|l| !find_matches(&l.content, query).is_empty());
         }
-        self.row_text(row).is_some_and(|text| !find_matches(&text, query).is_empty())
+        self.row_text(row)
+            .is_some_and(|text| !find_matches(&text, query).is_empty())
     }
 
     /// Whether a match is hidden inside a folded file.
     fn file_matches(&self, file: usize, query: &str) -> bool {
         let lines = self.diff.files[file].hunks.iter().flat_map(|h| &h.lines);
-        lines.into_iter().any(|line| !find_matches(&line.content, query).is_empty())
+        lines
+            .into_iter()
+            .any(|line| !find_matches(&line.content, query).is_empty())
     }
 }
 
@@ -167,10 +195,16 @@ mod tests {
         assert_eq!(position(&app), (1, 4));
         app.update(Action::SearchNext(1));
         assert_eq!(position(&app), (0, 4));
-        assert_eq!(app.message.as_deref(), Some("search hit BOTTOM, continuing at TOP"));
+        assert_eq!(
+            app.message.as_deref(),
+            Some("search hit BOTTOM, continuing at TOP")
+        );
         app.update(Action::SearchPrev(1));
         assert_eq!(position(&app), (1, 4));
-        assert_eq!(app.message.as_deref(), Some("search hit TOP, continuing at BOTTOM"));
+        assert_eq!(
+            app.message.as_deref(),
+            Some("search hit TOP, continuing at BOTTOM")
+        );
     }
 
     #[test]

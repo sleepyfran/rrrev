@@ -10,13 +10,13 @@ use std::ops::Range;
 
 use crate::anim::{Animator, Popup};
 use crate::app::{
-    Answer, App, CommentTarget, FileView, Focus, LineStats, Mark, Mode, Progress, Row, View, context_numbers,
-    context_text, find_matches, is_above,
+    Answer, App, CommentTarget, FileView, Focus, LineStats, Mark, Mode, Progress, Row, View,
+    context_numbers, context_text, find_matches, is_above,
 };
 use crate::diff::{FileStatus, LineKind, Side, scope};
 use crate::help;
-use crate::markdown;
 use crate::highlight::{Highlighter, Segment};
+use crate::markdown;
 use crate::review::VerdictKind;
 use crate::text::wrap_words;
 use crate::theme::{Palette, THEMES};
@@ -26,7 +26,13 @@ use crate::theme::{Palette, THEMES};
 const COMPACT_BELOW: u16 = 100;
 
 /// `pending` holds the keys of an unfinished command, e.g. `3]`.
-pub fn render(frame: &mut Frame, app: &mut App, highlighter: &mut Highlighter, anim: &mut Animator, pending: &str) {
+pub fn render(
+    frame: &mut Frame,
+    app: &mut App,
+    highlighter: &mut Highlighter,
+    anim: &mut Animator,
+    pending: &str,
+) {
     anim.begin(app);
     highlighter.set_theme(app.theme, app.appearance);
     // A theme with its own background paints it everywhere first.
@@ -55,11 +61,13 @@ pub fn render(frame: &mut Frame, app: &mut App, highlighter: &mut Highlighter, a
     let (body, ask_area) = match app.ask.open {
         true if body.width >= ASK_DOCK_RIGHT_FROM => {
             let width = (body.width * 2 / 5).clamp(36, 72);
-            let [body, ask] = Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(body);
+            let [body, ask] =
+                Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(body);
             (body, Some((ask, true)))
         }
         true => {
-            let [body, ask] = Layout::vertical([Constraint::Percentage(55), Constraint::Min(0)]).areas(body);
+            let [body, ask] =
+                Layout::vertical([Constraint::Percentage(55), Constraint::Min(0)]).areas(body);
             (body, Some((ask, false)))
         }
         false => (body, None),
@@ -68,9 +76,13 @@ pub fn render(frame: &mut Frame, app: &mut App, highlighter: &mut Highlighter, a
     // The comment box covers the bottom of the diff, so rows scroll above it
     // and the commented line stays in sight.
     let comment_box = comment_box_area(app, body);
-    let diff_area = Rect { height: body.height - comment_box.map_or(0, |b| b.height), ..body };
+    let diff_area = Rect {
+        height: body.height - comment_box.map_or(0, |b| b.height),
+        ..body
+    };
     // Where the cursor is in its file, above the rows.
-    let [crumbs, rows_area] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(diff_area);
+    let [crumbs, rows_area] =
+        Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(diff_area);
     app.set_viewport(rows_area.width as usize, rows_area.height as usize);
     render_title(frame, title, app);
     anim.glint_title(frame.buffer_mut(), title);
@@ -94,7 +106,10 @@ pub fn render(frame: &mut Frame, app: &mut App, highlighter: &mut Highlighter, a
         && let Some((x, y)) = cursor
     {
         // Keep the cursor on its row while the box rises, or on the box's top.
-        let y = unroll.row(y).or(unroll.row(comment_box.map_or(y, |b| b.y))).unwrap_or(y);
+        let y = unroll
+            .row(y)
+            .or(unroll.row(comment_box.map_or(y, |b| b.y)))
+            .unwrap_or(y);
         frame.set_cursor_position((x, y));
     }
     render_status(frame, status, app, pending);
@@ -116,25 +131,47 @@ pub fn render(frame: &mut Frame, app: &mut App, highlighter: &mut Highlighter, a
         rect
     });
     anim.popup(frame.buffer_mut(), Popup::Sidebar, sidebar, Some(&under));
-    let verdict = app.show_verdict.then(|| render_verdict(frame, frame.area(), app));
+    let verdict = app
+        .show_verdict
+        .then(|| render_verdict(frame, frame.area(), app));
     anim.popup(frame.buffer_mut(), Popup::Verdict, verdict, Some(&under));
-    let comments = app.comments_menu.is_some().then(|| render_comments_menu(frame, frame.area(), app));
+    let comments = app
+        .comments_menu
+        .is_some()
+        .then(|| render_comments_menu(frame, frame.area(), app));
     anim.popup(frame.buffer_mut(), Popup::Comments, comments, Some(&under));
-    let references = app.references.is_some().then(|| render_references(frame, frame.area(), app));
-    anim.popup(frame.buffer_mut(), Popup::References, references, Some(&under));
+    let references = app
+        .references
+        .is_some()
+        .then(|| render_references(frame, frame.area(), app));
+    anim.popup(
+        frame.buffer_mut(),
+        Popup::References,
+        references,
+        Some(&under),
+    );
     // The hover box goes over the code it's about, which stays bright.
     let under_hover = frame.buffer_mut().clone();
     let hover = app.hover.is_some().then(|| render_hover(frame, main, app));
     anim.popup(frame.buffer_mut(), Popup::Hover, hover, Some(&under_hover));
-    let help = app.help_scroll.is_some().then(|| render_help(frame, frame.area(), app));
+    let help = app
+        .help_scroll
+        .is_some()
+        .then(|| render_help(frame, frame.area(), app));
     anim.popup(frame.buffer_mut(), Popup::Help, help, Some(&under));
     // The picker leaves the screen bright, to show each theme on the diff.
     let under = frame.buffer_mut().clone();
-    let picker = app.theme_picker.is_some().then(|| render_theme_picker(frame, main, app));
+    let picker = app
+        .theme_picker
+        .is_some()
+        .then(|| render_theme_picker(frame, main, app));
     anim.popup(frame.buffer_mut(), Popup::Theme, picker, Some(&under));
     // The questions go over whatever asked them.
     let under = frame.buffer_mut().clone();
-    let language = app.language_prompt.is_some().then(|| render_language_prompt(frame, frame.area(), app));
+    let language = app
+        .language_prompt
+        .is_some()
+        .then(|| render_language_prompt(frame, frame.area(), app));
     anim.popup(frame.buffer_mut(), Popup::Language, language, Some(&under));
     let confirm = if app.dismiss_prompt.is_some() {
         Some(render_dismiss_prompt(frame, frame.area(), app))
@@ -150,14 +187,22 @@ pub fn render(frame: &mut Frame, app: &mut App, highlighter: &mut Highlighter, a
 /// the first line of what it says. Returns where it was drawn.
 fn render_comments_menu(frame: &mut Frame, area: Rect, app: &App) -> Rect {
     let p = app.palette;
-    let Some(menu) = app.comments_menu else { return Rect::default() };
+    let Some(menu) = app.comments_menu else {
+        return Rect::default();
+    };
     let comments = app.listed_comments();
     let width = 96.min(area.width.saturating_sub(4));
     let inner_width = width.saturating_sub(2) as usize;
     let locations: Vec<String> = comments
         .iter()
         .map(|c| {
-            let range = |(a, b): (u32, u32)| if a == b { a.to_string() } else { format!("{a}-{b}") };
+            let range = |(a, b): (u32, u32)| {
+                if a == b {
+                    a.to_string()
+                } else {
+                    format!("{a}-{b}")
+                }
+            };
             match (c.new_lines, c.old_lines) {
                 (Some(new), _) => format!("{}:{}", c.path, range(new)),
                 (None, Some(old)) => format!("{}:-{}", c.path, range(old)),
@@ -166,7 +211,12 @@ fn render_comments_menu(frame: &mut Frame, area: Rect, app: &App) -> Rect {
         })
         .collect();
     // Locations get up to half the width; the text has the rest.
-    let location_width = locations.iter().map(|l| l.chars().count()).max().unwrap_or(0).min(inner_width / 2);
+    let location_width = locations
+        .iter()
+        .map(|l| l.chars().count())
+        .max()
+        .unwrap_or(0)
+        .min(inner_width / 2);
     let text_width = inner_width.saturating_sub(3 + location_width + 2);
 
     let lines: Vec<Line> = comments
@@ -181,7 +231,10 @@ fn render_comments_menu(frame: &mut Frame, area: Rect, app: &App) -> Rect {
             if comment.text.lines().nth(1).is_some() {
                 text.push_str(" …");
             }
-            let text = truncate_right(&text, text_width.saturating_sub(if outdated { 11 } else { 0 }));
+            let text = truncate_right(
+                &text,
+                text_width.saturating_sub(if outdated { 11 } else { 0 }),
+            );
             let mut spans = vec![
                 match (armed, selected) {
                     (true, _) => Span::styled(" ✗ ", Style::new().fg(p.red).bold()),
@@ -189,7 +242,10 @@ fn render_comments_menu(frame: &mut Frame, area: Rect, app: &App) -> Rect {
                     (false, false) => Span::raw("   "),
                 },
                 Span::styled(
-                    format!("{:<location_width$}  ", truncate_right(location, location_width)),
+                    format!(
+                        "{:<location_width$}  ",
+                        truncate_right(location, location_width)
+                    ),
                     Style::new().fg(p.cyan),
                 ),
                 Span::raw(text),
@@ -234,12 +290,22 @@ fn render_comments_menu(frame: &mut Frame, area: Rect, app: &App) -> Rect {
 /// diff shows it. Returns where it was drawn.
 fn render_references(frame: &mut Frame, area: Rect, app: &App) -> Rect {
     let p = app.palette;
-    let Some(menu) = &app.references else { return Rect::default() };
+    let Some(menu) = &app.references else {
+        return Rect::default();
+    };
     let shown = menu.shown();
     let width = 110.min(area.width.saturating_sub(4));
     let inner_width = width.saturating_sub(2) as usize;
-    let places: Vec<String> = shown.iter().map(|r| format!("{}:{}", r.target.path, r.target.line + 1)).collect();
-    let place_width = places.iter().map(|l| l.chars().count()).max().unwrap_or(0).min(inner_width / 2);
+    let places: Vec<String> = shown
+        .iter()
+        .map(|r| format!("{}:{}", r.target.path, r.target.line + 1))
+        .collect();
+    let place_width = places
+        .iter()
+        .map(|l| l.chars().count())
+        .max()
+        .unwrap_or(0)
+        .min(inner_width / 2);
     let code_width = inner_width.saturating_sub(5 + place_width + 2);
     let lines: Vec<Line> = shown
         .iter()
@@ -253,7 +319,10 @@ fn render_references(frame: &mut Frame, area: Rect, app: &App) -> Rect {
                 Span::raw("  ")
             };
             let line = Line::from(vec![
-                Span::styled(if selected { " ▸ " } else { "   " }, Style::new().fg(p.yellow)),
+                Span::styled(
+                    if selected { " ▸ " } else { "   " },
+                    Style::new().fg(p.yellow),
+                ),
                 marker,
                 Span::styled(
                     format!("{:<place_width$}  ", truncate_right(place, place_width)),
@@ -261,19 +330,43 @@ fn render_references(frame: &mut Frame, area: Rect, app: &App) -> Rect {
                 ),
                 Span::raw(truncate_right(reference.code(), code_width)),
             ]);
-            if selected { line.style(Style::new().bg(p.cursor).bold()) } else { line }
+            if selected {
+                line.style(Style::new().bg(p.cursor).bold())
+            } else {
+                line
+            }
         })
         .collect();
     let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(2));
     let rect = centered(area, width, height);
-    let in_diff = menu.references.iter().filter(|r| r.in_diff.is_some()).count();
+    let in_diff = menu
+        .references
+        .iter()
+        .filter(|r| r.in_diff.is_some())
+        .count();
     let title = match (menu.only_in_diff, &menu.note) {
-        (true, _) => format!(" References in the diff ({in_diff} of {}) ", menu.references.len()),
-        (false, None) => format!(" References ({}, {in_diff} in the diff) ", menu.references.len()),
-        (false, Some(note)) => format!(" References ({}, {in_diff} in the diff) · {note} ", menu.references.len()),
+        (true, _) => format!(
+            " References in the diff ({in_diff} of {}) ",
+            menu.references.len()
+        ),
+        (false, None) => format!(
+            " References ({}, {in_diff} in the diff) ",
+            menu.references.len()
+        ),
+        (false, Some(note)) => format!(
+            " References ({}, {in_diff} in the diff) · {note} ",
+            menu.references.len()
+        ),
     };
-    let filter = if menu.only_in_diff { "Tab show all" } else { "Tab only ● in the diff" };
-    let footer = Line::from(format!(" j/k move · Enter go to · {filter} · C-o back after · Esc close ")).dim();
+    let filter = if menu.only_in_diff {
+        "Tab show all"
+    } else {
+        "Tab only ● in the diff"
+    };
+    let footer = Line::from(format!(
+        " j/k move · Enter go to · {filter} · C-o back after · Esc close "
+    ))
+    .dim();
     let block = Block::bordered()
         .border_type(BorderType::Thick)
         .border_style(Style::new().fg(p.yellow).bold())
@@ -291,17 +384,27 @@ fn render_references(frame: &mut Frame, area: Rect, app: &App) -> Rect {
 /// Returns where it was drawn.
 fn render_hover(frame: &mut Frame, area: Rect, app: &App) -> Rect {
     let p = app.palette;
-    let Some(hover) = &app.hover else { return Rect::default() };
+    let Some(hover) = &app.hover else {
+        return Rect::default();
+    };
     let width = 90.min(area.width.saturating_sub(4));
     let inner_width = width.saturating_sub(4) as usize;
     let lines: Vec<Line> = hover
         .lines
         .iter()
         // Lines that fit keep their indentation; longer ones wrap at words.
-        .flat_map(|l| if l.chars().count() <= inner_width { vec![l.clone()] } else { crate::text::wrap_words(l, inner_width) })
+        .flat_map(|l| {
+            if l.chars().count() <= inner_width {
+                vec![l.clone()]
+            } else {
+                crate::text::wrap_words(l, inner_width)
+            }
+        })
         .map(|l| Line::from(format!(" {l}")))
         .collect();
-    let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(2)).max(3);
+    let height = (lines.len() as u16 + 2)
+        .min(area.height.saturating_sub(2))
+        .max(3);
     let rect = centered(area, width, height);
     let block = Block::bordered()
         .border_style(Style::new().fg(p.blue))
@@ -309,7 +412,10 @@ fn render_hover(frame: &mut Frame, area: Rect, app: &App) -> Rect {
     let inner = block.inner(rect);
     clear(frame, rect, &p);
     frame.render_widget(block, rect);
-    frame.render_widget(Paragraph::new(lines).scroll((hover.scroll as u16, 0)), inner);
+    frame.render_widget(
+        Paragraph::new(lines).scroll((hover.scroll as u16, 0)),
+        inner,
+    );
     rect
 }
 
@@ -318,10 +424,18 @@ fn render_hover(frame: &mut Frame, area: Rect, app: &App) -> Rect {
 fn render_dismiss_prompt(frame: &mut Frame, area: Rect, app: &App) -> Rect {
     let p = app.palette;
     let n = app.dismiss_prompt.as_ref().map_or(0, |d| d.ids.len());
-    let what = if n == 1 { "the comment".to_string() } else { format!("all {n} comments") };
+    let what = if n == 1 {
+        "the comment".to_string()
+    } else {
+        format!("all {n} comments")
+    };
     let lines = vec![
         Line::default(),
-        Line::from(format!("  Copied {what}. Dismiss {} now?  ", if n == 1 { "it" } else { "them" })).bold(),
+        Line::from(format!(
+            "  Copied {what}. Dismiss {} now?  ",
+            if n == 1 { "it" } else { "them" }
+        ))
+        .bold(),
         Line::default(),
         Line::from(vec![
             Span::raw("  "),
@@ -349,8 +463,15 @@ fn render_dismiss_prompt(frame: &mut Frame, area: Rect, app: &App) -> Rect {
 fn render_clear_ask_prompt(frame: &mut Frame, area: Rect, app: &App) -> Rect {
     let p = app.palette;
     let n = app.ask.entries.len();
-    let what = if n == 1 { "the question and its answer".to_string() } else { format!("all {n} questions and answers") };
-    let mut lines = vec![Line::default(), Line::from(format!("  Forget {what}?  ")).bold()];
+    let what = if n == 1 {
+        "the question and its answer".to_string()
+    } else {
+        format!("all {n} questions and answers")
+    };
+    let mut lines = vec![
+        Line::default(),
+        Line::from(format!("  Forget {what}?  ")).bold(),
+    ];
     if app.ask.running.is_some() {
         lines.push(Line::from("  The one being answered is called off.  ").dim());
     }
@@ -381,19 +502,34 @@ fn render_clear_ask_prompt(frame: &mut Frame, area: Rect, app: &App) -> Rect {
 /// built: whether to build it now. Returns where it was drawn.
 fn render_language_prompt(frame: &mut Frame, area: Rect, app: &App) -> Rect {
     let p = app.palette;
-    let Some(prompt) = &app.language_prompt else { return Rect::default() };
+    let Some(prompt) = &app.language_prompt else {
+        return Rect::default();
+    };
     let name = &prompt.name;
     let mut lines = vec![Line::default()];
     match &prompt.broken {
-        None => lines.push(Line::from(format!("  {name} has no highlighting yet. Build its grammar now?  ")).bold()),
+        None => lines.push(
+            Line::from(format!(
+                "  {name} has no highlighting yet. Build its grammar now?  "
+            ))
+            .bold(),
+        ),
         Some(why) => {
-            lines.push(Line::from(format!("  {name}'s grammar doesn't load. Build it again?  ")).bold());
+            lines.push(
+                Line::from(format!(
+                    "  {name}'s grammar doesn't load. Build it again?  "
+                ))
+                .bold(),
+            );
             let room = (area.width as usize).saturating_sub(8).min(72);
             lines.push(Line::from(format!("  {}  ", truncate_right(why, room))).dim());
         }
     }
     lines.extend([
-        Line::from("  It's fetched with git and compiled in the background, which takes a minute.  ").dim(),
+        Line::from(
+            "  It's fetched with git and compiled in the background, which takes a minute.  ",
+        )
+        .dim(),
         Line::default(),
         Line::from(vec![
             Span::raw("  "),
@@ -427,7 +563,9 @@ fn clear(frame: &mut Frame, area: Rect, p: &Palette) {
 /// background, in the variant for the OS's mode. Returns where it was drawn.
 fn render_theme_picker(frame: &mut Frame, area: Rect, app: &App) -> Rect {
     let p = app.palette;
-    let Some(picker) = app.theme_picker else { return Rect::default() };
+    let Some(picker) = app.theme_picker else {
+        return Rect::default();
+    };
     const SWATCH: usize = 13;
     let width = 44.min(area.width.saturating_sub(2));
     let name_width = (width as usize).saturating_sub(2 + 4 + SWATCH + 1);
@@ -438,17 +576,34 @@ fn render_theme_picker(frame: &mut Frame, area: Rect, app: &App) -> Rect {
         // In the variant the OS's mode calls for, as it would be used.
         let colors = theme.palette(app.appearance);
         let mut spans = vec![
-            Span::styled(if selected { " ▸ " } else { "   " }, Style::new().fg(p.cyan)),
-            Span::raw(format!("{:<name_width$}", truncate_right(theme.name, name_width))),
+            Span::styled(
+                if selected { " ▸ " } else { "   " },
+                Style::new().fg(p.cyan),
+            ),
+            Span::raw(format!(
+                "{:<name_width$}",
+                truncate_right(theme.name, name_width)
+            )),
             Span::raw(" "),
         ];
         let swatch = Style::new().bg(colors.bg);
         spans.push(Span::styled(" ", swatch));
-        for accent in [colors.red, colors.yellow, colors.green, colors.cyan, colors.blue, colors.magenta] {
+        for accent in [
+            colors.red,
+            colors.yellow,
+            colors.green,
+            colors.cyan,
+            colors.blue,
+            colors.magenta,
+        ] {
             spans.push(Span::styled("● ", swatch.fg(accent)));
         }
         let line = Line::from(spans);
-        lines.push(if selected { line.style(Style::new().bg(p.cursor).bold()) } else { line });
+        lines.push(if selected {
+            line.style(Style::new().bg(p.cursor).bold())
+        } else {
+            line
+        });
     }
 
     let height = (lines.len() as u16 + 2).min(area.height);
@@ -480,7 +635,10 @@ const ASK_DOCK_RIGHT_FROM: u16 = 110;
 /// text on a grey row.
 fn dim_backdrop(frame: &mut Frame, p: &Palette) {
     let area = frame.area();
-    let style = Style::new().fg(p.muted).bg(p.bg).remove_modifier(Modifier::BOLD | Modifier::REVERSED);
+    let style = Style::new()
+        .fg(p.muted)
+        .bg(p.bg)
+        .remove_modifier(Modifier::BOLD | Modifier::REVERSED);
     frame.buffer_mut().set_style(area, style);
 }
 
@@ -489,7 +647,13 @@ fn dim_backdrop(frame: &mut Frame, p: &Palette) {
 fn render_help(frame: &mut Frame, area: Rect, app: &mut App) -> Rect {
     let p = app.palette;
     let width = 100.min(area.width.saturating_sub(4));
-    let key_width = help::SECTIONS.iter().flat_map(|s| s.entries).map(|(k, _)| k.chars().count()).max().unwrap_or(0) + 2;
+    let key_width = help::SECTIONS
+        .iter()
+        .flat_map(|s| s.entries)
+        .map(|(k, _)| k.chars().count())
+        .max()
+        .unwrap_or(0)
+        + 2;
     // Inside the border, after the key column.
     let text_width = (width as usize).saturating_sub(2 + 1 + key_width).max(10);
 
@@ -498,7 +662,10 @@ fn render_help(frame: &mut Frame, area: Rect, app: &mut App) -> Rect {
         if !lines.is_empty() {
             lines.push(Line::default());
         }
-        lines.push(Line::from(Span::styled(format!(" {}", section.title), Style::new().fg(p.magenta).bold())));
+        lines.push(Line::from(Span::styled(
+            format!(" {}", section.title),
+            Style::new().fg(p.magenta).bold(),
+        )));
         for (keys, what) in section.entries {
             for (i, text) in wrap_words(what, text_width).into_iter().enumerate() {
                 let keys = if i == 0 { *keys } else { "" };
@@ -534,7 +701,10 @@ fn render_help(frame: &mut Frame, area: Rect, app: &mut App) -> Rect {
 fn highlighted(segments: Vec<Segment>, app: &App) -> Vec<Span<'static>> {
     let p = app.palette;
     let Some(query) = app.highlighted_search() else {
-        return segments.into_iter().map(|(style, text)| Span::styled(text, style)).collect();
+        return segments
+            .into_iter()
+            .map(|(style, text)| Span::styled(text, style))
+            .collect();
     };
     let text: String = segments.iter().map(|(_, t)| t.as_str()).collect();
     let matches = find_matches(&text, query);
@@ -548,7 +718,10 @@ fn highlighted(segments: Vec<Segment>, app: &App) -> Vec<Span<'static>> {
             if from > last {
                 spans.push(Span::styled(text[last..from].to_string(), style));
             }
-            spans.push(Span::styled(text[from..to].to_string(), style.bg(p.yellow).fg(p.on_accent)));
+            spans.push(Span::styled(
+                text[from..to].to_string(),
+                style.bg(p.yellow).fg(p.on_accent),
+            ));
             last = to;
         }
         if last < end {
@@ -562,7 +735,11 @@ fn highlighted(segments: Vec<Segment>, app: &App) -> Vec<Span<'static>> {
 fn render_title(frame: &mut Frame, area: Rect, app: &App) {
     let p = app.palette;
     let files = app.diff.files.len();
-    let left = format!(" rrrev ─ {} ─ {files} file{}", app.title, if files == 1 { "" } else { "s" });
+    let left = format!(
+        " rrrev ─ {} ─ {files} file{}",
+        app.title,
+        if files == 1 { "" } else { "s" }
+    );
     let progress = app.progress();
     let done = if progress.is_complete() { " ✓" } else { "" };
     let comments = match app.review.comments().len() {
@@ -571,7 +748,11 @@ fn render_title(frame: &mut Frame, area: Rect, app: &App) {
         n => format!("{n} comments · "),
     };
     let organizing = match app.organizing {
-        Some(job) => format!("{} organizing… {}s · ", spinner(job.started), job.started.elapsed().as_secs()),
+        Some(job) => format!(
+            "{} organizing… {}s · ",
+            spinner(job.started),
+            job.started.elapsed().as_secs()
+        ),
         None => String::new(),
     };
     // The panel shows its own spinner; this one is for when it's hidden.
@@ -591,7 +772,11 @@ fn render_title(frame: &mut Frame, area: Rect, app: &App) {
         left
     };
     let pad = (area.width as usize).saturating_sub(left.chars().count() + right.chars().count());
-    let right_style = if progress.is_complete() { Style::new().fg(p.green) } else { Style::new() };
+    let right_style = if progress.is_complete() {
+        Style::new().fg(p.green)
+    } else {
+        Style::new()
+    };
     let line = Line::from(vec![
         Span::raw(left),
         Span::raw(" ".repeat(pad)),
@@ -630,13 +815,23 @@ fn status_style(status: FileStatus, p: &Palette) -> Style {
 
 fn centered(area: Rect, width: u16, height: u16) -> Rect {
     let (width, height) = (width.min(area.width), height.min(area.height));
-    Rect { x: area.x + (area.width - width) / 2, y: area.y + (area.height - height) / 2, width, height }
+    Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + (area.height - height) / 2,
+        width,
+        height,
+    }
 }
 
 /// The file list or the plan, docked at the left of `area` or as a pop-up
 /// centred over it. Returns where it was drawn, and where each entry shown
 /// (by file or group index) went.
-fn render_sidebar(frame: &mut Frame, area: Rect, app: &App, popup: bool) -> (Rect, Vec<(usize, Rect)>) {
+fn render_sidebar(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    popup: bool,
+) -> (Rect, Vec<(usize, Rect)>) {
     match app.view {
         View::Files => render_files_sidebar(frame, area, app, popup),
         View::Plan => render_plan_sidebar(frame, area, app, popup),
@@ -646,20 +841,51 @@ fn render_sidebar(frame: &mut Frame, area: Rect, app: &App, popup: bool) -> (Rec
 
 /// Draws the sidebar's frame, sized for `entries` when it's a pop-up, and
 /// returns the frame's area and the area inside it.
-fn sidebar_frame(frame: &mut Frame, area: Rect, app: &App, title: &str, entries: usize, popup: bool) -> (Rect, Rect) {
+fn sidebar_frame(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    title: &str,
+    entries: usize,
+    popup: bool,
+) -> (Rect, Rect) {
     let p = app.palette;
     let focused = app.focus == Focus::Sidebar;
-    let border_style = if focused { Style::new().fg(p.cyan) } else { Style::new().dim() };
-    let title = Span::styled(format!(" {title} "), if focused { Style::new().bold() } else { Style::new().dim() });
+    let border_style = if focused {
+        Style::new().fg(p.cyan)
+    } else {
+        Style::new().dim()
+    };
+    let title = Span::styled(
+        format!(" {title} "),
+        if focused {
+            Style::new().bold()
+        } else {
+            Style::new().dim()
+        },
+    );
     let (area, block) = if popup {
         let height = (entries as u16 + 2).clamp(3, area.height.saturating_sub(2));
         let rect = centered(area, 72.min(area.width.saturating_sub(4)), height);
         clear(frame, rect, &app.palette);
         let hint = Line::from(" j/k move · Enter / Esc close ").dim();
         let border = Style::new().fg(p.cyan).bold();
-        (rect, Block::bordered().border_type(BorderType::Thick).border_style(border).title(title).title_bottom(hint))
+        (
+            rect,
+            Block::bordered()
+                .border_type(BorderType::Thick)
+                .border_style(border)
+                .title(title)
+                .title_bottom(hint),
+        )
     } else {
-        (area, Block::new().borders(Borders::RIGHT).border_style(border_style).title(title))
+        (
+            area,
+            Block::new()
+                .borders(Borders::RIGHT)
+                .border_style(border_style)
+                .title(title),
+        )
     };
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -667,13 +893,25 @@ fn sidebar_frame(frame: &mut Frame, area: Rect, app: &App, title: &str, entries:
 }
 
 /// Renders one sidebar entry, highlighted when selected, and returns where.
-fn sidebar_row(frame: &mut Frame, p: &Palette, inner: Rect, offset: usize, line: Line, selected: bool, focused: bool) -> Rect {
+fn sidebar_row(
+    frame: &mut Frame,
+    p: &Palette,
+    inner: Rect,
+    offset: usize,
+    line: Line,
+    selected: bool,
+    focused: bool,
+) -> Rect {
     let mut paragraph = Paragraph::new(line);
     if selected {
         let bg = if focused { p.cursor } else { p.bg };
         paragraph = paragraph.style(Style::new().bg(bg).add_modifier(Modifier::BOLD));
     }
-    let row_area = Rect { y: inner.y + offset as u16, height: 1, ..inner };
+    let row_area = Rect {
+        y: inner.y + offset as u16,
+        height: 1,
+        ..inner
+    };
     frame.render_widget(paragraph, row_area);
     row_area
 }
@@ -684,13 +922,25 @@ fn sidebar_start(selected: Option<usize>, height: usize) -> usize {
     selected.map_or(0, |s| (s + 1).saturating_sub(height))
 }
 
-fn render_plan_sidebar(frame: &mut Frame, area: Rect, app: &App, popup: bool) -> (Rect, Vec<(usize, Rect)>) {
+fn render_plan_sidebar(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    popup: bool,
+) -> (Rect, Vec<(usize, Rect)>) {
     let (outer, inner) = sidebar_frame(frame, area, app, "Plan", app.plan.len(), popup);
     let focused = app.focus == Focus::Sidebar;
     let height = inner.height as usize;
     let first = sidebar_start(Some(app.page), height);
     let mut entries = Vec::new();
-    for (offset, (idx, group)) in app.plan.iter().enumerate().skip(first).take(height).enumerate() {
+    for (offset, (idx, group)) in app
+        .plan
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(height)
+        .enumerate()
+    {
         let progress = app.group_progress(idx);
         let count = format!(" {}/{}", progress.reviewed, progress.total);
         // Number, space, review mark, space.
@@ -707,24 +957,49 @@ fn render_plan_sidebar(frame: &mut Frame, area: Rect, app: &App, popup: bool) ->
             Span::raw(" ".repeat(pad)),
             Span::raw(count).dim(),
         ]);
-        entries.push((idx, sidebar_row(frame, &app.palette, inner, offset, line, idx == app.page, focused)));
+        entries.push((
+            idx,
+            sidebar_row(
+                frame,
+                &app.palette,
+                inner,
+                offset,
+                line,
+                idx == app.page,
+                focused,
+            ),
+        ));
     }
     (outer, entries)
 }
 
 /// The stack, a line per layer. A layer the organizer planned lists its
 /// groups under it, and those are the pages; any other layer is one itself.
-fn render_stack_sidebar(frame: &mut Frame, area: Rect, app: &App, popup: bool) -> (Rect, Vec<(usize, Rect)>) {
+fn render_stack_sidebar(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    popup: bool,
+) -> (Rect, Vec<(usize, Rect)>) {
     enum Item {
         /// The layer's line, and the page it is when it isn't planned.
-        Layer { layer: usize, page: Option<usize> },
-        Group { page: usize, index: usize },
+        Layer {
+            layer: usize,
+            page: Option<usize>,
+        },
+        Group {
+            page: usize,
+            index: usize,
+        },
     }
     let mut items = Vec::new();
     for (page, p) in app.stack.iter().enumerate() {
         let Some(place) = p.place else { continue };
         if place.group.is_none_or(|(index, _)| index == 0) {
-            items.push(Item::Layer { layer: place.layer, page: place.group.is_none().then_some(page) });
+            items.push(Item::Layer {
+                layer: place.layer,
+                page: place.group.is_none().then_some(page),
+            });
         }
         if let Some((index, _)) = place.group {
             items.push(Item::Group { page, index });
@@ -737,19 +1012,40 @@ fn render_stack_sidebar(frame: &mut Frame, area: Rect, app: &App, popup: bool) -
         Item::Layer { page, .. } => page,
         Item::Group { page, .. } => Some(page),
     };
-    let selected = items.iter().position(|item| page_of(item) == Some(app.page));
+    let selected = items
+        .iter()
+        .position(|item| page_of(item) == Some(app.page));
     let current_layer = app.current_layer();
     let width = inner.width as usize;
     let mut entries = Vec::new();
-    for (offset, item) in items.iter().skip(sidebar_start(selected, height)).take(height).enumerate() {
+    for (offset, item) in items
+        .iter()
+        .skip(sidebar_start(selected, height))
+        .take(height)
+        .enumerate()
+    {
         let (indent, number, progress, title, style) = match *item {
             Item::Layer { layer, .. } => {
-                let style = if current_layer == Some(layer) { Style::new().bold() } else { Style::new() };
-                (0, layer + 1, app.layer_progress(layer), app.diff.sections[layer].title.as_str(), style)
+                let style = if current_layer == Some(layer) {
+                    Style::new().bold()
+                } else {
+                    Style::new()
+                };
+                (
+                    0,
+                    layer + 1,
+                    app.layer_progress(layer),
+                    app.diff.sections[layer].title.as_str(),
+                    style,
+                )
             }
-            Item::Group { page, index } => {
-                (3, index + 1, app.group_progress(page), app.stack[page].title.as_str(), Style::new())
-            }
+            Item::Group { page, index } => (
+                3,
+                index + 1,
+                app.group_progress(page),
+                app.stack[page].title.as_str(),
+                Style::new(),
+            ),
         };
         let count = format!(" {}/{}", progress.reviewed, progress.total);
         let number = format!("{}{number:>2}", " ".repeat(indent));
@@ -766,7 +1062,15 @@ fn render_stack_sidebar(frame: &mut Frame, area: Rect, app: &App, popup: bool) -
             Span::raw(count).dim(),
         ]);
         let page = page_of(item);
-        let rect = sidebar_row(frame, &app.palette, inner, offset, line, page == Some(app.page), focused);
+        let rect = sidebar_row(
+            frame,
+            &app.palette,
+            inner,
+            offset,
+            line,
+            page == Some(app.page),
+            focused,
+        );
         if let Some(page) = page {
             entries.push((page, rect));
         }
@@ -779,10 +1083,19 @@ fn truncate_right(text: &str, width: usize) -> String {
         return text.to_string();
     }
     let head: String = text.chars().take(width.saturating_sub(1)).collect();
-    if width == 0 { head } else { format!("{head}…") }
+    if width == 0 {
+        head
+    } else {
+        format!("{head}…")
+    }
 }
 
-fn render_files_sidebar(frame: &mut Frame, area: Rect, app: &App, popup: bool) -> (Rect, Vec<(usize, Rect)>) {
+fn render_files_sidebar(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    popup: bool,
+) -> (Rect, Vec<(usize, Rect)>) {
     let p = app.palette;
     let (outer, inner) = sidebar_frame(frame, area, app, "Files", app.diff.files.len(), popup);
     let focused = app.focus == Focus::Sidebar;
@@ -791,7 +1104,15 @@ fn render_files_sidebar(frame: &mut Frame, area: Rect, app: &App, popup: bool) -
     let first = sidebar_start(selected, height);
 
     let mut entries = Vec::new();
-    for (offset, (idx, file)) in app.diff.files.iter().enumerate().skip(first).take(height).enumerate() {
+    for (offset, (idx, file)) in app
+        .diff
+        .files
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(height)
+        .enumerate()
+    {
         let (added, removed) = file.stats();
         let stats = format!(" +{added} -{removed}");
         let fold = if app.collapsed[idx] { "▸" } else { " " };
@@ -819,7 +1140,18 @@ fn render_files_sidebar(frame: &mut Frame, area: Rect, app: &App, popup: bool) -
             Span::styled(format!(" +{added}"), Style::new().fg(p.green)),
             Span::styled(format!(" -{removed}"), Style::new().fg(p.red)),
         ]);
-        entries.push((idx, sidebar_row(frame, &app.palette, inner, offset, line, Some(idx) == selected, focused)));
+        entries.push((
+            idx,
+            sidebar_row(
+                frame,
+                &app.palette,
+                inner,
+                offset,
+                line,
+                Some(idx) == selected,
+                focused,
+            ),
+        ));
     }
     (outer, entries)
 }
@@ -838,7 +1170,13 @@ fn truncate_left(path: &str, width: usize) -> String {
 }
 
 /// Draws the rows from `scroll` on, and returns where each one went.
-fn render_body(frame: &mut Frame, area: Rect, app: &App, highlighter: &mut Highlighter, scroll: usize) -> Vec<(Row, Rect)> {
+fn render_body(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    highlighter: &mut Highlighter,
+    scroll: usize,
+) -> Vec<(Row, Rect)> {
     let p = app.palette;
     let mut drawn = Vec::new();
     if app.rows.is_empty() {
@@ -856,11 +1194,17 @@ fn render_body(frame: &mut Frame, area: Rect, app: &App, highlighter: &mut Highl
             .then(|| app.cursor_bytes())
             .flatten();
         let lines = row_lines(app, *row, highlighter, at);
-        let row_area = Rect { y, height: (lines.len() as u16).min(area.bottom() - y), ..area };
+        let row_area = Rect {
+            y,
+            height: (lines.len() as u16).min(area.bottom() - y),
+            ..area
+        };
         y += row_area.height;
         let mut paragraph = Paragraph::new(lines);
         let selected = match (*row, selection) {
-            (Row::Line { file, hunk, line }, Some((f, h, start, end))) => (file, hunk) == (f, h) && (start..=end).contains(&line),
+            (Row::Line { file, hunk, line }, Some((f, h, start, end))) => {
+                (file, hunk) == (f, h) && (start..=end).contains(&line)
+            }
             _ => false,
         };
         if selected {
@@ -877,18 +1221,28 @@ fn render_body(frame: &mut Frame, area: Rect, app: &App, highlighter: &mut Highl
 /// Whether a comment on a live hunk covers this line.
 fn is_commented(app: &App, file: usize, hunk: usize, line: usize) -> bool {
     let id = &app.hunk(file, hunk).id;
-    app.review.comments().iter().any(|c| c.hunk == *id && (c.start..=c.end).contains(&line))
+    app.review
+        .comments()
+        .iter()
+        .any(|c| c.hunk == *id && (c.start..=c.end).contains(&line))
 }
 
 /// A row as drawn: one line, or several for a diff line or comment that
 /// wraps (as many as `App::row_height` counts).
-fn row_lines(app: &App, row: Row, highlighter: &mut Highlighter, at: Option<Range<usize>>) -> Vec<Line<'static>> {
+fn row_lines(
+    app: &App,
+    row: Row,
+    highlighter: &mut Highlighter,
+    at: Option<Range<usize>>,
+) -> Vec<Line<'static>> {
     match row {
         // Reviewed hunks fade out so what's left to read stands out.
-        Row::Line { file, hunk, line } if app.is_reviewed(file, hunk) => diff_line(app, highlighter, file, hunk, line, at)
-            .into_iter()
-            .map(|l| l.patch_style(Style::new().dim()))
-            .collect(),
+        Row::Line { file, hunk, line } if app.is_reviewed(file, hunk) => {
+            diff_line(app, highlighter, file, hunk, line, at)
+                .into_iter()
+                .map(|l| l.patch_style(Style::new().dim()))
+                .collect()
+        }
         Row::Line { file, hunk, line } => diff_line(app, highlighter, file, hunk, line, at),
         Row::Context { file, hunk, no } => context_line(app, highlighter, file, hunk, no, at),
         Row::Comment { id, line, .. } => comment_line(app, id, line),
@@ -903,17 +1257,37 @@ fn row_line(app: &App, row: Row) -> Line<'static> {
     match row {
         Row::Group { group, line } => {
             let header = app.group_header(group);
-            let Some((is_title, text)) = header.get(line).cloned() else { return Line::default() };
-            let style = if is_title { Style::new().fg(p.magenta).bold() } else { Style::new().italic() };
-            let mut spans = vec![Span::styled("▌ ", Style::new().fg(p.magenta)), Span::styled(text, style)];
+            let Some((is_title, text)) = header.get(line).cloned() else {
+                return Line::default();
+            };
+            let style = if is_title {
+                Style::new().fg(p.magenta).bold()
+            } else {
+                Style::new().italic()
+            };
+            let mut spans = vec![
+                Span::styled("▌ ", Style::new().fg(p.magenta)),
+                Span::styled(text, style),
+            ];
             // How far this step is, after its title.
             if line == 0 {
                 let progress = app.group_progress(group);
                 spans.push(if progress.is_complete() {
-                    let next = if group + 1 < app.pages().len() { " · ]f next step" } else { "" };
-                    Span::styled(format!("  ✓ {0} of {0} · all good{next}", progress.total), Style::new().fg(p.green))
+                    let next = if group + 1 < app.pages().len() {
+                        " · ]f next step"
+                    } else {
+                        ""
+                    };
+                    Span::styled(
+                        format!("  ✓ {0} of {0} · all good{next}", progress.total),
+                        Style::new().fg(p.green),
+                    )
                 } else {
-                    Span::raw(format!("  {} of {} hunks", progress.reviewed, progress.total)).dim()
+                    Span::raw(format!(
+                        "  {} of {} hunks",
+                        progress.reviewed, progress.total
+                    ))
+                    .dim()
                 });
             }
             Line::from(spans)
@@ -923,9 +1297,15 @@ fn row_line(app: &App, row: Row) -> Line<'static> {
             let collapsed = app.collapsed[file];
             let mut spans = vec![
                 Span::raw(if collapsed { "▸" } else { "▾" }),
-                Span::styled(format!(" {} ", f.status.label()), status_style(f.status, &app.palette).reversed()),
+                Span::styled(
+                    format!(" {} ", f.status.label()),
+                    status_style(f.status, &app.palette).reversed(),
+                ),
                 Span::raw(" "),
-                Span::styled(f.display_path(), Style::new().bold().add_modifier(Modifier::UNDERLINED)),
+                Span::styled(
+                    f.display_path(),
+                    Style::new().bold().add_modifier(Modifier::UNDERLINED),
+                ),
                 Span::raw(" "),
                 progress_mark(app.file_progress(file), &app.palette),
             ];
@@ -938,7 +1318,9 @@ fn row_line(app: &App, row: Row) -> Line<'static> {
             if f.is_binary {
                 spans.push(Span::raw(" (binary)").dim());
             } else if collapsed {
-                spans.push(Span::raw(format!(" ({} lines folded · za to unfold)", f.line_count())).dim());
+                spans.push(
+                    Span::raw(format!(" ({} lines folded · za to unfold)", f.line_count())).dim(),
+                );
             }
             Line::from(spans)
         }
@@ -952,7 +1334,11 @@ fn row_line(app: &App, row: Row) -> Line<'static> {
             };
             let reviewed = app.is_reviewed(file, hunk);
             let mut spans = vec![
-                if reviewed { Span::styled("✓ ", Style::new().fg(p.green).bold()) } else { Span::raw("  ") },
+                if reviewed {
+                    Span::styled("✓ ", Style::new().fg(p.green).bold())
+                } else {
+                    Span::raw("  ")
+                },
                 Span::styled(ranges.to_string(), Style::new().fg(p.cyan)),
             ];
             if let Some(scope) = app.diff.hunk_scope(file, hunk) {
@@ -965,12 +1351,24 @@ fn row_line(app: &App, row: Row) -> Line<'static> {
                 let style = Style::new().fg(p.magenta).italic();
                 if app.is_hunk_folded(file, hunk) {
                     let h = app.hunk(file, hunk);
-                    let count = |kind| h.lines.iter().filter(|l| l.kind == kind && !l.content.trim().is_empty()).count();
+                    let count = |kind| {
+                        h.lines
+                            .iter()
+                            .filter(|l| l.kind == kind && !l.content.trim().is_empty())
+                            .count()
+                    };
                     let (added, removed) = (count(LineKind::Added), count(LineKind::Removed));
-                    spans.push(Span::styled(format!("  ▸ plumbing +{added} −{removed}"), style));
+                    spans.push(Span::styled(
+                        format!("  ▸ plumbing +{added} −{removed}"),
+                        style,
+                    ));
                     spans.push(Span::raw(" · za to unfold").dim());
                     let line = Line::from(spans);
-                    return if reviewed { line.patch_style(Style::new().dim()) } else { line };
+                    return if reviewed {
+                        line.patch_style(Style::new().dim())
+                    } else {
+                        line
+                    };
                 }
                 spans.push(Span::styled("  ▾ plumbing", style));
             }
@@ -997,20 +1395,36 @@ fn row_line(app: &App, row: Row) -> Line<'static> {
                 spans.push(Span::raw(format!("  ⋯ {}", hidden.join(" · "))).dim());
             }
             let line = Line::from(spans);
-            if reviewed { line.patch_style(Style::new().dim()) } else { line }
+            if reviewed {
+                line.patch_style(Style::new().dim())
+            } else {
+                line
+            }
         }
         Row::Plumbing { file, hunk, start } => {
             let h = app.hunk(file, hunk);
             let end = app.run_at(file, hunk, start).map_or(start + 1, |r| r.end);
             let lines = &h.lines[start..end.min(h.lines.len())];
-            let count = |kind| lines.iter().filter(|l| l.kind == kind && !l.content.trim().is_empty()).count();
+            let count = |kind| {
+                lines
+                    .iter()
+                    .filter(|l| l.kind == kind && !l.content.trim().is_empty())
+                    .count()
+            };
             let (added, removed) = (count(LineKind::Added), count(LineKind::Removed));
             let line = Line::from(vec![
                 Span::raw(" ".repeat(app.code_column().saturating_sub(2))),
-                Span::styled(format!("▸ plumbing +{added} −{removed}"), Style::new().fg(p.magenta).italic()),
+                Span::styled(
+                    format!("▸ plumbing +{added} −{removed}"),
+                    Style::new().fg(p.magenta).italic(),
+                ),
                 Span::raw(format!(" · {} lines folded · za to unfold", lines.len())).dim(),
             ]);
-            if app.is_reviewed(file, hunk) { line.patch_style(Style::new().dim()) } else { line }
+            if app.is_reviewed(file, hunk) {
+                line.patch_style(Style::new().dim())
+            } else {
+                line
+            }
         }
         Row::Line { .. } | Row::Context { .. } | Row::Comment { .. } | Row::Note { .. } => {
             unreachable!("drawn by row_lines")
@@ -1025,7 +1439,12 @@ fn plumbing_badge(p: &Palette) -> Span<'static> {
 
 /// Puts `gutter` before the first line of `text`, wrapped to the room left
 /// after it, and `hang` (as wide) before the rest.
-fn hanging(app: &App, gutter: Vec<Span<'static>>, hang: Vec<Span<'static>>, text: Vec<Span<'static>>) -> Vec<Line<'static>> {
+fn hanging(
+    app: &App,
+    gutter: Vec<Span<'static>>,
+    hang: Vec<Span<'static>>,
+    text: Vec<Span<'static>>,
+) -> Vec<Line<'static>> {
     let column = gutter.iter().map(|s| s.content.chars().count()).sum();
     wrap_spans(text, app.text_room(column))
         .into_iter()
@@ -1054,10 +1473,16 @@ fn wrap_spans(spans: Vec<Span<'static>>, room: usize) -> Vec<Vec<Span<'static>>>
                 lines.push(Vec::new());
                 used = 0;
             }
-            let take = rest.char_indices().nth(room - used).map_or(rest.len(), |(i, _)| i);
+            let take = rest
+                .char_indices()
+                .nth(room - used)
+                .map_or(rest.len(), |(i, _)| i);
             let (head, tail) = rest.split_at(take);
             used += head.chars().count();
-            lines.last_mut().expect("lines is never empty").push(Span::styled(head.to_string(), span.style));
+            lines
+                .last_mut()
+                .expect("lines is never empty")
+                .push(Span::styled(head.to_string(), span.style));
             rest = tail;
         }
     }
@@ -1066,12 +1491,17 @@ fn wrap_spans(spans: Vec<Span<'static>>, room: usize) -> Vec<Vec<Span<'static>>>
 
 fn comment_line(app: &App, id: u64, line: usize) -> Vec<Line<'static>> {
     let p = app.palette;
-    let Some(comment) = app.review.comment(id) else { return vec![Line::default()] };
+    let Some(comment) = app.review.comment(id) else {
+        return vec![Line::default()];
+    };
     let text = comment.text.lines().nth(line).unwrap_or("").to_string();
     // The `┃` lines up with the change bar, so the text starts past the code's column.
     let indent = Span::raw(" ".repeat(app.code_column() - 2));
     let lead = if line == 0 { "┃ ✎ " } else { "┃   " };
-    let gutter = vec![indent.clone(), Span::styled(lead, Style::new().fg(p.yellow))];
+    let gutter = vec![
+        indent.clone(),
+        Span::styled(lead, Style::new().fg(p.yellow)),
+    ];
     let hang = vec![indent, Span::styled("┃   ", Style::new().fg(p.yellow))];
     let mut spans = Vec::new();
     if line == 0 {
@@ -1080,7 +1510,10 @@ fn comment_line(app: &App, id: u64, line: usize) -> Vec<Line<'static>> {
     spans.extend(highlighted(vec![(Style::new().fg(p.yellow), text)], app));
     let lines = hanging(app, gutter, hang, spans);
     if app.is_outdated(comment) {
-        lines.into_iter().map(|l| l.patch_style(Style::new().dim())).collect()
+        lines
+            .into_iter()
+            .map(|l| l.patch_style(Style::new().dim()))
+            .collect()
     } else {
         lines
     }
@@ -1117,7 +1550,9 @@ fn diff_line(
     let bar = match change {
         Some(color) => Span::styled("▌", Style::new().fg(color)),
         // With removals hidden, a thin mark where lines went with nothing in their place.
-        None if !app.show_removals && app.removed_above(file, hunk, line) => Span::styled("▔", Style::new().fg(p.red)),
+        None if !app.show_removals && app.removed_above(file, hunk, line) => {
+            Span::styled("▔", Style::new().fg(p.red))
+        }
         None => Span::raw(" "),
     };
     let text_style = match l.kind {
@@ -1134,8 +1569,17 @@ fn diff_line(
         Span::raw(" "),
     ];
     // Wrapped code continues under itself, with the marker and bar running down.
-    let hang_bar = if change.is_some() { bar.clone() } else { Span::raw(" ") };
-    let hang = vec![marker, Span::raw(" ".repeat(2 * w + 2)), hang_bar, Span::raw(" ")];
+    let hang_bar = if change.is_some() {
+        bar.clone()
+    } else {
+        Span::raw(" ")
+    };
+    let hang = vec![
+        marker,
+        Span::raw(" ".repeat(2 * w + 2)),
+        hang_bar,
+        Span::raw(" "),
+    ];
     let segments = match highlighter.line(&app.diff, file, hunk, line) {
         [] => vec![(text_style, l.content.clone())],
         segments => segments.to_vec(),
@@ -1144,7 +1588,10 @@ fn diff_line(
     let changes = app.diff.word_changes(file, hunk, line);
     let segments = emphasize(segments, changes, highlighter.emphasis(l.kind));
     let segments = with_cursor(segments, at);
-    let segments = segments.into_iter().map(|(style, text)| (style, text.replace('\t', "    "))).collect();
+    let segments = segments
+        .into_iter()
+        .map(|(style, text)| (style, text.replace('\t', "    ")))
+        .collect();
     hanging(app, gutter, hang, highlighted(segments, app))
 }
 
@@ -1169,7 +1616,14 @@ fn emphasize(segments: Vec<Segment>, ranges: &[Range<usize>], style: Style) -> V
         for to in cuts.into_iter().chain([end]) {
             let inside = ranges.iter().any(|r| r.start <= from && to <= r.end);
             let piece = text[from - start..to - start].to_string();
-            out.push((if inside { seg_style.patch(style) } else { seg_style }, piece));
+            out.push((
+                if inside {
+                    seg_style.patch(style)
+                } else {
+                    seg_style
+                },
+                piece,
+            ));
             from = to;
         }
         start = end;
@@ -1188,7 +1642,9 @@ fn context_line(
     at: Option<Range<usize>>,
 ) -> Vec<Line<'static>> {
     let p = app.palette;
-    let Some((_, side)) = app.diff.context_source(file) else { return vec![Line::default()] };
+    let Some((_, side)) = app.diff.context_source(file) else {
+        return vec![Line::default()];
+    };
     let h = app.hunk(file, hunk);
     let (old_no, new_no) = context_numbers(h, side, no, is_above(h, side, no));
     let w = app.gutter_width;
@@ -1210,7 +1666,10 @@ fn context_line(
         segments => segments.to_vec(),
     };
     let segments = with_cursor(segments, at);
-    let segments = segments.into_iter().map(|(style, text)| (style, text.replace('\t', "    "))).collect();
+    let segments = segments
+        .into_iter()
+        .map(|(style, text)| (style, text.replace('\t', "    ")))
+        .collect();
     hanging(app, gutter, hang, highlighted(segments, app))
 }
 
@@ -1229,13 +1688,18 @@ fn with_cursor(mut segments: Vec<Segment>, at: Option<Range<usize>>) -> Vec<Segm
 /// An agent note, set out like a comment but in the AI's colour.
 fn note_line(app: &App, note: usize) -> Vec<Line<'static>> {
     let p = app.palette;
-    let Some(n) = app.notes.get(note) else { return vec![Line::default()] };
+    let Some(n) = app.notes.get(note) else {
+        return vec![Line::default()];
+    };
     let indent = Span::raw(" ".repeat(app.code_column() - 2));
     let color = Style::new().fg(p.magenta);
     let gutter = vec![indent.clone(), Span::styled("┃ ◆ ", color)];
     let hang = vec![indent, Span::styled("┃   ", color)];
     let mut spans = vec![Span::styled(crate::app::NOTE_LABEL, color.bold())];
-    spans.extend(highlighted(vec![(Style::new().italic(), n.text.clone())], app));
+    spans.extend(highlighted(
+        vec![(Style::new().italic(), n.text.clone())],
+        app,
+    ));
     hanging(app, gutter, hang, spans)
 }
 
@@ -1267,14 +1731,24 @@ fn render_file_crumbs(frame: &mut Frame, area: Rect, app: &App, view: &FileView)
 /// A whole file, from its scroll line down: numbers and the diff's marks in
 /// the gutter, the code unwrapped and scrolled sideways to keep the cursor in
 /// sight.
-fn render_file_view(frame: &mut Frame, area: Rect, app: &App, view: &FileView, highlighter: &mut Highlighter) {
+fn render_file_view(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    view: &FileView,
+    highlighter: &mut Highlighter,
+) {
     let p = app.palette;
     let width = view.lines.len().to_string().len();
     let gutter_width = (width + 4) as u16;
     let [gutter_area, text_area] =
         Layout::horizontal([Constraint::Length(gutter_width), Constraint::Min(0)]).areas(area);
     let old = view.side == Side::Old;
-    let (own, other) = if old { (p.red, p.green) } else { (p.green, p.red) };
+    let (own, other) = if old {
+        (p.red, p.green)
+    } else {
+        (p.green, p.red)
+    };
     let cursor_at = app.file_view_cursor();
     let mut gutter = Vec::new();
     let mut text = Vec::new();
@@ -1302,7 +1776,10 @@ fn render_file_view(frame: &mut Frame, area: Rect, app: &App, view: &FileView, h
         };
         let here = i == view.caret.line;
         let segments = with_cursor(segments, if here { cursor_at.clone() } else { None });
-        let segments = segments.into_iter().map(|(style, text)| (style, text.replace('\t', "    "))).collect();
+        let segments = segments
+            .into_iter()
+            .map(|(style, text)| (style, text.replace('\t', "    ")))
+            .collect();
         let mut line = Line::from(highlighted(segments, app));
         if here {
             line = line.style(Style::new().bg(p.cursor));
@@ -1313,9 +1790,16 @@ fn render_file_view(frame: &mut Frame, area: Rect, app: &App, view: &FileView, h
     let room = text_area.width as usize;
     let before: usize = view.lines.get(view.caret.line).map_or(0, |line| {
         let column = view.cursor_column();
-        line.chars().take(column).map(|c| if c == '\t' { 4 } else { 1 }).sum()
+        line.chars()
+            .take(column)
+            .map(|c| if c == '\t' { 4 } else { 1 })
+            .sum()
     });
-    let left = if room > 0 && before + 1 > room.saturating_sub(4) { before + 5 - room } else { 0 };
+    let left = if room > 0 && before + 1 > room.saturating_sub(4) {
+        before + 5 - room
+    } else {
+        0
+    };
     frame.render_widget(Paragraph::new(gutter), gutter_area);
     frame.render_widget(Paragraph::new(text).scroll((0, left as u16)), text_area);
 }
@@ -1327,34 +1811,64 @@ fn render_breadcrumbs(frame: &mut Frame, area: Rect, app: &App) {
     let Some(row) = app.current_row() else { return };
     let Some(file) = row.file() else {
         let title = app.page_label(app.page);
-        frame.render_widget(Paragraph::new(Line::from(Span::raw(format!(" {title}")).dim())), area);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::raw(format!(" {title}")).dim())),
+            area,
+        );
         return;
     };
     let scopes: Vec<String> = match row {
-        Row::Line { file, hunk, line } | Row::Plumbing { file, hunk, start: line } => {
-            app.diff.scopes(file, hunk, line).into_iter().map(|s| s.label).collect()
-        }
+        Row::Line { file, hunk, line }
+        | Row::Plumbing {
+            file,
+            hunk,
+            start: line,
+        } => app
+            .diff
+            .scopes(file, hunk, line)
+            .into_iter()
+            .map(|s| s.label)
+            .collect(),
         Row::Hunk { file, hunk } | Row::Note { file, hunk, .. } => {
             let line = match row {
                 Row::Note { note, .. } => app.notes.get(note).map_or(0, |n| n.line),
-                _ => app.hunk(file, hunk).lines.iter().position(|l| l.kind != LineKind::Context).unwrap_or(0),
+                _ => app
+                    .hunk(file, hunk)
+                    .lines
+                    .iter()
+                    .position(|l| l.kind != LineKind::Context)
+                    .unwrap_or(0),
             };
             if app.hunk(file, hunk).lines.is_empty() {
                 Vec::new()
             } else {
-                app.diff.scopes(file, hunk, line).into_iter().map(|s| s.label).collect()
+                app.diff
+                    .scopes(file, hunk, line)
+                    .into_iter()
+                    .map(|s| s.label)
+                    .collect()
             }
         }
-        Row::Context { file, no, .. } => app.diff.context_source(file).map_or_else(Vec::new, |(_, side)| {
-            app.diff.scopes_at(file, side, no).into_iter().map(|s| s.label).collect()
-        }),
+        Row::Context { file, no, .. } => {
+            app.diff
+                .context_source(file)
+                .map_or_else(Vec::new, |(_, side)| {
+                    app.diff
+                        .scopes_at(file, side, no)
+                        .into_iter()
+                        .map(|s| s.label)
+                        .collect()
+                })
+        }
         Row::Group { .. } | Row::File { .. } | Row::Comment { .. } => Vec::new(),
     };
     let path = app.diff.files[file].path().to_string();
     let width = area.width as usize;
     // Outer scopes give way first when it doesn't fit, then the path's head.
     let mut scopes = scopes;
-    let len = |scopes: &[String]| path.chars().count() + 2 + scopes.iter().map(|s| s.chars().count() + 3).sum::<usize>();
+    let len = |scopes: &[String]| {
+        path.chars().count() + 2 + scopes.iter().map(|s| s.chars().count() + 3).sum::<usize>()
+    };
     while scopes.len() > 1 && len(&scopes) > width {
         if scopes[0] == "…" {
             scopes.remove(1);
@@ -1364,11 +1878,21 @@ fn render_breadcrumbs(frame: &mut Frame, area: Rect, app: &App) {
     }
     let separator = || Span::styled(" › ", Style::new().fg(p.muted));
     let room = width.saturating_sub(len(&scopes) - path.chars().count());
-    let mut spans = vec![Span::raw(" "), Span::raw(truncate_left(&path, room.max(8))).dim()];
+    let mut spans = vec![
+        Span::raw(" "),
+        Span::raw(truncate_left(&path, room.max(8))).dim(),
+    ];
     for (i, scope) in scopes.iter().enumerate() {
         spans.push(separator());
         let innermost = i + 1 == scopes.len();
-        spans.push(Span::styled(scope.clone(), if innermost { Style::new().bold() } else { Style::new() }));
+        spans.push(Span::styled(
+            scope.clone(),
+            if innermost {
+                Style::new().bold()
+            } else {
+                Style::new()
+            },
+        ));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
@@ -1376,37 +1900,77 @@ fn render_breadcrumbs(frame: &mut Frame, area: Rect, app: &App) {
 /// Questions about the code and their answers, with the question being
 /// typed at the bottom. The latest exchange shows from its question down,
 /// and `C-e` / `C-y` scroll from there.
-fn render_ask_panel(frame: &mut Frame, area: Rect, app: &mut App, highlighter: &mut Highlighter, docked_right: bool) {
+fn render_ask_panel(
+    frame: &mut Frame,
+    area: Rect,
+    app: &mut App,
+    highlighter: &mut Highlighter,
+    docked_right: bool,
+) {
     let p = app.palette;
     let typing = matches!(app.mode, Mode::Ask { .. });
-    let border = if typing { Style::new().fg(p.magenta) } else { Style::new().fg(p.muted) };
+    let border = if typing {
+        Style::new().fg(p.magenta)
+    } else {
+        Style::new().fg(p.muted)
+    };
     // Docked right it's set off by a line on its left; under the diff, on top.
-    let borders = if docked_right { Borders::LEFT } else { Borders::TOP };
-    let hint = if typing { " Enter ask · Alt-Enter newline · Esc cancel " } else { " a ask · C-e/C-y scroll · X clear · A/Esc hide " };
+    let borders = if docked_right {
+        Borders::LEFT
+    } else {
+        Borders::TOP
+    };
+    let hint = if typing {
+        " Enter ask · Alt-Enter newline · Esc cancel "
+    } else {
+        " a ask · C-e/C-y scroll · X clear · A/Esc hide "
+    };
     let block = Block::new()
         .borders(borders)
         .border_style(border)
-        .title(Span::styled(" Ask Claude ", Style::new().fg(p.magenta).bold()))
+        .title(Span::styled(
+            " Ask Claude ",
+            Style::new().fg(p.magenta).bold(),
+        ))
         .title(Span::raw("· reads the whole repository ").dim())
         .title_bottom(Line::from(hint).dim());
     let inner = block.inner(area);
     clear(frame, area, &app.palette);
     frame.render_widget(block, area);
-    let inner = Rect { x: inner.x + 1, width: inner.width.saturating_sub(1), ..inner };
+    let inner = Rect {
+        x: inner.x + 1,
+        width: inner.width.saturating_sub(1),
+        ..inner
+    };
     let width = inner.width as usize;
 
     // The question being typed, at the bottom.
     let mut conversation_area = inner;
     if let Mode::Ask { target, input } = &app.mode {
-        let (lines, (x, y)) = wrap_input(input.text(), input.cursor(), width.saturating_sub(2).max(1));
+        let (lines, (x, y)) =
+            wrap_input(input.text(), input.cursor(), width.saturating_sub(2).max(1));
         let shown = lines.len().clamp(1, MAX_COMMENT_BOX_LINES as usize);
         let height = (shown as u16 + 3).min(inner.height);
-        let box_area = Rect { y: inner.bottom() - height, height, ..inner };
+        let box_area = Rect {
+            y: inner.bottom() - height,
+            height,
+            ..inner
+        };
         conversation_area.height -= height;
-        let location = format!("{}{}", target.location, target.scopes.last().map_or(String::new(), |s| format!(" {s}")));
+        let location = format!(
+            "{}{}",
+            target.location,
+            target
+                .scopes
+                .last()
+                .map_or(String::new(), |s| format!(" {s}"))
+        );
         let input_block = Block::bordered()
             .border_style(Style::new().fg(p.magenta))
-            .title(Span::styled(truncate_right(&format!(" {location} "), width.saturating_sub(2)), Style::new().fg(p.cyan)));
+            .title(Span::styled(
+                truncate_right(&format!(" {location} "), width.saturating_sub(2)),
+                Style::new().fg(p.cyan),
+            ));
         let field = input_block.inner(box_area);
         frame.render_widget(input_block, box_area);
         let skip = (y + 1).saturating_sub(field.height as usize);
@@ -1427,18 +1991,34 @@ fn render_ask_panel(frame: &mut Frame, area: Rect, app: &mut App, highlighter: &
             lines.push(Line::default());
         }
         latest = lines.len();
-        lines.push(Line::from(Span::styled(truncate_right(&entry.location, width), Style::new().fg(p.cyan))));
+        lines.push(Line::from(Span::styled(
+            truncate_right(&entry.location, width),
+            Style::new().fg(p.cyan),
+        )));
         for text in wrap_words(&entry.question, width.saturating_sub(2)) {
-            lines.push(Line::from(vec![Span::styled("│ ", Style::new().fg(p.magenta)), Span::raw(text).bold()]));
+            lines.push(Line::from(vec![
+                Span::styled("│ ", Style::new().fg(p.magenta)),
+                Span::raw(text).bold(),
+            ]));
         }
         match &entry.answer {
             Answer::Pending => {
-                let elapsed = app.ask.running.map_or(0, |job| job.started.elapsed().as_secs());
-                let started = app.ask.running.map_or_else(std::time::Instant::now, |job| job.started);
-                lines.push(Line::from(format!("{} reading the code… {elapsed}s", spinner(started))).dim());
+                let elapsed = app
+                    .ask
+                    .running
+                    .map_or(0, |job| job.started.elapsed().as_secs());
+                let started = app
+                    .ask
+                    .running
+                    .map_or_else(std::time::Instant::now, |job| job.started);
+                lines.push(
+                    Line::from(format!("{} reading the code… {elapsed}s", spinner(started))).dim(),
+                );
             }
             Answer::Done(text) => {
-                lines.extend(markdown::render(text, width, &p, &mut |tag, source| highlighter.snippet(tag, source)));
+                lines.extend(markdown::render(text, width, &p, &mut |tag, source| {
+                    highlighter.snippet(tag, source)
+                }));
             }
             Answer::Failed(error) => {
                 for piece in wrap_words(&format!("error: {error}"), width) {
@@ -1449,17 +2029,27 @@ fn render_ask_panel(frame: &mut Frame, area: Rect, app: &mut App, highlighter: &
         }
     }
     if lines.is_empty() {
-        for text in wrap_words("Point at a line, a selection or a hunk and press a to ask about it.", width) {
+        for text in wrap_words(
+            "Point at a line, a selection or a hunk and press a to ask about it.",
+            width,
+        ) {
             lines.push(Line::from(text).dim());
         }
     }
     let height = conversation_area.height as usize;
     // Everything fits: show it all. Otherwise from the latest question.
-    let base = if lines.len() <= height { 0 } else { latest.min(lines.len() - height) };
+    let base = if lines.len() <= height {
+        0
+    } else {
+        latest.min(lines.len() - height)
+    };
     let max_scroll = lines.len().saturating_sub(height + base);
     app.ask.scroll = app.ask.scroll.min(max_scroll);
     let first = base + app.ask.scroll;
-    frame.render_widget(Paragraph::new(lines).scroll((first as u16, 0)), conversation_area);
+    frame.render_widget(
+        Paragraph::new(lines).scroll((first as u16, 0)),
+        conversation_area,
+    );
 }
 
 /// The review summed up, with its verdict: how much was looked at, what
@@ -1478,13 +2068,23 @@ fn render_verdict(frame: &mut Frame, area: Rect, app: &App) -> Rect {
     } else {
         format!("{to_go} of {} hunks to go", progress.total)
     };
-    let headline_style = if to_go == 0 { Style::new().fg(p.green).bold() } else { Style::new().bold() };
+    let headline_style = if to_go == 0 {
+        Style::new().fg(p.green).bold()
+    } else {
+        Style::new().bold()
+    };
     lines.push(Line::from(Span::styled(headline, headline_style)));
-    lines.push(Line::from(Span::raw(truncate_right(&app.title, inner_width)).dim()));
+    lines.push(Line::from(
+        Span::raw(truncate_right(&app.title, inner_width)).dim(),
+    ));
     lines.push(Line::default());
 
     lines.push(Line::from(Span::raw("WHAT YOU WENT THROUGH").dim().bold()));
-    lines.push(stacked_bar(stats, inner_width.saturating_sub(10), &app.palette));
+    lines.push(stacked_bar(
+        stats,
+        inner_width.saturating_sub(10),
+        &app.palette,
+    ));
     let total = stats.total().max(1);
     let row = |label: &str, note: &str, count: usize, color: Color| {
         let bar_width = inner_width.saturating_sub(34).max(4);
@@ -1509,26 +2109,51 @@ fn render_verdict(frame: &mut Frame, area: Rect, app: &App) -> Rect {
     let comments = app.review.comments().len();
     let plural = |n: usize, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
     let mut chips = vec![
-        Span::styled(format!(" {} of {} hunks good ", progress.reviewed, progress.total), Style::new().reversed()),
+        Span::styled(
+            format!(" {} of {} hunks good ", progress.reviewed, progress.total),
+            Style::new().reversed(),
+        ),
         Span::raw(" "),
-        Span::styled(format!(" {} in your review ", plural(comments, "comment")), Style::new().fg(p.yellow).reversed()),
+        Span::styled(
+            format!(" {} in your review ", plural(comments, "comment")),
+            Style::new().fg(p.yellow).reversed(),
+        ),
     ];
     if !app.notes.is_empty() {
         chips.push(Span::raw(" "));
-        chips.push(Span::styled(format!(" {} ", plural(app.notes.len(), "agent note")), Style::new().fg(p.magenta).reversed()));
+        chips.push(Span::styled(
+            format!(" {} ", plural(app.notes.len(), "agent note")),
+            Style::new().fg(p.magenta).reversed(),
+        ));
     }
     lines.push(Line::from(chips));
     lines.push(Line::default());
 
-    lines.push(Line::from(Span::raw(format!("YOUR VERDICT, WITH YOUR {}", plural(comments, "COMMENT").to_uppercase())).dim().bold()));
+    lines.push(Line::from(
+        Span::raw(format!(
+            "YOUR VERDICT, WITH YOUR {}",
+            plural(comments, "COMMENT").to_uppercase()
+        ))
+        .dim()
+        .bold(),
+    ));
     let verdict = app.review.verdict();
     let message_lines: Vec<Line> = match (&app.mode, verdict) {
         (Mode::VerdictMessage { input }, _) => {
-            let (rows, _) = wrap_input(input.text(), input.cursor(), inner_width.saturating_sub(2).max(1));
-            rows.into_iter().map(|r| Line::from(format!("│ {r}"))).collect()
+            let (rows, _) = wrap_input(
+                input.text(),
+                input.cursor(),
+                inner_width.saturating_sub(2).max(1),
+            );
+            rows.into_iter()
+                .map(|r| Line::from(format!("│ {r}")))
+                .collect()
         }
         (_, Some(v)) if !v.message.trim().is_empty() => {
-            wrap_words(&v.message, inner_width.saturating_sub(2)).into_iter().map(|r| Line::from(format!("│ {r}"))).collect()
+            wrap_words(&v.message, inner_width.saturating_sub(2))
+                .into_iter()
+                .map(|r| Line::from(format!("│ {r}")))
+                .collect()
         }
         _ => vec![Line::from("│ m: say something to the author (optional for an approval)").dim()],
     };
@@ -1536,13 +2161,22 @@ fn render_verdict(frame: &mut Frame, area: Rect, app: &App) -> Rect {
     lines.extend(message_lines);
     let button = |key: &str, label: &str, kind: VerdictKind, color: Color| {
         let chosen = verdict.is_some_and(|v| v.kind == kind);
-        let style = if chosen { Style::new().fg(p.on_accent).bg(color).bold() } else { Style::new().fg(color) };
+        let style = if chosen {
+            Style::new().fg(p.on_accent).bg(color).bold()
+        } else {
+            Style::new().fg(color)
+        };
         let mark = if chosen { "● " } else { "" };
         Span::styled(format!(" [{key}] {mark}{label} "), style)
     };
     lines.push(Line::default());
     lines.push(Line::from(vec![
-        button("r", "Request changes", VerdictKind::RequestChanges, p.yellow),
+        button(
+            "r",
+            "Request changes",
+            VerdictKind::RequestChanges,
+            p.yellow,
+        ),
         Span::raw("  "),
         button("c", "Comment", VerdictKind::Comment, p.blue),
         Span::raw("  "),
@@ -1565,14 +2199,27 @@ fn render_verdict(frame: &mut Frame, area: Rect, app: &App) -> Rect {
         .border_type(BorderType::Thick)
         .border_style(Style::new().fg(p.cyan).bold())
         .title(Span::styled(" Verdict ", Style::new().bold()))
-        .title_bottom(Line::from(" a/r/c verdict · m message · x clear · Y copy for agent · e export · Esc close ").dim());
+        .title_bottom(
+            Line::from(
+                " a/r/c verdict · m message · x clear · Y copy for agent · e export · Esc close ",
+            )
+            .dim(),
+        );
     let inner = block.inner(rect);
-    let inner = Rect { x: inner.x + 1, width: inner.width.saturating_sub(2), ..inner };
+    let inner = Rect {
+        x: inner.x + 1,
+        width: inner.width.saturating_sub(2),
+        ..inner
+    };
     clear(frame, rect, &app.palette);
     frame.render_widget(block, rect);
     frame.render_widget(Paragraph::new(lines), inner);
     if let Mode::VerdictMessage { input } = &app.mode {
-        let (_, (x, y)) = wrap_input(input.text(), input.cursor(), inner_width.saturating_sub(2).max(1));
+        let (_, (x, y)) = wrap_input(
+            input.text(),
+            input.cursor(),
+            inner_width.saturating_sub(2).max(1),
+        );
         let y = inner.y + (message_top + y) as u16;
         if y < inner.bottom() {
             frame.set_cursor_position((inner.x + 2 + x as u16, y));
@@ -1601,21 +2248,41 @@ fn stacked_bar(stats: LineStats, width: usize, p: &Palette) -> Line<'static> {
 const MAX_COMMENT_BOX_LINES: u16 = 8;
 
 fn comment_box_area(app: &App, body: Rect) -> Option<Rect> {
-    let Mode::Comment { input, .. } = &app.mode else { return None };
-    let (lines, _) = wrap_input(input.text(), input.cursor(), body.width.saturating_sub(2) as usize);
+    let Mode::Comment { input, .. } = &app.mode else {
+        return None;
+    };
+    let (lines, _) = wrap_input(
+        input.text(),
+        input.cursor(),
+        body.width.saturating_sub(2) as usize,
+    );
     let height = (lines.len() as u16).clamp(1, MAX_COMMENT_BOX_LINES) + 2;
     let height = height.min(body.height.saturating_sub(1));
-    Some(Rect { y: body.bottom() - height, height, ..body })
+    Some(Rect {
+        y: body.bottom() - height,
+        height,
+        ..body
+    })
 }
 
 /// Returns where the text cursor goes.
 fn render_comment_box(frame: &mut Frame, area: Rect, app: &App) -> (u16, u16) {
     let p = app.palette;
-    let Mode::Comment { target, input } = &app.mode else { return (area.x, area.y) };
+    let Mode::Comment { target, input } = &app.mode else {
+        return (area.x, area.y);
+    };
     let title = match *target {
-        CommentTarget::New { file, hunk, start, end } => {
+        CommentTarget::New {
+            file,
+            hunk,
+            start,
+            end,
+        } => {
             let h = app.hunk(file, hunk);
-            let numbers: Vec<u32> = h.lines[start..=end].iter().filter_map(|l| l.new_no.or(l.old_no)).collect();
+            let numbers: Vec<u32> = h.lines[start..=end]
+                .iter()
+                .filter_map(|l| l.new_no.or(l.old_no))
+                .collect();
             let range = match (numbers.iter().min(), numbers.iter().max()) {
                 (Some(a), Some(b)) if a != b => format!(":{a}-{b}"),
                 (Some(a), _) => format!(":{a}"),
@@ -1628,7 +2295,9 @@ fn render_comment_box(frame: &mut Frame, area: Rect, app: &App) -> (u16, u16) {
     let block = Block::bordered()
         .border_style(Style::new().fg(p.yellow))
         .title(Span::styled(title, Style::new().bold()))
-        .title_bottom(Line::from(" Enter save · Alt-Enter newline · C-o $EDITOR · Esc cancel ").dim());
+        .title_bottom(
+            Line::from(" Enter save · Alt-Enter newline · C-o $EDITOR · Esc cancel ").dim(),
+        );
     let inner = block.inner(area);
     clear(frame, area, &app.palette);
     frame.render_widget(block, area);
@@ -1700,7 +2369,11 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
         (_, Focus::Sidebar) => " FILES ",
         _ => " NORMAL ",
     };
-    let mode = if app.file_view.is_some() && mode == " NORMAL " { " FILE " } else { mode };
+    let mode = if app.file_view.is_some() && mode == " NORMAL " {
+        " FILE "
+    } else {
+        mode
+    };
     let mut parts = vec![mode.to_string()];
     if let Some(view) = &app.file_view {
         parts.push(format!("{}:{}", view.path, view.line_no()));
@@ -1722,7 +2395,11 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
         parts.push(location);
         parts.push(app.page_position());
         if let (Some(file), Some(hunk)) = (row.file(), row.hunk()) {
-            parts.push(format!("hunk {}/{}", hunk + 1, app.diff.files[file].hunks.len()));
+            parts.push(format!(
+                "hunk {}/{}",
+                hunk + 1,
+                app.diff.files[file].hunks.len()
+            ));
         }
     }
     if let Some(status) = &app.lsp_status {
@@ -1745,7 +2422,11 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
             if !fits(&left, &right) {
                 left = mode.to_string();
             }
-            let style = if msg.starts_with("error:") { Style::new().fg(p.red) } else { Style::new() };
+            let style = if msg.starts_with("error:") {
+                Style::new().fg(p.red)
+            } else {
+                Style::new()
+            };
             (right, style.bold())
         }
         None => {
@@ -1761,13 +2442,24 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
                 {
                     " "
                 }
-                _ if app.dismiss_prompt.is_some() || app.language_prompt.is_some() || app.ask.confirm_clear => " ",
-                _ if app.file_view.is_some() => " ? help  ]c [c changes  / search  q back to the diff ",
+                _ if app.dismiss_prompt.is_some()
+                    || app.language_prompt.is_some()
+                    || app.ask.confirm_clear =>
+                {
+                    " "
+                }
+                _ if app.file_view.is_some() => {
+                    " ? help  ]c [c changes  / search  q back to the diff "
+                }
                 _ if matches!(app.current_row(), Some(Row::Note { .. })) => {
                     " c comment with this  dd dismiss  a ask about it  y copy "
                 }
-                _ if !app.show_removals => " removals hidden: - to show  ? help  r review  c comment  a ask  q quit ",
-                _ => " ? help  r review  c comment  a ask  [e ]e ze context  S verdict  ]u unreviewed  q quit ",
+                _ if !app.show_removals => {
+                    " removals hidden: - to show  ? help  r review  c comment  a ask  q quit "
+                }
+                _ => {
+                    " ? help  r review  c comment  a ask  [e ]e ze context  S verdict  ]u unreviewed  q quit "
+                }
             };
             let hints = if fits(&left, hints) { hints } else { " " };
             (hints.to_string(), Style::new().dim())
@@ -1793,13 +2485,20 @@ mod tests {
         use crate::theme::Theme;
         use ratatui::{Terminal, backend::TestBackend};
 
-        let mut app = App::new(String::new(), crate::diff::Diff::new(Vec::new()), Default::default());
-        let mut highlighter = Highlighter::new(Theme::terminal(), crate::appearance::Appearance::Dark);
+        let mut app = App::new(
+            String::new(),
+            crate::diff::Diff::new(Vec::new()),
+            Default::default(),
+        );
+        let mut highlighter =
+            Highlighter::new(Theme::terminal(), crate::appearance::Appearance::Dark);
         let mut anim = Animator::new(false);
         let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
         app.set_theme(Theme::find("nord").unwrap());
         app.update(Action::PickTheme);
-        terminal.draw(|frame| render(frame, &mut app, &mut highlighter, &mut anim, "")).unwrap();
+        terminal
+            .draw(|frame| render(frame, &mut app, &mut highlighter, &mut anim, ""))
+            .unwrap();
 
         let buffer = terminal.backend().buffer();
         let screen: String = buffer.content().iter().map(|c| c.symbol()).collect();
@@ -1830,12 +2529,21 @@ mod tests {
             text: "why the lock?\nsecond line".into(),
         });
         let mut app = App::new(String::new(), crate::diff::Diff::new(Vec::new()), review);
-        let mut highlighter = Highlighter::new(Theme::terminal(), crate::appearance::Appearance::Dark);
+        let mut highlighter =
+            Highlighter::new(Theme::terminal(), crate::appearance::Appearance::Dark);
         let mut anim = Animator::new(false);
         let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
         let mut screen = |app: &mut App| {
-            terminal.draw(|frame| render(frame, app, &mut highlighter, &mut anim, "")).unwrap();
-            terminal.backend().buffer().content().iter().map(|c| c.symbol()).collect::<String>()
+            terminal
+                .draw(|frame| render(frame, app, &mut highlighter, &mut anim, ""))
+                .unwrap();
+            terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|c| c.symbol())
+                .collect::<String>()
         };
 
         app.update(Action::ListComments);
@@ -1863,20 +2571,39 @@ mod tests {
         use crate::theme::Theme;
         use ratatui::{Terminal, backend::TestBackend};
 
-        let mut app = App::new(String::new(), crate::diff::Diff::new(Vec::new()), Default::default());
-        let mut highlighter = Highlighter::new(Theme::terminal(), crate::appearance::Appearance::Dark);
+        let mut app = App::new(
+            String::new(),
+            crate::diff::Diff::new(Vec::new()),
+            Default::default(),
+        );
+        let mut highlighter =
+            Highlighter::new(Theme::terminal(), crate::appearance::Appearance::Dark);
         let mut anim = Animator::new(false);
         let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
         let mut screen = |app: &mut App| {
-            terminal.draw(|frame| render(frame, app, &mut highlighter, &mut anim, "")).unwrap();
-            terminal.backend().buffer().content().iter().map(|c| c.symbol()).collect::<String>()
+            terminal
+                .draw(|frame| render(frame, app, &mut highlighter, &mut anim, ""))
+                .unwrap();
+            terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|c| c.symbol())
+                .collect::<String>()
         };
 
-        app.language_prompt = Some(EnableLanguage { name: "rust".into(), broken: None });
+        app.language_prompt = Some(EnableLanguage {
+            name: "rust".into(),
+            broken: None,
+        });
         let shown = screen(&mut app);
         assert!(shown.contains("rust has no highlighting yet. Build its grammar now?"));
         assert!(shown.contains(" LANGUAGE "));
-        app.language_prompt = Some(EnableLanguage { name: "rust".into(), broken: Some("wrong ABI".into()) });
+        app.language_prompt = Some(EnableLanguage {
+            name: "rust".into(),
+            broken: Some("wrong ABI".into()),
+        });
         let shown = screen(&mut app);
         assert!(shown.contains("rust's grammar doesn't load. Build it again?"));
         assert!(shown.contains("wrong ABI"));
@@ -1904,25 +2631,50 @@ mod tests {
     #[test]
     fn wraps_spans_at_the_room_given() {
         let text = |lines: Vec<Vec<Span>>| -> Vec<String> {
-            lines.iter().map(|l| l.iter().map(|s| s.content.as_ref()).collect()).collect()
+            lines
+                .iter()
+                .map(|l| l.iter().map(|s| s.content.as_ref()).collect())
+                .collect()
         };
         let spans = || vec![Span::raw("abcd"), Span::raw("éfg"), Span::raw("h")];
         assert_eq!(text(wrap_spans(spans(), 3)), ["abc", "déf", "gh"]);
         assert_eq!(text(wrap_spans(spans(), 0)), ["abcdéfgh"]);
         assert_eq!(text(wrap_spans(spans(), 8)), ["abcdéfgh"]);
         assert_eq!(text(wrap_spans(vec![], 4)), [""]);
-        assert_eq!(wrap_spans(spans(), 3)[1].len(), 2, "split where a span crosses a break");
+        assert_eq!(
+            wrap_spans(spans(), 3)[1].len(),
+            2,
+            "split where a span crosses a break"
+        );
     }
 
     #[test]
     fn emphasizes_changed_ranges_across_segments() {
         let bold = Style::new().bold();
         let tint = Style::new().bg(Color::Red);
-        let segments = vec![(bold, "let x".to_string()), (Style::new(), " = 16;".to_string())];
+        let segments = vec![
+            (bold, "let x".to_string()),
+            (Style::new(), " = 16;".to_string()),
+        ];
         let out = emphasize(segments, &[4..5, 8..10], tint);
-        let pieces: Vec<(&str, bool)> = out.iter().map(|(s, t)| (t.as_str(), s.bg == Some(Color::Red))).collect();
-        assert_eq!(pieces, [("let ", false), ("x", true), (" = ", false), ("16", true), (";", false)]);
-        assert_eq!(out[1].0.add_modifier, bold.add_modifier, "keeps the syntax style under the tint");
+        let pieces: Vec<(&str, bool)> = out
+            .iter()
+            .map(|(s, t)| (t.as_str(), s.bg == Some(Color::Red)))
+            .collect();
+        assert_eq!(
+            pieces,
+            [
+                ("let ", false),
+                ("x", true),
+                (" = ", false),
+                ("16", true),
+                (";", false)
+            ]
+        );
+        assert_eq!(
+            out[1].0.add_modifier, bold.add_modifier,
+            "keeps the syntax style under the tint"
+        );
         assert_eq!(emphasize(vec![(bold, "x".into())], &[], tint).len(), 1);
     }
 
@@ -1930,11 +2682,23 @@ mod tests {
     fn wraps_input_and_tracks_the_cursor() {
         assert_eq!(wrap_input("", 0, 5), (vec![String::new()], (0, 0)));
         assert_eq!(wrap_input("abc", 3, 5), (vec!["abc".into()], (3, 0)));
-        assert_eq!(wrap_input("abcdefg", 2, 5), (vec!["abcde".into(), "fg".into()], (2, 0)));
+        assert_eq!(
+            wrap_input("abcdefg", 2, 5),
+            (vec!["abcde".into(), "fg".into()], (2, 0))
+        );
         assert_eq!(wrap_input("abcdefg", 6, 5).1, (1, 1));
-        assert_eq!(wrap_input("ab\ncd", 2, 5), (vec!["ab".into(), "cd".into()], (2, 0)));
-        assert_eq!(wrap_input("ab\n", 3, 5), (vec!["ab".into(), String::new()], (0, 1)));
+        assert_eq!(
+            wrap_input("ab\ncd", 2, 5),
+            (vec!["ab".into(), "cd".into()], (2, 0))
+        );
+        assert_eq!(
+            wrap_input("ab\n", 3, 5),
+            (vec!["ab".into(), String::new()], (0, 1))
+        );
         // A full last row puts an end-of-text cursor on a new row.
-        assert_eq!(wrap_input("abcde", 5, 5), (vec!["abcde".into(), String::new()], (0, 1)));
+        assert_eq!(
+            wrap_input("abcde", 5, 5),
+            (vec!["abcde".into(), String::new()], (0, 1))
+        );
     }
 }

@@ -32,7 +32,12 @@ pub fn read(input: &mut impl BufRead) -> io::Result<Option<Value>> {
         if let Some((name, value)) = header.split_once(':')
             && name.eq_ignore_ascii_case("content-length")
         {
-            length = Some(value.trim().parse::<usize>().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?);
+            length = Some(
+                value
+                    .trim()
+                    .parse::<usize>()
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+            );
         }
     }
     let mut body = vec![0; length.unwrap_or(0)];
@@ -48,11 +53,20 @@ mod tests {
     #[test]
     fn round_trips_messages() {
         let mut buffer = Vec::new();
-        write(&mut buffer, &json!({"jsonrpc": "2.0", "method": "a", "params": {"é": 1}})).unwrap();
+        write(
+            &mut buffer,
+            &json!({"jsonrpc": "2.0", "method": "a", "params": {"é": 1}}),
+        )
+        .unwrap();
         write(&mut buffer, &json!({"id": 2})).unwrap();
         let text = String::from_utf8(buffer.clone()).unwrap();
-        let body = serde_json::to_vec(&json!({"jsonrpc": "2.0", "method": "a", "params": {"é": 1}})).unwrap();
-        assert!(text.starts_with(&format!("Content-Length: {}\r\n\r\n{{", body.len())), "{text}");
+        let body =
+            serde_json::to_vec(&json!({"jsonrpc": "2.0", "method": "a", "params": {"é": 1}}))
+                .unwrap();
+        assert!(
+            text.starts_with(&format!("Content-Length: {}\r\n\r\n{{", body.len())),
+            "{text}"
+        );
         let mut input = io::Cursor::new(buffer);
         assert_eq!(read(&mut input).unwrap().unwrap()["params"]["é"], 1);
         assert_eq!(read(&mut input).unwrap().unwrap()["id"], 2);

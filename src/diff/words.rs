@@ -51,10 +51,17 @@ const MAX_MATCHED_RUN: usize = 64;
 /// the same length pair in order; otherwise each removed line takes the
 /// most similar added line after the last one taken, so a line inserted in
 /// between doesn't shift every pair after it.
-fn pair_up(lines: &[DiffLine], removed: Range<usize>, added: Range<usize>) -> Vec<(usize, usize, PairChanges)> {
+fn pair_up(
+    lines: &[DiffLine],
+    removed: Range<usize>,
+    added: Range<usize>,
+) -> Vec<(usize, usize, PairChanges)> {
     let compare = |old: usize, new: usize| diff_pair(&lines[old].content, &lines[new].content);
     if removed.len() == added.len() || removed.len() + added.len() > MAX_MATCHED_RUN {
-        return removed.zip(added).filter_map(|(old, new)| Some((old, new, compare(old, new)?.1))).collect();
+        return removed
+            .zip(added)
+            .filter_map(|(old, new)| Some((old, new, compare(old, new)?.1)))
+            .collect();
     }
     let mut out = Vec::new();
     let mut next = added.start;
@@ -112,18 +119,31 @@ fn diff_pair(old: &str, new: &str) -> Option<(f32, PairChanges)> {
 
     // Whitespace that survived doesn't make a pair similar.
     let kept_len = |s: &str, toks: &[Range<usize>], keep: &[bool]| -> usize {
-        toks.iter().zip(keep).filter(|(t, k)| **k && !s[(*t).clone()].trim().is_empty()).map(|(t, _)| t.len()).sum()
+        toks.iter()
+            .zip(keep)
+            .filter(|(t, k)| **k && !s[(*t).clone()].trim().is_empty())
+            .map(|(t, _)| t.len())
+            .sum()
     };
-    let solid_len = |s: &str| s.chars().filter(|c| !c.is_whitespace()).map(char::len_utf8).sum::<usize>();
+    let solid_len = |s: &str| {
+        s.chars()
+            .filter(|c| !c.is_whitespace())
+            .map(char::len_utf8)
+            .sum::<usize>()
+    };
     let total = solid_len(old) + solid_len(new);
     if total == 0 {
         return None;
     }
-    let similarity = (kept_len(old, &a, &keep_a) + kept_len(new, &b, &keep_b)) as f32 / total as f32;
+    let similarity =
+        (kept_len(old, &a, &keep_a) + kept_len(new, &b, &keep_b)) as f32 / total as f32;
     if similarity < MIN_SIMILARITY {
         return None;
     }
-    Some((similarity, (ranges(old, &a, &keep_a), ranges(new, &b, &keep_b))))
+    Some((
+        similarity,
+        (ranges(old, &a, &keep_a), ranges(new, &b, &keep_b)),
+    ))
 }
 
 /// Merges the tokens not kept into ranges. Only whitespace between two
@@ -180,7 +200,12 @@ mod tests {
     use super::*;
 
     fn line(kind: LineKind, content: &str) -> DiffLine {
-        DiffLine { kind, old_no: None, new_no: None, content: content.to_string() }
+        DiffLine {
+            kind,
+            old_no: None,
+            new_no: None,
+            content: content.to_string(),
+        }
     }
 
     fn changed<'a>(content: &'a str, ranges: &[Range<usize>]) -> Vec<&'a str> {
@@ -229,7 +254,10 @@ mod tests {
         let new = "Diff { files, sections: Vec::new(), sources: Vec::new(), words }";
         let lines = [
             line(LineKind::Removed, old),
-            line(LineKind::Added, "let words = files.iter().map(changes).collect();"),
+            line(
+                LineKind::Added,
+                "let words = files.iter().map(changes).collect();",
+            ),
             line(LineKind::Added, new),
         ];
         let out = changes(&lines);
@@ -240,13 +268,19 @@ mod tests {
 
     #[test]
     fn rewrites_are_not_word_diffed() {
-        let out = changes(&[line(LineKind::Removed, "return mainFinder;"), line(LineKind::Added, "}).catch(err => log(err));")]);
+        let out = changes(&[
+            line(LineKind::Removed, "return mainFinder;"),
+            line(LineKind::Added, "}).catch(err => log(err));"),
+        ]);
         assert!(out.iter().all(Vec::is_empty));
     }
 
     #[test]
     fn indentation_changes_alone_are_ignored() {
-        let out = changes(&[line(LineKind::Removed, "  foo(bar);"), line(LineKind::Added, "    foo(bar);")]);
+        let out = changes(&[
+            line(LineKind::Removed, "  foo(bar);"),
+            line(LineKind::Added, "    foo(bar);"),
+        ]);
         assert!(out.iter().all(Vec::is_empty));
     }
 

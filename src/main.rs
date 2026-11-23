@@ -42,11 +42,11 @@ use ratatui::{
 
 use anim::Animator;
 use app::{App, Effect};
+use appearance::Appearance;
 use ask::Assistant;
 use diff::DiffSource;
 use diff::git::{DiffSpec, GitSource};
 use export::{CommentSink, FileSink, Format};
-use appearance::Appearance;
 use highlight::Highlighter;
 use keymap::KeyHandler;
 use organizer::claude::ClaudeCli;
@@ -135,7 +135,9 @@ enum LangCommand {
 fn lang(command: LangCommand) -> Result<()> {
     let registry = languages::Registry::global();
     let find = |name: &str| {
-        registry.get(name).ok_or_else(|| anyhow!("no language `{name}`; `rrrev lang list` shows them all"))
+        registry
+            .get(name)
+            .ok_or_else(|| anyhow!("no language `{name}`; `rrrev lang list` shows them all"))
     };
     match command {
         LangCommand::List => print!("{}", languages::manage::list(registry)),
@@ -175,7 +177,8 @@ fn main() -> Result<()> {
     let diff = source.load()?;
 
     if let Some(format) = cli.export {
-        let format = Format::parse(&format).ok_or_else(|| anyhow!("unknown export format `{format}`, use md or json"))?;
+        let format = Format::parse(&format)
+            .ok_or_else(|| anyhow!("unknown export format `{format}`, use md or json"))?;
         let export = export::collect(&source.describe(), &diff, &review);
         print!("{}", export::render(&export, format)?);
         return Ok(());
@@ -192,7 +195,17 @@ fn main() -> Result<()> {
     let mut lsp = lsp::Lsp::new(source.workdir(), languages::Registry::global());
     open_in_servers(&mut lsp, &app);
     let mut terminal = ratatui::init();
-    let result = run(&mut terminal, &mut app, &state_file, Ai { organizer, assistant }, highlighter, &mut lsp);
+    let result = run(
+        &mut terminal,
+        &mut app,
+        &state_file,
+        Ai {
+            organizer,
+            assistant,
+        },
+        highlighter,
+        &mut lsp,
+    );
     ratatui::restore();
     result
 }
@@ -249,7 +262,8 @@ fn run(
     let mut asked: Option<Asked> = None;
     while !app.should_quit {
         app.offer_grammar();
-        terminal.draw(|frame| ui::render(frame, app, &mut highlighter, &mut anim, &keys.pending()))?;
+        terminal
+            .draw(|frame| ui::render(frame, app, &mut highlighter, &mut anim, &keys.pending()))?;
 
         if let Some(mode) = appearance.changed() {
             app.set_appearance(mode);
@@ -261,7 +275,10 @@ fn run(
             app.finish_organize(job, result);
         }
         for reply in lsp.poll() {
-            let Some(asked) = asked.take_if(|a| (a.server, a.id) == (reply.server, reply.id)) else { continue };
+            let Some(asked) = asked.take_if(|a| (a.server, a.id) == (reply.server, reply.id))
+            else {
+                continue;
+            };
             // An answer that comes after the cursor moved on is dropped,
             // rather than pulling it back from wherever it went.
             if !app.still_at(&asked.from) {
@@ -269,14 +286,20 @@ fn run(
             }
             match asked.question {
                 Question::GoTo(kind) => {
-                    let targets = reply.result.map(|result| targets(lsp, reply.server, &result));
+                    let targets = reply
+                        .result
+                        .map(|result| targets(lsp, reply.server, &result));
                     app.finish_go_to(kind, targets, asked.note);
                 }
                 Question::References => {
-                    let targets = reply.result.map(|result| targets(lsp, reply.server, &result));
+                    let targets = reply
+                        .result
+                        .map(|result| targets(lsp, reply.server, &result));
                     app.finish_references(targets, asked.note);
                 }
-                Question::Hover => app.finish_hover(reply.result.map(|r| app::hover_text(&r)), asked.note),
+                Question::Hover => {
+                    app.finish_hover(reply.result.map(|r| app::hover_text(&r)), asked.note)
+                }
             }
         }
         app.lsp_status = lsp.status();
@@ -295,8 +318,11 @@ fn run(
             }
             app.finish_enable_language(&name, result);
         }
-        if event::poll(if anim.is_animating() { anim::FRAME } else { TICK })?
-            && let Event::Key(key) = event::read()?
+        if event::poll(if anim.is_animating() {
+            anim::FRAME
+        } else {
+            TICK
+        })? && let Event::Key(key) = event::read()?
             && key.kind == KeyEventKind::Press
         {
             if app.language_prompt.is_some() {
@@ -344,12 +370,20 @@ fn run(
                 });
             }
             Some(Effect::Organize { job, request }) => {
-                let (organizer, done, cancel) = (Arc::clone(&ai.organizer), plans_tx.clone(), Cancel::default());
+                let (organizer, done, cancel) = (
+                    Arc::clone(&ai.organizer),
+                    plans_tx.clone(),
+                    Cancel::default(),
+                );
                 let token = cancel.clone();
                 let thread = thread::spawn(move || {
                     let _ = done.send((job, organizer.organize(&request, &token)));
                 });
-                running = Some(Running { job, cancel, thread });
+                running = Some(Running {
+                    job,
+                    cancel,
+                    thread,
+                });
             }
             Some(Effect::CancelOrganize { job }) => {
                 // The thread kills the process and exits shortly; the app
@@ -359,12 +393,20 @@ fn run(
                 }
             }
             Some(Effect::Ask { job, request }) => {
-                let (assistant, done, cancel) = (Arc::clone(&ai.assistant), answers_tx.clone(), Cancel::default());
+                let (assistant, done, cancel) = (
+                    Arc::clone(&ai.assistant),
+                    answers_tx.clone(),
+                    Cancel::default(),
+                );
                 let token = cancel.clone();
                 let thread = thread::spawn(move || {
                     let _ = done.send((job, assistant.ask(&request, &token)));
                 });
-                asking = Some(Running { job, cancel, thread });
+                asking = Some(Running {
+                    job,
+                    cancel,
+                    thread,
+                });
             }
             Some(Effect::CancelAsk { job }) => {
                 if let Some(run) = asking.take_if(|r| r.job == job) {
@@ -376,8 +418,12 @@ fn run(
                     app.message = Some(format!("error: could not save the theme: {e:#}"));
                 }
             }
-            Some(Effect::GoTo { kind, spot }) => ask(lsp, app, &mut asked, Question::GoTo(kind), &spot),
-            Some(Effect::References { spot }) => ask(lsp, app, &mut asked, Question::References, &spot),
+            Some(Effect::GoTo { kind, spot }) => {
+                ask(lsp, app, &mut asked, Question::GoTo(kind), &spot)
+            }
+            Some(Effect::References { spot }) => {
+                ask(lsp, app, &mut asked, Question::References, &spot)
+            }
             Some(Effect::Hover { spot }) => ask(lsp, app, &mut asked, Question::Hover, &spot),
             Some(Effect::Lsp { restart }) => {
                 if restart {
@@ -453,25 +499,49 @@ struct Asked {
 }
 
 /// Asks `question` about `spot`, calling off the question still out, if any.
-fn ask(lsp: &mut lsp::Lsp, app: &mut App, asked: &mut Option<Asked>, question: Question, spot: &app::Spot) {
+fn ask(
+    lsp: &mut lsp::Lsp,
+    app: &mut App,
+    asked: &mut Option<Asked>,
+    question: Question,
+    spot: &app::Spot,
+) {
     if let Some(old) = asked.take() {
         lsp.server(old.server).cancel(old.id);
     }
     match ask_about(lsp, question.method(), spot) {
-        Ok((server, id, note)) => *asked = Some(Asked { server, id, question, note, from: app.place() }),
+        Ok((server, id, note)) => {
+            *asked = Some(Asked {
+                server,
+                id,
+                question,
+                note,
+                from: app.place(),
+            })
+        }
         Err(why) => app.message = Some(why),
     }
 }
 
 /// Sends a request about `spot` (`gd`, `gr`, `K`…). Returns the server and
 /// request id, and a note for when the code on disk isn't what's shown.
-fn ask_about(lsp: &mut lsp::Lsp, method: &str, spot: &app::Spot) -> Result<(usize, u64, Option<&'static str>), String> {
+fn ask_about(
+    lsp: &mut lsp::Lsp,
+    method: &str,
+    spot: &app::Spot,
+) -> Result<(usize, u64, Option<&'static str>), String> {
     let Some(index) = lsp.server_for(&spot.path) else {
-        return Err(format!("No language server for {}: {}", spot.path, lsp.describe()));
+        return Err(format!(
+            "No language server for {}: {}",
+            spot.path,
+            lsp.describe()
+        ));
     };
     lsp.open(&spot.path);
     let full = lsp.workdir().join(&spot.path);
-    let on_disk = fs::read_to_string(&full).ok().and_then(|text| text.lines().nth(spot.line as usize).map(str::to_string));
+    let on_disk = fs::read_to_string(&full)
+        .ok()
+        .and_then(|text| text.lines().nth(spot.line as usize).map(str::to_string));
     let note = (on_disk.as_deref() != Some(spot.text.as_str()))
         .then_some("may be off: this revision isn't the one checked out");
     let server = lsp.server(index);
@@ -502,9 +572,20 @@ fn targets(lsp: &mut lsp::Lsp, server: usize, result: &serde_json::Value) -> Vec
                     Some(Arc::new(text.lines().map(str::to_string).collect()))
                 })
                 .clone()?;
-            let column = lines.get(line as usize).map_or(0, |l| lsp::to_byte(l, character, encoding));
-            let shown = path.strip_prefix(&workdir).unwrap_or(&path).to_string_lossy().into_owned();
-            Some(app::Target { path: shown, line: line as usize, column, lines })
+            let column = lines
+                .get(line as usize)
+                .map_or(0, |l| lsp::to_byte(l, character, encoding));
+            let shown = path
+                .strip_prefix(&workdir)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .into_owned();
+            Some(app::Target {
+                path: shown,
+                line: line as usize,
+                column,
+                lines,
+            })
         })
         .collect()
 }
@@ -522,7 +603,10 @@ fn open_in_servers(lsp: &mut lsp::Lsp, app: &App) {
 /// Next to the review state, e.g. `.git/rrrev/worktree-comments.md`, so the
 /// export doesn't show up as a change in the diff being reviewed.
 fn default_export_path(state_file: &Path, format: Format) -> PathBuf {
-    let stem = state_file.file_stem().and_then(|s| s.to_str()).unwrap_or("review");
+    let stem = state_file
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("review");
     state_file.with_file_name(format!("{stem}-comments.{}", format.extension()))
 }
 
@@ -551,7 +635,10 @@ fn edit_in_editor(terminal: &mut DefaultTerminal, initial: &str) -> Result<Optio
     terminal.clear()?;
 
     let status = status.with_context(|| format!("cannot run editor `{editor}`"))?;
-    let text = status.success().then(|| fs::read_to_string(&path)).transpose()?;
+    let text = status
+        .success()
+        .then(|| fs::read_to_string(&path))
+        .transpose()?;
     let _ = fs::remove_file(&path);
     Ok(text)
 }
@@ -562,7 +649,10 @@ mod tests {
 
     #[test]
     fn exports_land_next_to_the_state_file() {
-        let path = default_export_path(Path::new("/repo/.git/rrrev/worktree.json"), Format::Markdown);
+        let path = default_export_path(
+            Path::new("/repo/.git/rrrev/worktree.json"),
+            Format::Markdown,
+        );
         assert_eq!(path, Path::new("/repo/.git/rrrev/worktree-comments.md"));
     }
 }

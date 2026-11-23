@@ -41,12 +41,16 @@ impl App {
         if self.is_busy() {
             return;
         }
-        let Some(status) = self.grammars.status else { return };
+        let Some(status) = self.grammars.status else {
+            return;
+        };
         let path = match &self.file_view {
             Some(view) => Some(view.path.as_str()),
             None => self.current_file().map(|f| self.diff.files[f].path()),
         };
-        let Some(language) = path.and_then(|p| Registry::global().for_path(p)) else { return };
+        let Some(language) = path.and_then(|p| Registry::global().for_path(p)) else {
+            return;
+        };
         if !self.grammars.seen.insert(language.name.clone()) {
             return;
         }
@@ -56,7 +60,10 @@ impl App {
             Status::Broken(why) => Some(why),
             Status::Enabled | Status::NoGrammar => return,
         };
-        self.language_prompt = Some(EnableLanguage { name: language.name.clone(), broken });
+        self.language_prompt = Some(EnableLanguage {
+            name: language.name.clone(),
+            broken,
+        });
     }
 
     /// Whether something has the user's attention that a question would get
@@ -79,13 +86,17 @@ impl App {
     /// background, or leaves the language plain for the rest of the session.
     pub fn answer_enable_language(&mut self, build: bool) {
         self.message = None;
-        let Some(prompt) = self.language_prompt.take() else { return };
+        let Some(prompt) = self.language_prompt.take() else {
+            return;
+        };
         let name = prompt.name;
         if build {
             self.grammars.building.push((name.clone(), Instant::now()));
             self.effect = Some(Effect::EnableLanguage { name });
         } else {
-            self.message = Some(format!("{name} stays plain; `rrrev lang enable {name}` builds it later"));
+            self.message = Some(format!(
+                "{name} stays plain; `rrrev lang enable {name}` builds it later"
+            ));
         }
     }
 
@@ -116,7 +127,10 @@ mod tests {
     /// a.rs, b.rs, c.py and d.toml, with Rust and Python not built, and
     /// TOML without a grammar.
     fn app() -> App {
-        let files: Vec<FileDiff> = ["a.rs", "b.rs", "c.py", "d.toml"].iter().map(|p| file(p, &[2])).collect();
+        let files: Vec<FileDiff> = ["a.rs", "b.rs", "c.py", "d.toml"]
+            .iter()
+            .map(|p| file(p, &[2]))
+            .collect();
         let mut app = app_with(files);
         app.grammars.status = Some(|language| match language.name.as_str() {
             "rust" | "python" => Status::Available,
@@ -135,7 +149,10 @@ mod tests {
         app.offer_grammar();
         assert_eq!(asked(&app), Some("rust"));
         app.answer_enable_language(false);
-        assert_eq!(app.message.as_deref(), Some("rust stays plain; `rrrev lang enable rust` builds it later"));
+        assert_eq!(
+            app.message.as_deref(),
+            Some("rust stays plain; `rrrev lang enable rust` builds it later")
+        );
         assert_eq!(app.effect, None);
         // Another Rust file doesn't ask again.
         app.update(Action::NextFile(1));
@@ -174,7 +191,13 @@ mod tests {
         app.update(Action::NextFile(2));
         app.offer_grammar();
         let prompt = app.language_prompt.clone().unwrap();
-        assert_eq!(prompt, EnableLanguage { name: "python".into(), broken: Some("wrong ABI".into()) });
+        assert_eq!(
+            prompt,
+            EnableLanguage {
+                name: "python".into(),
+                broken: Some("wrong ABI".into())
+            }
+        );
     }
 
     #[test]
@@ -185,7 +208,10 @@ mod tests {
         app.offer_grammar();
         assert_eq!(asked(&app), None);
         type_text(&mut app, "y");
-        assert_eq!(app.language_prompt, None, "typed into the comment, not an answer");
+        assert_eq!(
+            app.language_prompt, None,
+            "typed into the comment, not an answer"
+        );
         app.update_input(InputAction::Submit);
         app.offer_grammar();
         assert_eq!(asked(&app), Some("rust"));
@@ -211,7 +237,13 @@ mod tests {
         let mut app = app();
         // As `gd` opens a file outside the diff, over a.rs.
         let lines = std::sync::Arc::new(vec!["def f(): pass".to_string()]);
-        app.file_view = Some(FileView::new("lib/f.py".into(), Side::New, lines, None, vec![None]));
+        app.file_view = Some(FileView::new(
+            "lib/f.py".into(),
+            Side::New,
+            lines,
+            None,
+            vec![None],
+        ));
         app.offer_grammar();
         assert_eq!(asked(&app), Some("python"));
     }
@@ -221,8 +253,20 @@ mod tests {
         let mut app = app();
         app.offer_grammar();
         app.answer_enable_language(true);
-        assert_eq!(app.effect.take(), Some(Effect::EnableLanguage { name: "rust".into() }));
-        assert_eq!(app.grammars.building.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["rust"]);
+        assert_eq!(
+            app.effect.take(),
+            Some(Effect::EnableLanguage {
+                name: "rust".into()
+            })
+        );
+        assert_eq!(
+            app.grammars
+                .building
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>(),
+            ["rust"]
+        );
         app.finish_enable_language("rust", Ok(()));
         assert!(app.grammars.building.is_empty());
         assert_eq!(app.message.as_deref(), Some("Enabled rust"));
@@ -230,8 +274,14 @@ mod tests {
         app.update(Action::NextFile(2));
         app.offer_grammar();
         app.answer_enable_language(true);
-        app.finish_enable_language("python", Err(anyhow::anyhow!("cannot run git; is it installed?")));
+        app.finish_enable_language(
+            "python",
+            Err(anyhow::anyhow!("cannot run git; is it installed?")),
+        );
         assert!(app.grammars.building.is_empty());
-        assert_eq!(app.message.as_deref(), Some("error: cannot enable python: cannot run git; is it installed?"));
+        assert_eq!(
+            app.message.as_deref(),
+            Some("error: cannot enable python: cannot run git; is it installed?")
+        );
     }
 }

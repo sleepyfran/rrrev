@@ -26,17 +26,45 @@ struct Variants {
     light: (&'static str, &'static Doom),
 }
 
-const fn doom(id: &'static str, name: &'static str, dark: (&'static str, &'static Doom), light: (&'static str, &'static Doom)) -> Theme {
-    Theme { id, name, variants: Some(Variants { dark, light }) }
+const fn doom(
+    id: &'static str,
+    name: &'static str,
+    dark: (&'static str, &'static Doom),
+    light: (&'static str, &'static Doom),
+) -> Theme {
+    Theme {
+        id,
+        name,
+        variants: Some(Variants { dark, light }),
+    }
 }
 
 /// Every theme, in the order the picker lists them. Only doom themes that
 /// come in both a dark and a light variant are here.
 pub static THEMES: &[Theme] = &[
-    Theme { id: "terminal", name: "Terminal", variants: None },
-    doom("doom-one", "Doom One", ("doom-one", &doom::ONE), ("doom-one-light", &doom::ONE_LIGHT)),
-    doom("doom-nord", "Nord", ("doom-nord", &doom::NORD), ("doom-nord-light", &doom::NORD_LIGHT)),
-    doom("doom-gruvbox", "Gruvbox", ("doom-gruvbox", &doom::GRUVBOX), ("doom-gruvbox-light", &doom::GRUVBOX_LIGHT)),
+    Theme {
+        id: "terminal",
+        name: "Terminal",
+        variants: None,
+    },
+    doom(
+        "doom-one",
+        "Doom One",
+        ("doom-one", &doom::ONE),
+        ("doom-one-light", &doom::ONE_LIGHT),
+    ),
+    doom(
+        "doom-nord",
+        "Nord",
+        ("doom-nord", &doom::NORD),
+        ("doom-nord-light", &doom::NORD_LIGHT),
+    ),
+    doom(
+        "doom-gruvbox",
+        "Gruvbox",
+        ("doom-gruvbox", &doom::GRUVBOX),
+        ("doom-gruvbox-light", &doom::GRUVBOX_LIGHT),
+    ),
     doom(
         "doom-solarized",
         "Solarized",
@@ -63,7 +91,10 @@ impl Theme {
         let name = name.trim().to_ascii_lowercase();
         let is = |id: &str| id == name || id.strip_prefix("doom-") == Some(name.as_str());
         THEMES.iter().find(|t| {
-            is(t.id) || t.variants.as_ref().is_some_and(|v| is(v.dark.0) || is(v.light.0))
+            is(t.id)
+                || t.variants
+                    .as_ref()
+                    .is_some_and(|v| is(v.dark.0) || is(v.light.0))
         })
     }
 
@@ -82,7 +113,8 @@ impl Theme {
     }
 
     pub fn palette(&self, appearance: Appearance) -> Palette {
-        self.variant(appearance).map_or(Palette::TERMINAL, Palette::from_doom)
+        self.variant(appearance)
+            .map_or(Palette::TERMINAL, Palette::from_doom)
     }
 
     /// Its syntax colours. The terminal's theme takes base16 Ocean's, in the
@@ -166,7 +198,10 @@ impl Palette {
             cyan: accent(d.cyan),
             on_accent: rgb(d.bg),
             // As magit's highlighted diff lines, a little stronger.
-            tints: Some((rgb(blend(d.vc_added, d.bg, 0.3)), rgb(blend(d.vc_deleted, d.bg, 0.3)))),
+            tints: Some((
+                rgb(blend(d.vc_added, d.bg, 0.3)),
+                rgb(blend(d.vc_deleted, d.bg, 0.3)),
+            )),
         }
     }
 
@@ -208,7 +243,11 @@ pub fn contrast(a: Rgb, b: Rgb) -> f32 {
 fn luminance(c: Rgb) -> f32 {
     let linear = |c: u8| {
         let c = f32::from(c) / 255.0;
-        if c <= 0.039_28 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+        if c <= 0.039_28 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
     };
     0.2126 * linear(c.0) + 0.7152 * linear(c.1) + 0.0722 * linear(c.2)
 }
@@ -231,21 +270,92 @@ impl Syntax {
             (&["comment"], d.comments, none),
             (&["comment.documentation"], d.doc_comments, none),
             (&["string", "character"], d.strings, none),
-            (&["string.escape", "escape", "string.regexp", "string.special.regex", "character.special"], d.operators, bold),
+            (
+                &[
+                    "string.escape",
+                    "escape",
+                    "string.regexp",
+                    "string.special.regex",
+                    "character.special",
+                ],
+                d.operators,
+                bold,
+            ),
             (&["string.special.symbol"], d.constants, none),
             (&["number", "float"], d.numbers, none),
-            (&["constant", "constant.builtin", "constant.macro", "boolean"], d.constants, none),
-            (&["keyword", "conditional", "repeat", "exception", "include"], d.keywords, none),
+            (
+                &["constant", "constant.builtin", "constant.macro", "boolean"],
+                d.constants,
+                none,
+            ),
+            (
+                &["keyword", "conditional", "repeat", "exception", "include"],
+                d.keywords,
+                none,
+            ),
             (&["operator"], d.operators, none),
-            (&["type", "type.builtin", "type.definition", "constructor", "module", "namespace"], d.types, none),
-            (&["function", "function.call", "function.macro", "function.special"], d.functions, none),
-            (&["function.method", "function.member", "method"], d.methods, none),
+            (
+                &[
+                    "type",
+                    "type.builtin",
+                    "type.definition",
+                    "constructor",
+                    "module",
+                    "namespace",
+                ],
+                d.types,
+                none,
+            ),
+            (
+                &[
+                    "function",
+                    "function.call",
+                    "function.macro",
+                    "function.special",
+                ],
+                d.functions,
+                none,
+            ),
+            (
+                &["function.method", "function.member", "method"],
+                d.methods,
+                none,
+            ),
             (&["variable.parameter", "parameter"], d.variables, none),
-            (&["variable.builtin", "function.builtin", "module.builtin", "variable.parameter.builtin"], d.builtin, none),
-            (&["attribute", "label", "preproc", "keyword.directive", "punctuation.special", "embedded"], d.operators, none),
+            (
+                &[
+                    "variable.builtin",
+                    "function.builtin",
+                    "module.builtin",
+                    "variable.parameter.builtin",
+                ],
+                d.builtin,
+                none,
+            ),
+            (
+                &[
+                    "attribute",
+                    "label",
+                    "preproc",
+                    "keyword.directive",
+                    "punctuation.special",
+                    "embedded",
+                ],
+                d.operators,
+                none,
+            ),
             (&["tag"], d.methods, none),
             (&["tag.attribute"], d.types, none),
-            (&["property", "property.definition", "field", "variable.member"], property, none),
+            (
+                &[
+                    "property",
+                    "property.definition",
+                    "field",
+                    "variable.member",
+                ],
+                property,
+                none,
+            ),
         ];
         let rules = faces
             .iter()
@@ -295,7 +405,10 @@ mod tests {
         assert_eq!(nord.name, "Nord");
         assert_eq!(Theme::find("doom-nord"), Some(nord));
         assert_eq!(Theme::find("doom-nord-light"), Some(nord));
-        assert_eq!(Theme::find("Tomorrow-Day").map(|t| t.name), Some("Tomorrow"));
+        assert_eq!(
+            Theme::find("Tomorrow-Day").map(|t| t.name),
+            Some("Tomorrow")
+        );
         assert_eq!(Theme::find("terminal"), Some(Theme::terminal()));
         assert_eq!(Theme::find("dracula"), None);
     }
@@ -313,9 +426,24 @@ mod tests {
                 let syntax = theme.syntax(appearance);
                 assert!(syntax.rules.len() > 10, "{}", theme.id);
                 let d = theme.variant(appearance).unwrap();
-                assert_eq!(luminance(d.bg) > 0.5, appearance == Appearance::Light, "{} {appearance:?}", theme.id);
-                let Palette { yellow: Color::Rgb(r, g, b), .. } = theme.palette(appearance) else { panic!() };
-                assert!(contrast(Rgb(r, g, b), d.bg) >= 3.0, "{} {appearance:?} yellow", theme.id);
+                assert_eq!(
+                    luminance(d.bg) > 0.5,
+                    appearance == Appearance::Light,
+                    "{} {appearance:?}",
+                    theme.id
+                );
+                let Palette {
+                    yellow: Color::Rgb(r, g, b),
+                    ..
+                } = theme.palette(appearance)
+                else {
+                    panic!()
+                };
+                assert!(
+                    contrast(Rgb(r, g, b), d.bg) >= 3.0,
+                    "{} {appearance:?} yellow",
+                    theme.id
+                );
             }
         }
     }
@@ -326,7 +454,10 @@ mod tests {
         assert_eq!(palette.bg, Color::Reset);
         // Ocean's colours, with plain text left to the terminal.
         let syntax = Theme::terminal().syntax(Appearance::Dark);
-        assert_eq!(syntax.style("keyword.function").and_then(|s| s.fg), Some(Color::Rgb(0xb4, 0x8e, 0xad)));
+        assert_eq!(
+            syntax.style("keyword.function").and_then(|s| s.fg),
+            Some(Color::Rgb(0xb4, 0x8e, 0xad))
+        );
         assert_eq!(syntax.style("variable"), None);
         assert_eq!(syntax.style("punctuation.bracket"), None);
     }

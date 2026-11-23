@@ -31,7 +31,11 @@ pub fn wrap_words(text: &str, width: usize) -> Vec<String> {
 /// Screen lines `len` columns of text take, hard-wrapped every `room`
 /// columns; a `room` of 0 means no wrapping.
 pub fn wrapped_height(len: usize, room: usize) -> usize {
-    if room == 0 { 1 } else { len.div_ceil(room).max(1) }
+    if room == 0 {
+        1
+    } else {
+        len.div_ceil(room).max(1)
+    }
 }
 
 #[cfg(test)]
@@ -40,7 +44,10 @@ mod tests {
 
     #[test]
     fn wraps_words_to_the_width() {
-        assert_eq!(wrap_words("Adds the organizer module", 12), ["Adds the", "organizer", "module"]);
+        assert_eq!(
+            wrap_words("Adds the organizer module", 12),
+            ["Adds the", "organizer", "module"]
+        );
         assert_eq!(wrap_words("tiny", 80), ["tiny"]);
         assert_eq!(wrap_words("  ", 10), Vec::<String>::new());
         assert_eq!(wrap_words("abcdefghij xy", 4), ["abcd", "efgh", "ij", "xy"]);

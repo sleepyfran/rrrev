@@ -20,7 +20,11 @@ pub const fn blend(a: Rgb, b: Rgb, alpha: f32) -> Rgb {
     const fn mix(a: u8, b: u8, alpha: f32) -> u8 {
         (a as f32 * alpha + b as f32 * (1.0 - alpha) + 0.5) as u8
     }
-    Rgb(mix(a.0, b.0, alpha), mix(a.1, b.1, alpha), mix(a.2, b.2, alpha))
+    Rgb(
+        mix(a.0, b.0, alpha),
+        mix(a.1, b.1, alpha),
+        mix(a.2, b.2, alpha),
+    )
 }
 
 /// `(doom-darken color alpha)`.
@@ -73,9 +77,19 @@ pub const ONE: Doom = {
     let (bg, fg, bg_alt) = (hex(0x282c34), hex(0xbbc2cf), hex(0x21242b));
     let base5 = hex(0x5B6268);
     let (red, orange, green, yellow) = (hex(0xff6c6b), hex(0xda8548), hex(0x98be65), hex(0xECBE7B));
-    let (blue, magenta, violet, cyan) = (hex(0x51afef), hex(0xc678dd), hex(0xa9a1e1), hex(0x46D9FF));
+    let (blue, magenta, violet, cyan) =
+        (hex(0x51afef), hex(0xc678dd), hex(0xa9a1e1), hex(0x46D9FF));
     Doom {
-        bg, fg, bg_alt, red, orange, green, yellow, blue, magenta, cyan,
+        bg,
+        fg,
+        bg_alt,
+        red,
+        orange,
+        green,
+        yellow,
+        blue,
+        magenta,
+        cyan,
         highlight: blue,
         region: lighten(bg_alt, 0.15),
         builtin: magenta,
@@ -100,9 +114,19 @@ pub const ONE_LIGHT: Doom = {
     let (bg, fg, bg_alt) = (hex(0xfafafa), hex(0x383a42), hex(0xf0f0f0));
     let base4 = hex(0x9ca0a4);
     let (red, orange, green, yellow) = (hex(0xe45649), hex(0xda8548), hex(0x50a14f), hex(0x986801));
-    let (blue, magenta, violet, cyan) = (hex(0x4078f2), hex(0xa626a4), hex(0xb751b6), hex(0x0184bc));
+    let (blue, magenta, violet, cyan) =
+        (hex(0x4078f2), hex(0xa626a4), hex(0xb751b6), hex(0x0184bc));
     Doom {
-        bg, fg, bg_alt, red, orange, green, yellow, blue, magenta, cyan,
+        bg,
+        fg,
+        bg_alt,
+        red,
+        orange,
+        green,
+        yellow,
+        blue,
+        magenta,
+        cyan,
         highlight: blue,
         region: darken(bg_alt, 0.1),
         builtin: magenta,
@@ -129,7 +153,16 @@ pub const NORD: Doom = {
     let (red, orange, green, yellow) = (hex(0xBF616A), hex(0xD08770), hex(0xA3BE8C), hex(0xEBCB8B));
     let (blue, magenta, cyan, teal) = (hex(0x81A1C1), hex(0xB48EAD), hex(0x88C0D0), hex(0x8FBCBB));
     Doom {
-        bg, fg, bg_alt, red, orange, green, yellow, blue, magenta, cyan,
+        bg,
+        fg,
+        bg_alt,
+        red,
+        orange,
+        green,
+        yellow,
+        blue,
+        magenta,
+        cyan,
         highlight: blue,
         region: base4,
         builtin: blue,
@@ -154,10 +187,20 @@ pub const NORD_LIGHT: Doom = {
     let (bg, fg, bg_alt) = (hex(0xE5E9F0), hex(0x3B4252), hex(0xD8DEE9));
     let (base4, base5) = (hex(0xB8C5DB), hex(0xAEBACF));
     let (red, orange, green, yellow) = (hex(0x99324B), hex(0xAC4426), hex(0x4F894C), hex(0x9A7500));
-    let (blue, magenta, violet, cyan) = (hex(0x3B6EA8), hex(0x97365B), hex(0x842879), hex(0x398EAC));
+    let (blue, magenta, violet, cyan) =
+        (hex(0x3B6EA8), hex(0x97365B), hex(0x842879), hex(0x398EAC));
     let teal = hex(0x29838D);
     Doom {
-        bg, fg, bg_alt, red, orange, green, yellow, blue, magenta, cyan,
+        bg,
+        fg,
+        bg_alt,
+        red,
+        orange,
+        green,
+        yellow,
+        blue,
+        magenta,
+        cyan,
         highlight: blend(blue, bg, 0.8),
         region: base4,
         builtin: teal,
@@ -182,9 +225,19 @@ pub const GRUVBOX: Doom = {
     let (bg, fg, bg_alt, bg_alt2) = (hex(0x282828), hex(0xebdbb2), hex(0x1d2021), hex(0x504945));
     let (fg_alt, grey) = (hex(0xd5c4a1), hex(0x928374));
     let (red, orange, green, yellow) = (hex(0xfb4934), hex(0xfe8019), hex(0xb8bb26), hex(0xfabd2f));
-    let (blue, magenta, violet, cyan) = (hex(0x83a598), hex(0xb16286), hex(0xd3869b), hex(0x8ec07c));
+    let (blue, magenta, violet, cyan) =
+        (hex(0x83a598), hex(0xb16286), hex(0xd3869b), hex(0x8ec07c));
     Doom {
-        bg, fg, bg_alt, red, orange, green, yellow, blue, magenta, cyan,
+        bg,
+        fg,
+        bg_alt,
+        red,
+        orange,
+        green,
+        yellow,
+        blue,
+        magenta,
+        cyan,
         highlight: yellow,
         region: bg_alt2,
         builtin: orange,
@@ -209,9 +262,19 @@ pub const GRUVBOX_LIGHT: Doom = {
     let (bg, fg, bg_alt) = (hex(0xfbf1c7), hex(0x282828), hex(0xf2e5bc));
     let base4 = hex(0xa89984);
     let (red, orange, green, yellow) = (hex(0x9d0006), hex(0xaf3a03), hex(0x79740e), hex(0xb57614));
-    let (blue, magenta, violet, cyan) = (hex(0x076678), hex(0xb16286), hex(0x8f3f71), hex(0x427b58));
+    let (blue, magenta, violet, cyan) =
+        (hex(0x076678), hex(0xb16286), hex(0x8f3f71), hex(0x427b58));
     Doom {
-        bg, fg, bg_alt, red, orange, green, yellow, blue, magenta, cyan,
+        bg,
+        fg,
+        bg_alt,
+        red,
+        orange,
+        green,
+        yellow,
+        blue,
+        magenta,
+        cyan,
         highlight: base4,
         region: darken(bg_alt, 0.1),
         builtin: orange,
@@ -236,10 +299,20 @@ pub const SOLARIZED_DARK: Doom = {
     let (bg, fg, bg_alt) = (hex(0x002b36), hex(0x839496), hex(0x00212B));
     let (base0, base5) = (hex(0x073642), hex(0x405A61));
     let (red, orange, green, yellow) = (hex(0xdc322f), hex(0xcb4b16), hex(0x859900), hex(0xb58900));
-    let (blue, magenta, violet, cyan) = (hex(0x268bd2), hex(0xd33682), hex(0x6c71c4), hex(0x2aa198));
+    let (blue, magenta, violet, cyan) =
+        (hex(0x268bd2), hex(0xd33682), hex(0x6c71c4), hex(0x2aa198));
     let teal = hex(0x35a69c);
     Doom {
-        bg, fg, bg_alt, red, orange, green, yellow, blue, magenta, cyan,
+        bg,
+        fg,
+        bg_alt,
+        red,
+        orange,
+        green,
+        yellow,
+        blue,
+        magenta,
+        cyan,
         highlight: blue,
         region: base0,
         builtin: blue,
@@ -264,10 +337,20 @@ pub const SOLARIZED_LIGHT: Doom = {
     let (bg, fg, bg_alt) = (hex(0xFDF6E3), hex(0x556b72), hex(0xEEE8D5));
     let base6 = hex(0x96A7A9);
     let (red, orange, green, yellow) = (hex(0xdc322f), hex(0xcb4b16), hex(0x859900), hex(0xb58900));
-    let (blue, magenta, violet, cyan) = (hex(0x268bd2), hex(0xd33682), hex(0x6c71c4), hex(0x2aa198));
+    let (blue, magenta, violet, cyan) =
+        (hex(0x268bd2), hex(0xd33682), hex(0x6c71c4), hex(0x2aa198));
     let teal = hex(0x35a69c);
     Doom {
-        bg, fg, bg_alt, red, orange, green, yellow, blue, magenta, cyan,
+        bg,
+        fg,
+        bg_alt,
+        red,
+        orange,
+        green,
+        yellow,
+        blue,
+        magenta,
+        cyan,
         highlight: blue,
         region: darken(bg_alt, 0.1),
         builtin: magenta,
@@ -292,9 +375,19 @@ pub const TOMORROW_NIGHT: Doom = {
     let (bg, fg, bg_alt) = (hex(0x1d1f21), hex(0xc5c8c6), hex(0x161719));
     let grey = hex(0x5a5b5a);
     let (red, orange, green, yellow) = (hex(0xcc6666), hex(0xde935f), hex(0xb5bd68), hex(0xf0c674));
-    let (blue, magenta, violet, cyan) = (hex(0x81a2be), hex(0xc9b4cf), hex(0xb294bb), hex(0x8abeb7));
+    let (blue, magenta, violet, cyan) =
+        (hex(0x81a2be), hex(0xc9b4cf), hex(0xb294bb), hex(0x8abeb7));
     Doom {
-        bg, fg, bg_alt, red, orange, green, yellow, blue, magenta, cyan,
+        bg,
+        fg,
+        bg_alt,
+        red,
+        orange,
+        green,
+        yellow,
+        blue,
+        magenta,
+        cyan,
         highlight: blue,
         region: lighten(bg, 0.1),
         builtin: blue,
@@ -319,9 +412,19 @@ pub const TOMORROW_DAY: Doom = {
     let (bg, fg, bg_alt) = (hex(0xffffff), hex(0x4d4d4c), hex(0xf2f2f2));
     let (base1, grey) = (hex(0xe4e4e4), hex(0x8e908c));
     let (red, orange, green, yellow) = (hex(0xc82829), hex(0xf5871f), hex(0x718c00), hex(0xeab700));
-    let (blue, magenta, violet, cyan) = (hex(0x4271ae), hex(0xc678dd), hex(0x8959a8), hex(0x8abeb7));
+    let (blue, magenta, violet, cyan) =
+        (hex(0x4271ae), hex(0xc678dd), hex(0x8959a8), hex(0x8abeb7));
     Doom {
-        bg, fg, bg_alt, red, orange, green, yellow, blue, magenta, cyan,
+        bg,
+        fg,
+        bg_alt,
+        red,
+        orange,
+        green,
+        yellow,
+        blue,
+        magenta,
+        cyan,
         highlight: blue,
         region: base1,
         builtin: blue,
@@ -354,7 +457,16 @@ const fn ocean(bg: Rgb, fg: Rgb, comments: Rgb) -> Doom {
     let (red, orange, green, yellow) = (hex(0xbf616a), hex(0xd08770), hex(0xa3be8c), hex(0xebcb8b));
     let (blue, magenta, cyan) = (hex(0x8fa1b3), hex(0xb48ead), hex(0x96b5b4));
     Doom {
-        bg, fg, bg_alt: bg, red, orange, green, yellow, blue, magenta, cyan,
+        bg,
+        fg,
+        bg_alt: bg,
+        red,
+        orange,
+        green,
+        yellow,
+        blue,
+        magenta,
+        cyan,
         highlight: blue,
         region: bg,
         builtin: cyan,

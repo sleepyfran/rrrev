@@ -27,13 +27,18 @@ impl App {
     }
 
     pub(super) fn open_theme_picker(&mut self) {
-        self.theme_picker = Some(ThemePicker { selected: self.theme.index(), original: self.theme });
+        self.theme_picker = Some(ThemePicker {
+            selected: self.theme.index(),
+            original: self.theme,
+        });
     }
 
     /// While the picker is open, motions move through it and the theme
     /// follows; anything that closes things closes it, putting the old theme back.
     pub(super) fn update_theme_picker(&mut self, action: Action) {
-        let Some(picker) = self.theme_picker else { return };
+        let Some(picker) = self.theme_picker else {
+            return;
+        };
         let last = THEMES.len() - 1;
         let selected = match action {
             Action::Down(n) => (picker.selected + n).min(last),
@@ -65,8 +70,14 @@ impl App {
             [name] => match Theme::find(name) {
                 Some(theme) => self.choose_theme(theme),
                 None => {
-                    let names: Vec<&str> = THEMES.iter().map(|t| t.id.trim_start_matches("doom-")).collect();
-                    self.message = Some(format!("error: no theme `{name}`, try: {}", names.join(" ")));
+                    let names: Vec<&str> = THEMES
+                        .iter()
+                        .map(|t| t.id.trim_start_matches("doom-"))
+                        .collect();
+                    self.message = Some(format!(
+                        "error: no theme `{name}`, try: {}",
+                        names.join(" ")
+                    ));
                 }
             },
             _ => self.message = Some("error: usage: :theme [name]".to_string()),
@@ -100,7 +111,10 @@ mod tests {
         app.update(Action::Select);
         assert_eq!(app.theme_picker, None);
         assert_eq!(app.theme, &THEMES[2]);
-        assert_eq!(app.effect.take(), Some(Effect::SaveTheme { theme: &THEMES[2] }));
+        assert_eq!(
+            app.effect.take(),
+            Some(Effect::SaveTheme { theme: &THEMES[2] })
+        );
     }
 
     #[test]
@@ -136,7 +150,12 @@ mod tests {
         assert_eq!(app.theme.id, "doom-nord");
         assert!(matches!(app.effect.take(), Some(Effect::SaveTheme { .. })));
         command(&mut app, "theme nope");
-        assert!(app.message.as_deref().unwrap().starts_with("error: no theme"));
+        assert!(
+            app.message
+                .as_deref()
+                .unwrap()
+                .starts_with("error: no theme")
+        );
         command(&mut app, "theme");
         assert!(app.theme_picker.is_some());
     }

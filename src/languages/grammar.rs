@@ -17,7 +17,10 @@ use super::Registry;
 static LOADED: OnceLock<Mutex<HashMap<String, Option<Language>>>> = OnceLock::new();
 
 fn loaded() -> std::sync::MutexGuard<'static, HashMap<String, Option<Language>>> {
-    LOADED.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner())
+    LOADED
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
 }
 
 /// The grammar for a registry language, linked in or built, loaded the
@@ -32,7 +35,9 @@ pub fn get(name: &str) -> Option<Language> {
         .entry(name.to_string())
         .or_insert_with(|| {
             let path = path(name)?;
-            path.exists().then(|| load(&path, &symbol(name))).and_then(Result::ok)
+            path.exists()
+                .then(|| load(&path, &symbol(name)))
+                .and_then(Result::ok)
         })
         .clone()
 }
@@ -49,21 +54,30 @@ pub fn forget(name: &str) {
 /// they see.
 pub fn dir() -> Option<PathBuf> {
     if cfg!(test) {
-        return Some(std::env::temp_dir().join(format!("rrrev-tests-{}/grammars", std::process::id())));
+        return Some(
+            std::env::temp_dir().join(format!("rrrev-tests-{}/grammars", std::process::id())),
+        );
     }
     Some(super::data_home()?.join("rrrev/grammars"))
 }
 
 /// Where a language's grammar is built to.
 pub fn path(name: &str) -> Option<PathBuf> {
-    let extension = if cfg!(target_os = "macos") { "dylib" } else { "so" };
+    let extension = if cfg!(target_os = "macos") {
+        "dylib"
+    } else {
+        "so"
+    };
     Some(dir()?.join(format!("{name}.{extension}")))
 }
 
 /// The name in a grammar's `tree_sitter_<symbol>` entry point.
 pub fn symbol(name: &str) -> String {
     let registry = Registry::global();
-    registry.get(name).and_then(|l| l.grammar.as_ref()?.symbol.clone()).unwrap_or_else(|| name.to_string())
+    registry
+        .get(name)
+        .and_then(|l| l.grammar.as_ref()?.symbol.clone())
+        .unwrap_or_else(|| name.to_string())
 }
 
 /// Loads a built grammar and checks this tree-sitter can use it. The
@@ -72,7 +86,8 @@ pub fn load(path: &Path, symbol: &str) -> Result<Language> {
     // SAFETY: the library is a tree-sitter grammar rrrev built itself, and
     // its entry point takes nothing and returns a `TSLanguage` pointer.
     let language = unsafe {
-        let library = libloading::Library::new(path).with_context(|| format!("cannot load {}", path.display()))?;
+        let library = libloading::Library::new(path)
+            .with_context(|| format!("cannot load {}", path.display()))?;
         let entry: unsafe extern "C" fn() -> *const () = *library
             .get(format!("tree_sitter_{symbol}").as_bytes())
             .with_context(|| format!("{} has no tree_sitter_{symbol}", path.display()))?;
@@ -82,7 +97,8 @@ pub fn load(path: &Path, symbol: &str) -> Result<Language> {
     };
     let abi = language.abi_version();
     anyhow::ensure!(
-        (tree_sitter::MIN_COMPATIBLE_LANGUAGE_VERSION..=tree_sitter::LANGUAGE_VERSION).contains(&abi),
+        (tree_sitter::MIN_COMPATIBLE_LANGUAGE_VERSION..=tree_sitter::LANGUAGE_VERSION)
+            .contains(&abi),
         "{} was made for tree-sitter ABI {abi}, this rrrev reads {} to {}",
         path.display(),
         tree_sitter::MIN_COMPATIBLE_LANGUAGE_VERSION,

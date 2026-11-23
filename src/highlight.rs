@@ -77,8 +77,10 @@ impl Highlighter {
     pub fn forget(&mut self, diff: &Diff, language: &str) {
         let registry = Registry::global();
         let is = |path: &str| registry.for_path(path).is_some_and(|l| l.name == language);
-        self.cache.retain(|(file, _), _| !is(diff.files[*file].path()));
-        self.sources.retain(|(file, _), _| !is(diff.files[*file].path()));
+        self.cache
+            .retain(|(file, _), _| !is(diff.files[*file].path()));
+        self.sources
+            .retain(|(file, _), _| !is(diff.files[*file].path()));
         self.files.retain(|(path, _), _| !is(path));
         self.snippets.retain(|(name, _), _| name != language);
     }
@@ -86,7 +88,11 @@ impl Highlighter {
     /// The tint behind words that changed within a changed line.
     pub fn emphasis(&self, kind: LineKind) -> Style {
         if let Some((added, removed)) = self.tints {
-            return Style::new().bg(if kind == LineKind::Removed { removed } else { added });
+            return Style::new().bg(if kind == LineKind::Removed {
+                removed
+            } else {
+                added
+            });
         }
         let bg = match (self.appearance, kind) {
             (Appearance::Dark, LineKind::Removed) => Color::Rgb(110, 38, 44),
@@ -108,11 +114,24 @@ impl Highlighter {
 
     /// The segments of line `index` (0-based) of a file shown whole, as
     /// `source_line` does for context; `old` tells the two sides of a file apart.
-    pub fn file_line(&mut self, path: &str, old: bool, source: &[String], index: usize) -> &[Segment] {
+    pub fn file_line(
+        &mut self,
+        path: &str,
+        old: bool,
+        source: &[String],
+        index: usize,
+    ) -> &[Segment] {
         let syntax = &self.syntax;
-        let lines = self.files.entry((path.to_string(), old)).or_insert_with(|| {
-            if source.len() <= MAX_SOURCE_LINES { highlight(syntax, path, source).unwrap_or_default() } else { Vec::new() }
-        });
+        let lines = self
+            .files
+            .entry((path.to_string(), old))
+            .or_insert_with(|| {
+                if source.len() <= MAX_SOURCE_LINES {
+                    highlight(syntax, path, source).unwrap_or_default()
+                } else {
+                    Vec::new()
+                }
+            });
         lines.get(index).map_or(&[], Vec::as_slice)
     }
 
@@ -122,7 +141,10 @@ impl Highlighter {
     pub fn snippet(&mut self, tag: &str, lines: &[String]) -> Vec<Vec<Segment>> {
         let registry = Registry::global();
         let tag = tag.to_ascii_lowercase();
-        let Some(language) = registry.get(&tag).or_else(|| registry.for_path(&format!("snippet.{tag}"))) else {
+        let Some(language) = registry
+            .get(&tag)
+            .or_else(|| registry.for_path(&format!("snippet.{tag}")))
+        else {
             return Vec::new();
         };
         let path = match (language.extensions.first(), language.filenames.first()) {
@@ -190,8 +212,9 @@ impl Highlighter {
                 Side::Old => kind != LineKind::Added,
                 Side::New => kind != LineKind::Removed,
             };
-            let picked: Vec<usize> =
-                (0..h.lines.len()).filter(|&i| h.lines[i].kind != LineKind::NoNewline && on_side(h.lines[i].kind)).collect();
+            let picked: Vec<usize> = (0..h.lines.len())
+                .filter(|&i| h.lines[i].kind != LineKind::NoNewline && on_side(h.lines[i].kind))
+                .collect();
             let text: Vec<String> = picked.iter().map(|&i| h.lines[i].content.clone()).collect();
             let lines = highlight(&self.syntax, path, &text)?;
             Some(picked.into_iter().zip(lines).collect())
@@ -207,7 +230,9 @@ impl Highlighter {
                 };
                 match from_fragment {
                     Some(lines) => lines.remove(&i).unwrap_or_default(),
-                    None => no.map_or_else(Vec::new, |no| self.side_line(diff, file, side, no).to_vec()),
+                    None => {
+                        no.map_or_else(Vec::new, |no| self.side_line(diff, file, side, no).to_vec())
+                    }
                 }
             })
             .collect()
@@ -227,16 +252,24 @@ fn highlight(syntax: &Syntax, path: &str, lines: &[String]) -> Option<Vec<Vec<Se
     let tree = parser.parse(&text, None)?;
 
     // The styles captures map to; captures without one leave text alone.
-    let styles: Vec<Option<Style>> = query.capture_names().iter().map(|n| syntax.style(n)).collect();
+    let styles: Vec<Option<Style>> = query
+        .capture_names()
+        .iter()
+        .map(|n| syntax.style(n))
+        .collect();
     // Per node, the last pattern that styles it wins.
     let mut nodes: HashMap<usize, (Range<usize>, usize, Style)> = HashMap::new();
     let mut cursor = QueryCursor::new();
     let mut captures = cursor.captures(query, tree.root_node(), text.as_bytes());
     while let Some((m, i)) = captures.next() {
         let capture = m.captures()[*i];
-        let Some(style) = styles[capture.index as usize] else { continue };
+        let Some(style) = styles[capture.index as usize] else {
+            continue;
+        };
         let node = capture.node;
-        let entry = nodes.entry(node.id()).or_insert((node.byte_range(), m.pattern_index, style));
+        let entry = nodes
+            .entry(node.id())
+            .or_insert((node.byte_range(), m.pattern_index, style));
         if m.pattern_index >= entry.1 {
             *entry = (node.byte_range(), m.pattern_index, style);
         }
@@ -293,7 +326,12 @@ mod tests {
             .enumerate()
             .map(|(i, (kind, content))| {
                 let no = Some(i as u32 + 10);
-                DiffLine { kind: *kind, old_no: no, new_no: no, content: content.to_string() }
+                DiffLine {
+                    kind: *kind,
+                    old_no: no,
+                    new_no: no,
+                    content: content.to_string(),
+                }
             })
             .collect();
         let hunk = Hunk {
@@ -330,26 +368,55 @@ mod tests {
 
     #[test]
     fn knows_the_languages_with_a_grammar() {
-        for path in ["web/app.ts", "web/App.tsx", "web/app.js", "a.py", "a.go", "a.lua"] {
+        for path in [
+            "web/app.ts",
+            "web/App.tsx",
+            "web/app.js",
+            "a.py",
+            "a.go",
+            "a.lua",
+        ] {
             let diff = diff(path, &[(LineKind::Added, "const a = 1")]);
             let mut highlighter = Highlighter::new(Theme::terminal(), Appearance::Dark);
-            assert!(highlighter.line(&diff, 0, 0, 0).iter().any(|(s, _)| s.fg.is_some()), "{path}");
+            assert!(
+                highlighter
+                    .line(&diff, 0, 0, 0)
+                    .iter()
+                    .any(|(s, _)| s.fg.is_some()),
+                "{path}"
+            );
         }
         // No grammar for TOML yet, so it's plain.
         let diff = diff("Cargo.toml", &[(LineKind::Added, "a = 1")]);
-        assert!(Highlighter::new(Theme::terminal(), Appearance::Dark).line(&diff, 0, 0, 0).is_empty());
+        assert!(
+            Highlighter::new(Theme::terminal(), Appearance::Dark)
+                .line(&diff, 0, 0, 0)
+                .is_empty()
+        );
     }
 
     #[test]
     fn light_theme_is_readable_on_white() {
-        let diff = diff("a.rs", &[(LineKind::Added, "fn main() { let s = \"x\"; } // done")]);
+        let diff = diff(
+            "a.rs",
+            &[(LineKind::Added, "fn main() { let s = \"x\"; } // done")],
+        );
         let mut highlighter = Highlighter::new(Theme::terminal(), Appearance::Light);
-        let colors: Vec<_> = highlighter.line(&diff, 0, 0, 0).iter().filter_map(|(style, _)| style.fg).collect();
+        let colors: Vec<_> = highlighter
+            .line(&diff, 0, 0, 0)
+            .iter()
+            .filter_map(|(style, _)| style.fg)
+            .collect();
         assert!(colors.len() > 1);
         for color in colors {
-            let Color::Rgb(r, g, b) = color else { panic!("{color:?}") };
+            let Color::Rgb(r, g, b) = color else {
+                panic!("{color:?}")
+            };
             let white = crate::theme::doom::Rgb(255, 255, 255);
-            assert!(crate::theme::contrast(crate::theme::doom::Rgb(r, g, b), white) >= 4.5, "{color:?}");
+            assert!(
+                crate::theme::contrast(crate::theme::doom::Rgb(r, g, b), white) >= 4.5,
+                "{color:?}"
+            );
         }
     }
 
@@ -359,13 +426,25 @@ mod tests {
         let mut diff = diff("a.rs", &[(LineKind::Added, "x")]);
         diff.sources = vec![Sources {
             old: None,
-            new: Some(std::sync::Arc::new(vec!["/*".into(), "fn a() {}".into(), "*/".into(), String::new()])),
+            new: Some(std::sync::Arc::new(vec![
+                "/*".into(),
+                "fn a() {}".into(),
+                "*/".into(),
+                String::new(),
+            ])),
         }];
         let mut highlighter = Highlighter::new(Theme::terminal(), Appearance::Dark);
         assert_eq!(text(highlighter.source_line(&diff, 0, 2)), "fn a() {}");
         // Line 2 is inside the comment line 1 opened.
         let inside = highlighter.source_line(&diff, 0, 2).to_vec();
-        let plain = Highlighter::new(Theme::terminal(), Appearance::Dark).line(&super::tests::diff("a.rs", &[(LineKind::Added, "fn a() {}")]), 0, 0, 0).to_vec();
+        let plain = Highlighter::new(Theme::terminal(), Appearance::Dark)
+            .line(
+                &super::tests::diff("a.rs", &[(LineKind::Added, "fn a() {}")]),
+                0,
+                0,
+                0,
+            )
+            .to_vec();
         assert_ne!(inside, plain);
         assert!(highlighter.source_line(&diff, 0, 0).is_empty());
         assert!(highlighter.source_line(&diff, 0, 4).is_empty());
@@ -385,8 +464,14 @@ mod tests {
         // doom-one's keywords are its blue; doom-one-light's its red.
         assert_eq!(after[0].0.fg, Some(Color::Rgb(0x51, 0xaf, 0xef)));
         highlighter.set_theme(one, Appearance::Light);
-        assert_eq!(highlighter.line(&diff, 0, 0, 0)[0].0.fg, Some(Color::Rgb(0xe4, 0x56, 0x49)));
-        assert_ne!(highlighter.emphasis(LineKind::Added), Highlighter::new(Theme::terminal(), Appearance::Dark).emphasis(LineKind::Added));
+        assert_eq!(
+            highlighter.line(&diff, 0, 0, 0)[0].0.fg,
+            Some(Color::Rgb(0xe4, 0x56, 0x49))
+        );
+        assert_ne!(
+            highlighter.emphasis(LineKind::Added),
+            Highlighter::new(Theme::terminal(), Appearance::Dark).emphasis(LineKind::Added)
+        );
     }
 
     #[test]
@@ -398,7 +483,14 @@ mod tests {
         highlighter.file_line("b.py", false, &["def b(): pass".into()], 0);
         highlighter.forget(&rust, "rust");
         assert!(highlighter.cache.is_empty());
-        assert_eq!(highlighter.files.keys().map(|(p, _)| p.as_str()).collect::<Vec<_>>(), ["b.py"]);
+        assert_eq!(
+            highlighter
+                .files
+                .keys()
+                .map(|(p, _)| p.as_str())
+                .collect::<Vec<_>>(),
+            ["b.py"]
+        );
         highlighter.forget(&rust, "python");
         assert!(highlighter.files.is_empty());
     }
@@ -406,7 +498,11 @@ mod tests {
     #[test]
     fn leaves_unknown_files_plain() {
         let diff = diff("notes.unknownext", &[(LineKind::Added, "fn main() {}")]);
-        assert!(Highlighter::new(Theme::terminal(), Appearance::Dark).line(&diff, 0, 0, 0).is_empty());
+        assert!(
+            Highlighter::new(Theme::terminal(), Appearance::Dark)
+                .line(&diff, 0, 0, 0)
+                .is_empty()
+        );
     }
 
     #[test]
@@ -426,6 +522,9 @@ mod tests {
         let added = highlighter.line(&diff, 0, 0, 2).to_vec();
         // Both sides are inside the comment the context line opened.
         assert_eq!(removed, added);
-        assert_ne!(added, Highlighter::new(Theme::terminal(), Appearance::Dark).line(&plain, 0, 0, 0));
+        assert_ne!(
+            added,
+            Highlighter::new(Theme::terminal(), Appearance::Dark).line(&plain, 0, 0, 0)
+        );
     }
 }

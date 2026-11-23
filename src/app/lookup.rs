@@ -15,7 +15,10 @@ pub struct Reference {
 impl Reference {
     /// Its line's code, trimmed, for the list.
     pub fn code(&self) -> &str {
-        self.target.lines.get(self.target.line).map_or("", |l| l.trim())
+        self.target
+            .lines
+            .get(self.target.line)
+            .map_or("", |l| l.trim())
     }
 }
 
@@ -33,7 +36,10 @@ pub struct ReferencesMenu {
 impl ReferencesMenu {
     /// The entries listed, after the filter.
     pub fn shown(&self) -> Vec<&Reference> {
-        self.references.iter().filter(|r| !self.only_in_diff || r.in_diff.is_some()).collect()
+        self.references
+            .iter()
+            .filter(|r| !self.only_in_diff || r.in_diff.is_some())
+            .collect()
     }
 }
 
@@ -73,16 +79,31 @@ impl App {
             self.message = Some("No references found".to_string());
             return;
         }
-        let references: Vec<Reference> =
-            targets.into_iter().map(|target| Reference { in_diff: self.shown_at(&target), target }).collect();
-        let selected = references.iter().position(|r| r.in_diff.is_some()).unwrap_or(0);
-        self.references = Some(ReferencesMenu { references, selected, only_in_diff: false, note: note.map(str::to_string) });
+        let references: Vec<Reference> = targets
+            .into_iter()
+            .map(|target| Reference {
+                in_diff: self.shown_at(&target),
+                target,
+            })
+            .collect();
+        let selected = references
+            .iter()
+            .position(|r| r.in_diff.is_some())
+            .unwrap_or(0);
+        self.references = Some(ReferencesMenu {
+            references,
+            selected,
+            only_in_diff: false,
+            note: note.map(str::to_string),
+        });
     }
 
     /// While the list is open: motions move through it, Enter goes to the
     /// reference, Tab shows only those in the diff, Esc closes it.
     pub(super) fn update_references(&mut self, action: Action) {
-        let Some(menu) = self.references.as_mut() else { return };
+        let Some(menu) = self.references.as_mut() else {
+            return;
+        };
         let last = menu.shown().len().saturating_sub(1);
         match action {
             Action::Down(n) => menu.selected = menu.selected.saturating_add(n).min(last),
@@ -92,13 +113,18 @@ impl App {
             Action::Top => menu.selected = 0,
             Action::Bottom => menu.selected = last,
             Action::ToggleFocus => {
-                let current = menu.shown().get(menu.selected).map(|r| (r.target.path.clone(), r.target.line));
+                let current = menu
+                    .shown()
+                    .get(menu.selected)
+                    .map(|r| (r.target.path.clone(), r.target.line));
                 menu.only_in_diff = !menu.only_in_diff;
                 let shown = menu.shown();
                 let (empty, at) = (
                     shown.is_empty(),
                     current.and_then(|(path, line)| {
-                        shown.iter().position(|r| r.target.path == path && r.target.line == line)
+                        shown
+                            .iter()
+                            .position(|r| r.target.path == path && r.target.line == line)
                     }),
                 );
                 menu.selected = at.unwrap_or(0);
@@ -125,7 +151,9 @@ impl App {
     pub fn finish_hover(&mut self, text: Result<String, String>, note: Option<&str>) {
         match text {
             Err(e) => self.message = Some(format!("error: {e}")),
-            Ok(text) if text.trim().is_empty() => self.message = Some("Nothing to say about this".to_string()),
+            Ok(text) if text.trim().is_empty() => {
+                self.message = Some("Nothing to say about this".to_string())
+            }
             Ok(text) => {
                 let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
                 if let Some(note) = note {
@@ -139,7 +167,9 @@ impl App {
 
     /// While the hover box is open: j/k scroll it, anything else closes it.
     pub(super) fn update_hover(&mut self, action: Action) {
-        let Some(hover) = self.hover.as_mut() else { return };
+        let Some(hover) = self.hover.as_mut() else {
+            return;
+        };
         let last = hover.lines.len().saturating_sub(1);
         match action {
             Action::Down(n) => hover.scroll = hover.scroll.saturating_add(n).min(last),
@@ -159,8 +189,17 @@ pub fn hover_text(result: &serde_json::Value) -> String {
     fn part(value: &Value) -> String {
         match value {
             Value::String(s) => s.clone(),
-            Value::Object(o) => o.get("value").and_then(Value::as_str).unwrap_or("").to_string(),
-            Value::Array(items) => items.iter().map(part).filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\n\n"),
+            Value::Object(o) => o
+                .get("value")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            Value::Array(items) => items
+                .iter()
+                .map(part)
+                .filter(|p| !p.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n\n"),
             _ => String::new(),
         }
     }
@@ -184,7 +223,12 @@ mod tests {
     use serde_json::json;
 
     fn target(path: &str, line: usize, lines: &[&str]) -> Target {
-        Target { path: path.into(), line, column: 0, lines: Arc::new(lines.iter().map(|l| l.to_string()).collect()) }
+        Target {
+            path: path.into(),
+            line,
+            column: 0,
+            lines: Arc::new(lines.iter().map(|l| l.to_string()).collect()),
+        }
     }
 
     /// A target on the first new-side line the sample's diff shows.
@@ -193,14 +237,22 @@ mod tests {
             .find_map(|i| match app.rows[i] {
                 Row::Line { file, hunk, line } => {
                     let l = app.line(file, hunk, line);
-                    (l.kind != crate::diff::LineKind::Removed).then_some(l.new_no).flatten().map(|n| (file, n))
+                    (l.kind != crate::diff::LineKind::Removed)
+                        .then_some(l.new_no)
+                        .flatten()
+                        .map(|n| (file, n))
                 }
                 _ => None,
             })
             .unwrap();
         let path = app.diff.files[file].new_path.clone().unwrap();
         let lines: Vec<String> = (0..no).map(|i| format!("line {i}")).collect();
-        Target { path, line: no as usize - 1, column: 0, lines: Arc::new(lines) }
+        Target {
+            path,
+            line: no as usize - 1,
+            column: 0,
+            lines: Arc::new(lines),
+        }
     }
 
     #[test]
@@ -243,7 +295,10 @@ mod tests {
     fn shows_hovers_and_closes_on_any_other_key() {
         let mut app = sample_app();
         app.finish_hover(Ok("fn a()\n\nDocs".into()), Some("may be off"));
-        assert_eq!(app.hover.as_ref().unwrap().lines, ["fn a()", "", "Docs", "", "(may be off)"]);
+        assert_eq!(
+            app.hover.as_ref().unwrap().lines,
+            ["fn a()", "", "Docs", "", "(may be off)"]
+        );
         app.update(Action::Down(2));
         assert_eq!(app.hover.as_ref().unwrap().scroll, 2);
         app.update(Action::Cancel);

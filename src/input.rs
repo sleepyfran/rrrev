@@ -48,7 +48,9 @@ impl TextInput {
             InputAction::Insert(c) => self.insert(c),
             InputAction::Newline => self.insert('\n'),
             InputAction::Backspace if self.cursor > 0 => self.remove(self.cursor - 1..self.cursor),
-            InputAction::Delete if self.cursor < self.len() => self.remove(self.cursor..self.cursor + 1),
+            InputAction::Delete if self.cursor < self.len() => {
+                self.remove(self.cursor..self.cursor + 1)
+            }
             InputAction::Left => self.cursor = self.cursor.saturating_sub(1),
             InputAction::Right => self.cursor = (self.cursor + 1).min(self.len()),
             InputAction::Home => self.cursor = self.line_start(),
@@ -58,8 +60,16 @@ impl TextInput {
             }
             InputAction::DeleteWord => {
                 let before: Vec<char> = self.text.chars().take(self.cursor).collect();
-                let spaces = before.iter().rev().take_while(|c| c.is_whitespace() && **c != '\n').count();
-                let word = before[..before.len() - spaces].iter().rev().take_while(|c| !c.is_whitespace()).count();
+                let spaces = before
+                    .iter()
+                    .rev()
+                    .take_while(|c| c.is_whitespace() && **c != '\n')
+                    .count();
+                let word = before[..before.len() - spaces]
+                    .iter()
+                    .rev()
+                    .take_while(|c| !c.is_whitespace())
+                    .count();
                 self.remove(self.cursor - spaces - word..self.cursor);
             }
             InputAction::ClearToStart => self.remove(self.line_start()..self.cursor),
@@ -72,7 +82,10 @@ impl TextInput {
     }
 
     fn byte_index(&self, chars: usize) -> usize {
-        self.text.char_indices().nth(chars).map_or(self.text.len(), |(i, _)| i)
+        self.text
+            .char_indices()
+            .nth(chars)
+            .map_or(self.text.len(), |(i, _)| i)
     }
 
     fn line_start(&self) -> usize {
@@ -113,7 +126,19 @@ mod tests {
     fn inserts_and_deletes_around_the_cursor() {
         let mut input = TextInput::default();
         apply(&mut input, &typed("héllo"));
-        apply(&mut input, &[Left, Left, Backspace, Insert('L'), End, Backspace, Home, Delete]);
+        apply(
+            &mut input,
+            &[
+                Left,
+                Left,
+                Backspace,
+                Insert('L'),
+                End,
+                Backspace,
+                Home,
+                Delete,
+            ],
+        );
         assert_eq!(input.text(), "éLl");
         assert_eq!(input.cursor(), 0);
     }

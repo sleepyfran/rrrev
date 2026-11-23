@@ -23,7 +23,9 @@ const PROGRAMS: &[(&str, &[&str], Option<&str>)] = &[
 
 pub fn copy(text: &str) -> Result<()> {
     if !over_ssh() {
-        let usable = PROGRAMS.iter().filter(|(_, _, var)| var.is_none_or(|v| env::var_os(v).is_some()));
+        let usable = PROGRAMS
+            .iter()
+            .filter(|(_, _, var)| var.is_none_or(|v| env::var_os(v).is_some()));
         for (program, args, _) in usable {
             if run(program, args, text).is_ok() {
                 return Ok(());
@@ -70,7 +72,10 @@ fn base64(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
-        let n = chunk.iter().enumerate().fold(0u32, |n, (i, &b)| n | (u32::from(b) << (16 - 8 * i)));
+        let n = chunk
+            .iter()
+            .enumerate()
+            .fold(0u32, |n, (i, &b)| n | (u32::from(b) << (16 - 8 * i)));
         for i in 0..4 {
             if i <= chunk.len() {
                 out.push(ALPHABET[(n >> (18 - 6 * i)) as usize & 63] as char);

@@ -27,8 +27,12 @@ pub fn dir() -> Option<PathBuf> {
 /// config file's, then the terminal's colours. Its dark or light variant
 /// is the OS's call.
 pub fn theme() -> &'static Theme {
-    let from_env = std::env::var("RRREV_THEME").ok().and_then(|name| Theme::find(&name));
-    from_env.or_else(|| path().and_then(|p| saved_theme(&p))).unwrap_or_else(Theme::terminal)
+    let from_env = std::env::var("RRREV_THEME")
+        .ok()
+        .and_then(|name| Theme::find(&name));
+    from_env
+        .or_else(|| path().and_then(|p| saved_theme(&p)))
+        .unwrap_or_else(Theme::terminal)
 }
 
 fn saved_theme(path: &Path) -> Option<&'static Theme> {

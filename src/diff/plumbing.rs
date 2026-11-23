@@ -51,7 +51,12 @@ mod tests {
     fn plumbing(path: &str, text: &str) -> Vec<usize> {
         let source: Vec<String> = text.lines().map(str::to_string).collect();
         let lines = lines(path, &source).expect("a grammar for this file");
-        lines.iter().enumerate().filter(|(_, p)| **p).map(|(i, _)| i + 1).collect()
+        lines
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| **p)
+            .map(|(i, _)| i + 1)
+            .collect()
     }
 
     #[test]
@@ -102,21 +107,63 @@ export default a;
 ";
         assert_eq!(plumbing("a.ts", text), [1, 2, 3, 4, 5]);
         assert_eq!(plumbing("a.tsx", text), [1, 2, 3, 4, 5]);
-        assert_eq!(plumbing("a.js", "import a from \"a\";\nexport { a };\na();\n"), [1, 2]);
+        assert_eq!(
+            plumbing("a.js", "import a from \"a\";\nexport { a };\na();\n"),
+            [1, 2]
+        );
     }
 
     #[test]
     fn the_other_languages() {
-        assert_eq!(plumbing("a.go", "package a\n\nimport (\n\t\"fmt\"\n)\n\nfunc f() {}\n"), [1, 3, 4, 5]);
-        assert_eq!(plumbing("A.java", "package a;\nimport b.C;\nclass A {}\n"), [1, 2]);
-        assert_eq!(plumbing("a.c", "#include <stdio.h>\n#include \"a.h\"\nint x;\n"), [1, 2]);
-        assert_eq!(plumbing("a.cpp", "#include <vector>\nusing std::vector;\nint x;\n"), [1, 2]);
-        assert_eq!(plumbing("A.cs", "using System;\nusing static B.C;\nclass A {}\n"), [1, 2]);
-        assert_eq!(plumbing("a.rb", "require \"json\"\nrequire_relative \"b\"\nfoo.require \"x\"\nputs 1\n"), [1, 2]);
+        assert_eq!(
+            plumbing(
+                "a.go",
+                "package a\n\nimport (\n\t\"fmt\"\n)\n\nfunc f() {}\n"
+            ),
+            [1, 3, 4, 5]
+        );
+        assert_eq!(
+            plumbing("A.java", "package a;\nimport b.C;\nclass A {}\n"),
+            [1, 2]
+        );
+        assert_eq!(
+            plumbing("a.c", "#include <stdio.h>\n#include \"a.h\"\nint x;\n"),
+            [1, 2]
+        );
+        assert_eq!(
+            plumbing("a.cpp", "#include <vector>\nusing std::vector;\nint x;\n"),
+            [1, 2]
+        );
+        assert_eq!(
+            plumbing("A.cs", "using System;\nusing static B.C;\nclass A {}\n"),
+            [1, 2]
+        );
+        assert_eq!(
+            plumbing(
+                "a.rb",
+                "require \"json\"\nrequire_relative \"b\"\nfoo.require \"x\"\nputs 1\n"
+            ),
+            [1, 2]
+        );
         assert_eq!(plumbing("a.swift", "import Foundation\nlet a = 1\n"), [1]);
-        assert_eq!(plumbing("A.kt", "package a\n\nimport b.C\nimport d.*\n\nfun f() {}\n"), [1, 3, 4]);
-        assert_eq!(plumbing("a.lua", "local a = require(\"a\")\nlocal b = 1\nlocal c = f(require(\"c\"))\n"), [1]);
-        assert_eq!(plumbing("A.fs", "module A\n\nopen System\nopen B.C\n\nlet a = 1\n"), [3, 4]);
+        assert_eq!(
+            plumbing(
+                "A.kt",
+                "package a\n\nimport b.C\nimport d.*\n\nfun f() {}\n"
+            ),
+            [1, 3, 4]
+        );
+        assert_eq!(
+            plumbing(
+                "a.lua",
+                "local a = require(\"a\")\nlocal b = 1\nlocal c = f(require(\"c\"))\n"
+            ),
+            [1]
+        );
+        assert_eq!(
+            plumbing("A.fs", "module A\n\nopen System\nopen B.C\n\nlet a = 1\n"),
+            [3, 4]
+        );
     }
 
     #[test]

@@ -45,7 +45,12 @@ struct Tween {
 
 impl Tween {
     fn new(from: f32, to: f32, duration: Duration, now: Instant) -> Self {
-        Self { from, to, start: now, duration }
+        Self {
+            from,
+            to,
+            start: now,
+            duration,
+        }
     }
 
     fn progress(&self, now: Instant) -> f32 {
@@ -99,9 +104,7 @@ impl Popup {
             | Popup::References
             | Popup::Hover
             | Popup::Language
-            | Popup::Confirm => {
-                Anchor::Center
-            },
+            | Popup::Confirm => Anchor::Center,
         }
     }
 }
@@ -123,7 +126,8 @@ struct PopupState {
 
 impl PopupState {
     fn openness(&self, now: Instant) -> f32 {
-        self.tween.map_or(if self.open { 1.0 } else { 0.0 }, |t| t.value(now))
+        self.tween
+            .map_or(if self.open { 1.0 } else { 0.0 }, |t| t.value(now))
     }
 }
 
@@ -138,7 +142,8 @@ pub struct Unroll {
 
 impl Unroll {
     fn new(full: Rect, anchor: Anchor, openness: f32) -> Self {
-        let height = ((full.height as f32 * openness).round() as u16).clamp(full.height.min(2), full.height);
+        let height =
+            ((full.height as f32 * openness).round() as u16).clamp(full.height.min(2), full.height);
         let top = match anchor {
             Anchor::Center => full.y + (full.height - height) / 2,
             Anchor::Bottom => full.bottom() - height,
@@ -208,7 +213,8 @@ impl Animator {
     }
 
     pub fn from_env() -> Self {
-        let off = std::env::var("RRREV_ANIMATIONS").is_ok_and(|v| matches!(v.as_str(), "off" | "0" | "false"));
+        let off = std::env::var("RRREV_ANIMATIONS")
+            .is_ok_and(|v| matches!(v.as_str(), "off" | "0" | "false"));
         Self::new(!off)
     }
 
@@ -231,7 +237,11 @@ impl Animator {
             && old != page
         {
             // Onward comes in from the right, back from the left.
-            let from = if old.0 == page.0 && page.1 < old.1 { -SLIDE_COLUMNS } else { SLIDE_COLUMNS };
+            let from = if old.0 == page.0 && page.1 < old.1 {
+                -SLIDE_COLUMNS
+            } else {
+                SLIDE_COLUMNS
+            };
             self.slide = Some(Tween::new(from, 0.0, SLIDE, self.now));
         }
 
@@ -240,7 +250,11 @@ impl Animator {
             .files
             .iter()
             .enumerate()
-            .map(|(f, file)| (0..file.hunks.len()).map(|h| app.is_reviewed(f, h)).collect())
+            .map(|(f, file)| {
+                (0..file.hunks.len())
+                    .map(|h| app.is_reviewed(f, h))
+                    .collect()
+            })
             .collect();
         if let Some(old) = self.reviewed.replace(reviewed) {
             let new = self.reviewed.as_ref().expect("just set");
@@ -249,11 +263,18 @@ impl Animator {
                 .zip(&old)
                 .enumerate()
                 .flat_map(|(f, (now, was))| {
-                    now.iter().zip(was).enumerate().filter(|(_, (n, w))| **n && !**w).map(move |(h, _)| (f, h))
+                    now.iter()
+                        .zip(was)
+                        .enumerate()
+                        .filter(|(_, (n, w))| **n && !**w)
+                        .map(move |(h, _)| (f, h))
                 })
                 .collect();
             if !hunks.is_empty() {
-                self.glints.push(Glint { hunks, start: self.now });
+                self.glints.push(Glint {
+                    hunks,
+                    start: self.now,
+                });
                 if app.progress().is_complete() {
                     self.completed = Some(self.now);
                 }
@@ -261,7 +282,9 @@ impl Animator {
         }
         let now = self.now;
         self.glints.retain(|g| progress(g.start, GLINT, now) < 1.0);
-        self.completed = self.completed.filter(|&start| progress(start, GLINT, now) < 1.0);
+        self.completed = self
+            .completed
+            .filter(|&start| progress(start, GLINT, now) < 1.0);
         self.busy |= !self.glints.is_empty() || self.completed.is_some();
     }
 
@@ -279,7 +302,8 @@ impl Animator {
             self.scroll = None;
         } else if target != self.scroll_target {
             let far = (target as f32 - shown).abs() >= MIN_SMOOTH_SCROLL;
-            self.scroll = (far || moving.is_some()).then(|| Tween::new(shown, target as f32, SCROLL, self.now));
+            self.scroll = (far || moving.is_some())
+                .then(|| Tween::new(shown, target as f32, SCROLL, self.now));
         }
         self.scroll_target = target;
         match self.scroll.filter(|t| !t.done(self.now)) {
@@ -309,7 +333,13 @@ impl Animator {
     /// where it was drawn this frame, none once the app has closed it, and
     /// `under` the frame from before it was drawn (blank if none). Returns
     /// where its rows are shown while it moves.
-    pub fn popup(&mut self, buf: &mut Buffer, popup: Popup, drawn: Option<Rect>, under: Option<&Buffer>) -> Option<Unroll> {
+    pub fn popup(
+        &mut self,
+        buf: &mut Buffer,
+        popup: Popup,
+        drawn: Option<Rect>,
+        under: Option<&Buffer>,
+    ) -> Option<Unroll> {
         if !self.enabled {
             return None;
         }
@@ -360,9 +390,7 @@ impl Animator {
                     Row::Hunk { file, hunk }
                     | Row::Line { file, hunk, .. }
                     | Row::Context { file, hunk, .. }
-                    | Row::Plumbing { file, hunk, .. } => {
-                        glint.hunks.contains(&(file, hunk))
-                    }
+                    | Row::Plumbing { file, hunk, .. } => glint.hunks.contains(&(file, hunk)),
                     Row::Group { .. } | Row::Comment { .. } | Row::Note { .. } => false,
                 };
                 if hit {
@@ -380,7 +408,10 @@ impl Animator {
             for &(idx, rect) in entries {
                 let hit = match app.view {
                     View::Files => glint.hunks.iter().any(|&(f, _)| f == idx),
-                    View::Plan | View::Stack => app.pages()[idx].hunks.iter().any(|h| glint.hunks.contains(h)),
+                    View::Plan | View::Stack => app.pages()[idx]
+                        .hunks
+                        .iter()
+                        .any(|h| glint.hunks.contains(h)),
                 };
                 if hit {
                     sweep(buf, rect, t, self.glint_colors);
@@ -392,7 +423,12 @@ impl Animator {
     /// Sweeps across the title bar when the last hunk gets reviewed.
     pub fn glint_title(&self, buf: &mut Buffer, area: Rect) {
         if let Some(start) = self.completed {
-            sweep(buf, area, progress(start, GLINT, self.now), self.glint_colors);
+            sweep(
+                buf,
+                area,
+                progress(start, GLINT, self.now),
+                self.glint_colors,
+            );
         }
     }
 }
@@ -414,7 +450,10 @@ fn restore(buf: &mut Buffer, area: Rect, under: Option<&Buffer>) {
     for y in area.top()..area.bottom() {
         for x in area.left()..area.right() {
             if let Some(cell) = buf.cell_mut((x, y)) {
-                *cell = under.and_then(|u| u.cell((x, y))).cloned().unwrap_or_else(|| blank(cell));
+                *cell = under
+                    .and_then(|u| u.cell((x, y)))
+                    .cloned()
+                    .unwrap_or_else(|| blank(cell));
             }
         }
     }
@@ -439,7 +478,9 @@ fn shift(buf: &mut Buffer, area: Rect, by: i32) {
         return;
     }
     for y in area.top()..area.bottom() {
-        let row: Vec<Cell> = (area.left()..area.right()).map(|x| buf[(x, y)].clone()).collect();
+        let row: Vec<Cell> = (area.left()..area.right())
+            .map(|x| buf[(x, y)].clone())
+            .collect();
         for (i, x) in (area.left()..area.right()).enumerate() {
             let from = usize::try_from(i as i32 - by).ok().and_then(|f| row.get(f));
             buf[(x, y)] = from.cloned().unwrap_or_else(|| blank(&row[i]));
@@ -475,7 +516,11 @@ mod tests {
     fn rows(buf: &Buffer) -> Vec<String> {
         let area = buf.area;
         (area.top()..area.bottom())
-            .map(|y| (area.left()..area.right()).map(|x| buf[(x, y)].symbol()).collect())
+            .map(|y| {
+                (area.left()..area.right())
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect()
+            })
             .collect()
     }
 
@@ -488,7 +533,11 @@ mod tests {
         assert_eq!(rows(&buf), ["....", "┌──┐", "│ab│", "└──┘", "...."]);
 
         let mut buf = Buffer::with_lines(["....", "....", "....", "....", "...."]);
-        draw_unrolled(&mut buf, &popup, Unroll::new(popup.area, Anchor::Bottom, 0.6));
+        draw_unrolled(
+            &mut buf,
+            &popup,
+            Unroll::new(popup.area, Anchor::Bottom, 0.6),
+        );
         assert_eq!(rows(&buf), ["....", "....", "┌──┐", "│ab│", "└──┘"]);
     }
 
@@ -496,7 +545,10 @@ mod tests {
     fn unroll_never_goes_below_its_borders() {
         let full = Rect::new(0, 0, 4, 5);
         let unroll = Unroll::new(full, Anchor::Center, 0.0);
-        assert_eq!((unroll.row(0), unroll.row(1), unroll.row(4)), (Some(1), None, Some(2)));
+        assert_eq!(
+            (unroll.row(0), unroll.row(1), unroll.row(4)),
+            (Some(1), None, Some(2))
+        );
     }
 
     #[test]

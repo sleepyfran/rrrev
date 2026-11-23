@@ -175,7 +175,12 @@ impl Caret {
     }
 
     /// Moves to `line` with the column `pick` chooses on its characters.
-    fn land(&mut self, lines: &(impl CodeLines + ?Sized), line: usize, pick: impl Fn(&[char]) -> Option<usize>) {
+    fn land(
+        &mut self,
+        lines: &(impl CodeLines + ?Sized),
+        line: usize,
+        pick: impl Fn(&[char]) -> Option<usize>,
+    ) {
         self.line = line;
         let chars = self.chars(lines).unwrap_or_default();
         self.column = pick(&chars).unwrap_or(0);
@@ -183,14 +188,22 @@ impl Caret {
 
     /// `h` / `l`.
     fn shift(&mut self, lines: &(impl CodeLines + ?Sized), delta: isize) {
-        let (Some(column), Some(chars)) = (self.on(lines), self.chars(lines)) else { return };
-        self.column = column.saturating_add_signed(delta).min(chars.len().saturating_sub(1));
+        let (Some(column), Some(chars)) = (self.on(lines), self.chars(lines)) else {
+            return;
+        };
+        self.column = column
+            .saturating_add_signed(delta)
+            .min(chars.len().saturating_sub(1));
     }
 
     /// `0` / `^`.
     fn line_start(&mut self, lines: &(impl CodeLines + ?Sized), skip_blanks: bool) {
         if let Some(chars) = self.chars(lines) {
-            self.column = if skip_blanks { first_non_blank(&chars) } else { 0 };
+            self.column = if skip_blanks {
+                first_non_blank(&chars)
+            } else {
+                0
+            };
         }
     }
 
@@ -217,7 +230,9 @@ impl Caret {
             if let Some(prev) = here.and_then(|(chars, i)| prev_word_start(&chars, i, big)) {
                 self.column = prev;
             } else if let Some(line) = self.code_line(lines, false) {
-                self.land(lines, line, |chars| prev_word_start(chars, chars.len(), big));
+                self.land(lines, line, |chars| {
+                    prev_word_start(chars, chars.len(), big)
+                });
             } else {
                 break;
             }
@@ -241,13 +256,20 @@ impl Caret {
     /// `f` / `F` / `t`: the `n`th `target` on the line; stays put if there
     /// aren't that many.
     fn find_char(&mut self, lines: &(impl CodeLines + ?Sized), n: usize, find: FindChar) {
-        let (Some(chars), Some(column)) = (self.chars(lines), self.on(lines)) else { return };
+        let (Some(chars), Some(column)) = (self.chars(lines), self.on(lines)) else {
+            return;
+        };
         let hits: Vec<usize> = if find.forward {
             // `t` right before a match would find it again; vim skips it.
             let from = column + 1 + usize::from(find.till);
-            (from..chars.len()).filter(|&i| chars[i] == find.target).collect()
+            (from..chars.len())
+                .filter(|&i| chars[i] == find.target)
+                .collect()
         } else {
-            (0..column).rev().filter(|&i| chars[i] == find.target).collect()
+            (0..column)
+                .rev()
+                .filter(|&i| chars[i] == find.target)
+                .collect()
         };
         if let Some(&hit) = hits.get(n.saturating_sub(1)) {
             self.column = if find.till { hit - 1 } else { hit };
@@ -256,7 +278,9 @@ impl Caret {
 
     /// Puts the column on the first match of `query` on its line.
     pub(super) fn move_to_match(&mut self, lines: &(impl CodeLines + ?Sized), query: &str) {
-        let Some(text) = lines.code(self.line) else { return };
+        let Some(text) = lines.code(self.line) else {
+            return;
+        };
         if let Some(found) = find_matches(text, query).first() {
             self.column = text[..found.start].chars().count();
         }
@@ -274,7 +298,10 @@ impl App {
     }
 
     fn caret(&self) -> Caret {
-        Caret { line: self.cursor, column: self.column }
+        Caret {
+            line: self.cursor,
+            column: self.column,
+        }
     }
 
     /// The character the cursor is on, as an index into its row's code;
@@ -391,17 +418,36 @@ mod tests {
     #[test]
     fn find_and_till_a_character() {
         let mut app = lines_app(&["a(b, c(d), e)"]);
-        let find = |target, forward, till| FindChar { target, forward, till };
-        app.update(Action::FindChar { n: 2, find: find('(', true, false) });
+        let find = |target, forward, till| FindChar {
+            target,
+            forward,
+            till,
+        };
+        app.update(Action::FindChar {
+            n: 2,
+            find: find('(', true, false),
+        });
         assert_eq!(app.cursor_column(), Some(6));
-        app.update(Action::FindChar { n: 1, find: find(')', true, true) });
+        app.update(Action::FindChar {
+            n: 1,
+            find: find(')', true, true),
+        });
         assert_eq!(app.cursor_column(), Some(7));
         // `t` again doesn't get stuck on the same match.
-        app.update(Action::FindChar { n: 1, find: find(')', true, true) });
+        app.update(Action::FindChar {
+            n: 1,
+            find: find(')', true, true),
+        });
         assert_eq!(app.cursor_column(), Some(11));
-        app.update(Action::FindChar { n: 1, find: find('b', false, false) });
+        app.update(Action::FindChar {
+            n: 1,
+            find: find('b', false, false),
+        });
         assert_eq!(app.cursor_column(), Some(2));
-        app.update(Action::FindChar { n: 1, find: find('z', true, false) });
+        app.update(Action::FindChar {
+            n: 1,
+            find: find('z', true, false),
+        });
         assert_eq!(app.cursor_column(), Some(2));
     }
 

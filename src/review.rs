@@ -96,7 +96,8 @@ impl ReviewState {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
             Err(e) => return Err(e).with_context(|| format!("cannot read {}", path.display())),
         };
-        serde_json::from_str(&json).with_context(|| format!("invalid review state in {}", path.display()))
+        serde_json::from_str(&json)
+            .with_context(|| format!("invalid review state in {}", path.display()))
     }
 
     /// Writes to a temporary file first, so a crash can't leave a truncated one.
@@ -217,7 +218,12 @@ mod tests {
     use crate::diff::{Diff, DiffLine, FileDiff, FileStatus, Hunk, LineKind};
 
     fn some_id() -> HunkId {
-        let line = DiffLine { kind: LineKind::Added, old_no: None, new_no: Some(1), content: "x".into() };
+        let line = DiffLine {
+            kind: LineKind::Added,
+            old_no: None,
+            new_no: Some(1),
+            content: "x".into(),
+        };
         let hunk = Hunk {
             id: HunkId::default(),
             header: String::new(),
@@ -329,7 +335,10 @@ mod tests {
         state.mark_seen(&id, [2]);
         assert!(!state.take_dirty());
         state.dismiss_note(note_key(&id, "watch out "));
-        state.set_verdict(Some(Verdict { kind: VerdictKind::Approve, message: "ship it".into() }));
+        state.set_verdict(Some(Verdict {
+            kind: VerdictKind::Approve,
+            message: "ship it".into(),
+        }));
         state.save(&path).unwrap();
 
         let loaded = ReviewState::load(&path).unwrap();

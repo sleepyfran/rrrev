@@ -59,7 +59,11 @@ pub struct Anchor {
 
 impl Anchor {
     fn of(path: &str, hunk: &Hunk) -> Self {
-        Anchor { path: path.to_string(), old: (hunk.old_start, hunk.old_lines), new: (hunk.new_start, hunk.new_lines) }
+        Anchor {
+            path: path.to_string(),
+            old: (hunk.old_start, hunk.old_lines),
+            new: (hunk.new_start, hunk.new_lines),
+        }
     }
 }
 
@@ -94,19 +98,28 @@ impl Plan {
     /// dropped, a hunk listed twice stays in its first group, and groups left
     /// empty are removed. Hunks it leaves out are the caller's to place.
     pub fn sanitize(self, known: &HashSet<&HunkId>) -> Plan {
-        let notes =
-            self.notes.into_iter().filter(|n| known.contains(&n.hunk) && !n.text.trim().is_empty()).collect();
+        let notes = self
+            .notes
+            .into_iter()
+            .filter(|n| known.contains(&n.hunk) && !n.text.trim().is_empty())
+            .collect();
         let mut seen = HashSet::new();
         let groups = self
             .groups
             .into_iter()
             .map(|mut group| {
-                group.hunks.retain(|id| known.contains(id) && seen.insert(id.clone()));
+                group
+                    .hunks
+                    .retain(|id| known.contains(id) && seen.insert(id.clone()));
                 group
             })
             .filter(|group| !group.hunks.is_empty())
             .collect();
-        Plan { groups, notes, anchors: BTreeMap::new() }
+        Plan {
+            groups,
+            notes,
+            anchors: BTreeMap::new(),
+        }
     }
 
     /// Remembers where each planned hunk sits in `diff`. Anchors of hunks
@@ -115,7 +128,8 @@ impl Plan {
         let ids: HashSet<&HunkId> = self.groups.iter().flat_map(|g| &g.hunks).collect();
         for file in &diff.files {
             for hunk in file.hunks.iter().filter(|h| ids.contains(&h.id)) {
-                self.anchors.insert(hunk.id.clone(), Anchor::of(file.path(), hunk));
+                self.anchors
+                    .insert(hunk.id.clone(), Anchor::of(file.path(), hunk));
             }
         }
         self.anchors.retain(|id, _| ids.contains(id));
@@ -128,9 +142,19 @@ impl Plan {
     /// A plan with none of the diff's hunks was made for another diff and
     /// is left alone. Returns how many planned hunks were followed.
     pub fn follow(&mut self, diff: &Diff) -> usize {
-        let current: HashMap<&HunkId, &Hunk> = diff.files.iter().flat_map(|f| &f.hunks).map(|h| (&h.id, h)).collect();
-        let mut claimed: HashSet<HunkId> =
-            self.groups.iter().flat_map(|g| &g.hunks).filter(|id| current.contains_key(id)).cloned().collect();
+        let current: HashMap<&HunkId, &Hunk> = diff
+            .files
+            .iter()
+            .flat_map(|f| &f.hunks)
+            .map(|h| (&h.id, h))
+            .collect();
+        let mut claimed: HashSet<HunkId> = self
+            .groups
+            .iter()
+            .flat_map(|g| &g.hunks)
+            .filter(|id| current.contains_key(id))
+            .cloned()
+            .collect();
         if claimed.is_empty() {
             return 0;
         }
@@ -149,10 +173,17 @@ impl Plan {
                             .filter(|h| !claimed.contains(&h.id))
                             .collect();
                         let on = |side: fn(&Hunk) -> (u32, u32), at: (u32, u32)| -> Vec<&Hunk> {
-                            free.iter().copied().filter(|h| overlaps(side(h), at)).collect()
+                            free.iter()
+                                .copied()
+                                .filter(|h| overlaps(side(h), at))
+                                .collect()
                         };
                         let old = on(|h| (h.old_start, h.old_lines), anchor.old);
-                        if old.is_empty() { on(|h| (h.new_start, h.new_lines), anchor.new) } else { old }
+                        if old.is_empty() {
+                            on(|h| (h.new_start, h.new_lines), anchor.new)
+                        } else {
+                            old
+                        }
                     }
                     None => Vec::new(),
                 };
@@ -171,11 +202,14 @@ impl Plan {
             group.hunks = hunks;
         }
         for note in &mut self.notes {
-            let Some(to) = moved.get(&note.hunk) else { continue };
+            let Some(to) = moved.get(&note.hunk) else {
+                continue;
+            };
             note.hunk = to.clone();
             // The line it was about may have moved; then it goes under the hunk.
             let hunk = current[to];
-            let inside = |line: u32| line >= hunk.new_start && line < hunk.new_start + hunk.new_lines;
+            let inside =
+                |line: u32| line >= hunk.new_start && line < hunk.new_start + hunk.new_lines;
             note.line = note.line.filter(|&line| inside(line));
         }
         self.anchor(diff);
@@ -184,7 +218,11 @@ impl Plan {
 
     /// Whether any group or note is about one of `hunks`.
     pub fn covers(&self, hunks: &HashSet<&HunkId>) -> bool {
-        self.groups.iter().flat_map(|g| &g.hunks).chain(self.notes.iter().map(|n| &n.hunk)).any(|id| hunks.contains(id))
+        self.groups
+            .iter()
+            .flat_map(|g| &g.hunks)
+            .chain(self.notes.iter().map(|n| &n.hunk))
+            .any(|id| hunks.contains(id))
     }
 
     /// Drops everything about `hunks`, and groups left empty: what replanning
@@ -234,36 +272,46 @@ impl OrganizeRequest {
             .flat_map(|f| {
                 let file = &diff.files[f];
                 let generated = file.looks_generated();
-                file.hunks.iter().enumerate().map(move |(h, hunk)| HunkSummary {
-                    id: hunk.id.clone(),
-                    path: file.path().to_string(),
-                    header: hunk.header.clone(),
-                    lines: if generated {
-                        Vec::new()
-                    } else {
-                        hunk.lines
-                            .iter()
-                            .map(|line| {
-                                let sign = match line.kind {
-                                    LineKind::Added => '+',
-                                    LineKind::Removed => '-',
-                                    LineKind::Context | LineKind::NoNewline => ' ',
-                                };
-                                format!("{sign}{}", line.content)
-                            })
-                            .collect()
-                    },
-                    generated,
-                    plumbing: !generated && diff.is_plumbing(f, h),
-                })
+                file.hunks
+                    .iter()
+                    .enumerate()
+                    .map(move |(h, hunk)| HunkSummary {
+                        id: hunk.id.clone(),
+                        path: file.path().to_string(),
+                        header: hunk.header.clone(),
+                        lines: if generated {
+                            Vec::new()
+                        } else {
+                            hunk.lines
+                                .iter()
+                                .map(|line| {
+                                    let sign = match line.kind {
+                                        LineKind::Added => '+',
+                                        LineKind::Removed => '-',
+                                        LineKind::Context | LineKind::NoNewline => ' ',
+                                    };
+                                    format!("{sign}{}", line.content)
+                                })
+                                .collect()
+                        },
+                        generated,
+                        plumbing: !generated && diff.is_plumbing(f, h),
+                    })
             })
             .collect();
-        Self { title: title.to_string(), hunks }
+        Self {
+            title: title.to_string(),
+            hunks,
+        }
     }
 
     /// The diff as plain text, each hunk introduced by `=== <id> <path> <header>`.
     pub fn to_prompt(&self) -> String {
-        let mut out = format!("Diff under review: {}\n{} hunks follow.\n", self.title, self.hunks.len());
+        let mut out = format!(
+            "Diff under review: {}\n{} hunks follow.\n",
+            self.title,
+            self.hunks.len()
+        );
         for hunk in &self.hunks {
             out += &format!("\n=== {} {} {}\n", hunk.id.as_str(), hunk.path, hunk.header);
             if hunk.generated {
@@ -324,12 +372,21 @@ mod tests {
     fn prompt_marks_plumbing() {
         use crate::diff::Sources;
         let source = |line: &str| Some(std::sync::Arc::new(vec![line.to_string()]));
-        let diff = diff(&[("src/a.rs", &["use a::B;"]), ("src/b.rs", &["fn b() {}"])]).with_sources(vec![
-            Sources { old: None, new: source("use a::B;") },
-            Sources { old: None, new: source("fn b() {}") },
-        ]);
+        let diff = diff(&[("src/a.rs", &["use a::B;"]), ("src/b.rs", &["fn b() {}"])])
+            .with_sources(vec![
+                Sources {
+                    old: None,
+                    new: source("use a::B;"),
+                },
+                Sources {
+                    old: None,
+                    new: source("fn b() {}"),
+                },
+            ]);
         let prompt = OrganizeRequest::from_diff("x", &diff).to_prompt();
-        assert!(prompt.contains("src/a.rs @@ -1 +1 @@\n(plumbing: only imports, exports or the like)\n+use a::B;\n"));
+        assert!(prompt.contains(
+            "src/a.rs @@ -1 +1 @@\n(plumbing: only imports, exports or the like)\n+use a::B;\n"
+        ));
         assert_eq!(prompt.matches("(plumbing").count(), 1);
     }
 
@@ -361,8 +418,16 @@ mod tests {
         let diff = diff(&[("a.rs", &["1", "2"])]);
         let [one, two] = [0, 1].map(|h| diff.files[0].hunks[h].id.clone());
         let bogus: HunkId = serde_json::from_str("\"nope\"").unwrap();
-        let group = |title: &str, hunks: Vec<HunkId>| PlanGroup { title: title.into(), rationale: String::new(), hunks };
-        let note = |hunk: &HunkId, text: &str| AgentNote { hunk: hunk.clone(), line: None, text: text.into() };
+        let group = |title: &str, hunks: Vec<HunkId>| PlanGroup {
+            title: title.into(),
+            rationale: String::new(),
+            hunks,
+        };
+        let note = |hunk: &HunkId, text: &str| AgentNote {
+            hunk: hunk.clone(),
+            line: None,
+            text: text.into(),
+        };
         let plan = Plan {
             groups: vec![
                 group("first", vec![two.clone(), bogus.clone()]),
@@ -395,7 +460,12 @@ mod tests {
                     old_lines: lines,
                     new_start: start,
                     new_lines: lines,
-                    lines: vec![DiffLine { kind: LineKind::Added, old_no: None, new_no: Some(start), content: content.into() }],
+                    lines: vec![DiffLine {
+                        kind: LineKind::Added,
+                        old_no: None,
+                        new_no: Some(start),
+                        content: content.into(),
+                    }],
                 })
                 .collect(),
         }
@@ -407,23 +477,38 @@ mod tests {
             .map(|hunks| PlanGroup {
                 title: String::new(),
                 rationale: String::new(),
-                hunks: hunks.iter().map(|&(f, h)| diff.files[f].hunks[h].id.clone()).collect(),
+                hunks: hunks
+                    .iter()
+                    .map(|&(f, h)| diff.files[f].hunks[h].id.clone())
+                    .collect(),
             })
             .collect();
-        let mut plan = Plan { groups, ..Plan::default() };
+        let mut plan = Plan {
+            groups,
+            ..Plan::default()
+        };
         plan.anchor(diff);
         plan
     }
 
     fn ids(diff: &Diff, hunks: &[(usize, usize)]) -> Vec<HunkId> {
-        hunks.iter().map(|&(f, h)| diff.files[f].hunks[h].id.clone()).collect()
+        hunks
+            .iter()
+            .map(|&(f, h)| diff.files[f].hunks[h].id.clone())
+            .collect()
     }
 
     #[test]
     fn an_edited_hunk_split_in_two_keeps_both_halves_in_its_group() {
-        let before = Diff::new(vec![at("a.rs", &[(10, 20, "big")]), at("b.rs", &[(1, 1, "b")])]);
+        let before = Diff::new(vec![
+            at("a.rs", &[(10, 20, "big")]),
+            at("b.rs", &[(1, 1, "b")]),
+        ]);
         let mut plan = planned(&before, &[&[(1, 0)], &[(0, 0)]]);
-        let after = Diff::new(vec![at("a.rs", &[(8, 4, "top"), (25, 2, "bottom"), (40, 1, "new")]), at("b.rs", &[(1, 1, "b")])]);
+        let after = Diff::new(vec![
+            at("a.rs", &[(8, 4, "top"), (25, 2, "bottom"), (40, 1, "new")]),
+            at("b.rs", &[(1, 1, "b")]),
+        ]);
         assert_eq!(plan.follow(&after), 1);
         assert_eq!(plan.groups[0].hunks, ids(&after, &[(1, 0)]));
         assert_eq!(plan.groups[1].hunks, ids(&after, &[(0, 0), (0, 1)]));

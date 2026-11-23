@@ -9,13 +9,20 @@ use crate::review::Comment;
 impl App {
     /// Whether a comment is on a hunk that's no longer in the diff.
     pub fn is_outdated(&self, comment: &Comment) -> bool {
-        !self.diff.files.iter().flat_map(|f| &f.hunks).any(|h| h.id == comment.hunk)
+        !self
+            .diff
+            .files
+            .iter()
+            .flat_map(|f| &f.hunks)
+            .any(|h| h.id == comment.hunk)
     }
 
     /// The selected `(file, hunk, start, end)` lines in visual mode. The
     /// selection never leaves the hunk it started in.
     pub fn selection(&self) -> Option<(usize, usize, usize, usize)> {
-        let Mode::Visual { anchor } = self.mode else { return None };
+        let Mode::Visual { anchor } = self.mode else {
+            return None;
+        };
         let (file, hunk) = match self.rows.get(anchor)? {
             Row::Hunk { file, hunk } | Row::Line { file, hunk, .. } => (*file, *hunk),
             _ => return None,
@@ -24,14 +31,23 @@ impl App {
         let lines: Vec<usize> = self.rows[lo..=hi]
             .iter()
             .filter_map(|row| match *row {
-                Row::Line { file: f, hunk: h, line } if (f, h) == (file, hunk) => Some(line),
+                Row::Line {
+                    file: f,
+                    hunk: h,
+                    line,
+                } if (f, h) == (file, hunk) => Some(line),
                 _ => None,
             })
             .collect();
         match (lines.first(), lines.last()) {
             (Some(&start), Some(&end)) => Some((file, hunk, start, end)),
             // Only the hunk header is selected: take the whole hunk.
-            _ => Some((file, hunk, 0, self.hunk(file, hunk).lines.len().saturating_sub(1))),
+            _ => Some((
+                file,
+                hunk,
+                0,
+                self.hunk(file, hunk).lines.len().saturating_sub(1),
+            )),
         }
     }
 
@@ -53,7 +69,11 @@ impl App {
     pub(super) fn toggle_visual(&mut self) {
         match (&self.mode, self.current_row()) {
             (Mode::Visual { .. }, _) => self.mode = Mode::Normal,
-            (_, Some(Row::Hunk { .. } | Row::Line { .. })) => self.mode = Mode::Visual { anchor: self.cursor },
+            (_, Some(Row::Hunk { .. } | Row::Line { .. })) => {
+                self.mode = Mode::Visual {
+                    anchor: self.cursor,
+                }
+            }
             _ => self.message = Some("Move to a hunk to select lines".to_string()),
         }
     }
@@ -76,7 +96,9 @@ impl App {
         };
         let input = TextInput::new(text);
         if in_editor {
-            self.effect = Some(Effect::OpenEditor { initial: input.text().to_string() });
+            self.effect = Some(Effect::OpenEditor {
+                initial: input.text().to_string(),
+            });
         }
         self.mode = Mode::Comment { target, input };
     }
@@ -94,12 +116,16 @@ impl App {
     }
 
     pub(super) fn comment_input(&mut self, action: InputAction) {
-        let Mode::Comment { input, .. } = &mut self.mode else { return };
+        let Mode::Comment { input, .. } = &mut self.mode else {
+            return;
+        };
         match action {
             InputAction::Submit => self.submit_comment(),
             InputAction::Cancel => self.mode = Mode::Normal,
             InputAction::OpenEditor => {
-                self.effect = Some(Effect::OpenEditor { initial: input.text().to_string() })
+                self.effect = Some(Effect::OpenEditor {
+                    initial: input.text().to_string(),
+                })
             }
             other => input.apply(other),
         }
@@ -108,27 +134,55 @@ impl App {
     /// Whether a comment on a hunk of `file` is hidden by its fold.
     pub(super) fn has_comments_in_hunks(&self, file: usize) -> bool {
         let hunks = &self.diff.files[file].hunks;
-        self.review.comments().iter().any(|c| hunks.iter().any(|h| h.id == c.hunk))
+        self.review
+            .comments()
+            .iter()
+            .any(|c| hunks.iter().any(|h| h.id == c.hunk))
     }
 
     fn comment_target(&self) -> Option<CommentTarget> {
         if let Some((file, hunk, start, end)) = self.selection() {
-            return Some(CommentTarget::New { file, hunk, start, end });
+            return Some(CommentTarget::New {
+                file,
+                hunk,
+                start,
+                end,
+            });
         }
         match self.current_row()? {
-            Row::Line { file, hunk, line } => Some(CommentTarget::New { file, hunk, start: line, end: line }),
+            Row::Line { file, hunk, line } => Some(CommentTarget::New {
+                file,
+                hunk,
+                start: line,
+                end: line,
+            }),
             Row::Hunk { file, hunk } => {
                 let end = self.hunk(file, hunk).lines.len().saturating_sub(1);
-                Some(CommentTarget::New { file, hunk, start: 0, end })
+                Some(CommentTarget::New {
+                    file,
+                    hunk,
+                    start: 0,
+                    end,
+                })
             }
             Row::Plumbing { file, hunk, start } => {
                 let end = self.run_at(file, hunk, start)?.end - 1;
-                Some(CommentTarget::New { file, hunk, start, end })
+                Some(CommentTarget::New {
+                    file,
+                    hunk,
+                    start,
+                    end,
+                })
             }
             Row::Comment { id, .. } => Some(CommentTarget::Edit { id }),
             Row::Note { note, .. } => {
                 let n = self.notes.get(note)?;
-                Some(CommentTarget::New { file: n.file, hunk: n.hunk, start: n.line, end: n.line })
+                Some(CommentTarget::New {
+                    file: n.file,
+                    hunk: n.hunk,
+                    start: n.line,
+                    end: n.line,
+                })
             }
             Row::Group { .. } | Row::File { .. } | Row::Context { .. } => None,
         }
@@ -137,13 +191,19 @@ impl App {
     /// Saves the comment box. Empty text drops a new comment and deletes an
     /// existing one.
     fn submit_comment(&mut self) {
-        let Mode::Comment { target, input } = std::mem::replace(&mut self.mode, Mode::Normal) else {
+        let Mode::Comment { target, input } = std::mem::replace(&mut self.mode, Mode::Normal)
+        else {
             return;
         };
         let text = input.text().trim().to_string();
         match target {
             CommentTarget::New { .. } if text.is_empty() => {}
-            CommentTarget::New { file, hunk, start, end } => {
+            CommentTarget::New {
+                file,
+                hunk,
+                start,
+                end,
+            } => {
                 let comment = self.new_comment(file, hunk, start, end, text);
                 self.review.add_comment(comment);
             }
@@ -156,7 +216,14 @@ impl App {
         self.rebuild_rows();
     }
 
-    fn new_comment(&self, file: usize, hunk: usize, start: usize, end: usize, text: String) -> Comment {
+    fn new_comment(
+        &self,
+        file: usize,
+        hunk: usize,
+        start: usize,
+        end: usize,
+        text: String,
+    ) -> Comment {
         let h = self.hunk(file, hunk);
         let lines = &h.lines[start..=end];
         let span = |numbers: Vec<u32>| Some((*numbers.iter().min()?, *numbers.iter().max()?));
@@ -202,7 +269,14 @@ mod tests {
         let c = &app.review.comments()[0];
         assert_eq!((c.start, c.end, c.new_lines), (1, 1, Some((2, 2))));
         assert_eq!(c.code, ["+a.rs 0 1"]);
-        assert_eq!(app.rows[4], Row::Comment { file: 0, id: c.id, line: 0 });
+        assert_eq!(
+            app.rows[4],
+            Row::Comment {
+                file: 0,
+                id: c.id,
+                line: 0
+            }
+        );
         assert_eq!(app.rows.len(), 9);
     }
 
@@ -304,7 +378,14 @@ mod tests {
         );
         let c = &app.review.comments()[0];
         assert!(app.is_outdated(c));
-        assert_eq!(app.rows[1], Row::Comment { file: 0, id: c.id, line: 0 });
+        assert_eq!(
+            app.rows[1],
+            Row::Comment {
+                file: 0,
+                id: c.id,
+                line: 0
+            }
+        );
     }
 
     #[test]
@@ -312,7 +393,12 @@ mod tests {
         let mut app = sample_app();
         app.update(Action::Down(2));
         app.update(Action::CommentInEditor);
-        assert_eq!(app.effect.take(), Some(Effect::OpenEditor { initial: String::new() }));
+        assert_eq!(
+            app.effect.take(),
+            Some(Effect::OpenEditor {
+                initial: String::new()
+            })
+        );
         app.finish_editor(None);
         assert!(app.is_typing());
         app.finish_editor(Some("from vim\n".into()));

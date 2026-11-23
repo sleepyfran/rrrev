@@ -29,9 +29,17 @@ impl App {
             .files
             .iter()
             .enumerate()
-            .flat_map(|(f, file)| file.hunks.iter().enumerate().map(move |(h, hunk)| (&hunk.id, (f, h))))
+            .flat_map(|(f, file)| {
+                file.hunks
+                    .iter()
+                    .enumerate()
+                    .map(move |(h, hunk)| (&hunk.id, (f, h)))
+            })
             .collect();
-        let notes = self.review.plan().map_or(&[][..], |plan| plan.notes.as_slice());
+        let notes = self
+            .review
+            .plan()
+            .map_or(&[][..], |plan| plan.notes.as_slice());
         self.notes = notes
             .iter()
             .filter_map(|note| {
@@ -46,18 +54,29 @@ impl App {
                 let line = note
                     .line
                     .and_then(|no| {
-                        lines.iter().position(|l| l.new_no == Some(no)).or_else(|| lines.iter().position(|l| l.old_no == Some(no)))
+                        lines
+                            .iter()
+                            .position(|l| l.new_no == Some(no))
+                            .or_else(|| lines.iter().position(|l| l.old_no == Some(no)))
                     })
                     .unwrap_or(lines.len().saturating_sub(1));
                 let text = note.text.split_whitespace().collect::<Vec<_>>().join(" ");
-                Some(PlacedNote { file, hunk, line, text, key })
+                Some(PlacedNote {
+                    file,
+                    hunk,
+                    line,
+                    text,
+                    key,
+                })
             })
             .collect();
     }
 
     /// `dd` on a note: it won't show again for this diff.
     pub(super) fn dismiss_note(&mut self, note: usize) {
-        let Some(placed) = self.notes.get(note) else { return };
+        let Some(placed) = self.notes.get(note) else {
+            return;
+        };
         self.review.dismiss_note(placed.key.clone());
         self.place_notes();
         self.rebuild_rows();
@@ -66,9 +85,19 @@ impl App {
 
     /// `c` on a note: a comment on the line it's about, starting from its text.
     pub(super) fn comment_with_note(&mut self, note: usize) {
-        let Some(placed) = self.notes.get(note) else { return };
-        let target = CommentTarget::New { file: placed.file, hunk: placed.hunk, start: placed.line, end: placed.line };
-        self.mode = Mode::Comment { target, input: TextInput::new(placed.text.clone()) };
+        let Some(placed) = self.notes.get(note) else {
+            return;
+        };
+        let target = CommentTarget::New {
+            file: placed.file,
+            hunk: placed.hunk,
+            start: placed.line,
+            end: placed.line,
+        };
+        self.mode = Mode::Comment {
+            target,
+            input: TextInput::new(placed.text.clone()),
+        };
     }
 
     /// The note under the cursor, if the cursor is on one.
@@ -91,13 +120,27 @@ mod tests {
     fn noted_app() -> App {
         let mut app = sample_app();
         command(&mut app, "organize");
-        let Some(Effect::Organize { job, .. }) = app.effect.take() else { panic!() };
+        let Some(Effect::Organize { job, .. }) = app.effect.take() else {
+            panic!()
+        };
         let id = |f: usize, h: usize| app.diff.files[f].hunks[h].id.clone();
         let plan = Plan {
-            groups: vec![PlanGroup { title: "All".into(), rationale: String::new(), hunks: vec![id(0, 0), id(0, 1)] }],
+            groups: vec![PlanGroup {
+                title: "All".into(),
+                rationale: String::new(),
+                hunks: vec![id(0, 0), id(0, 1)],
+            }],
             notes: vec![
-                AgentNote { hunk: id(0, 0), line: Some(2), text: "Check the\n bound.".into() },
-                AgentNote { hunk: id(0, 1), line: None, text: "Easy to miss.".into() },
+                AgentNote {
+                    hunk: id(0, 0),
+                    line: Some(2),
+                    text: "Check the\n bound.".into(),
+                },
+                AgentNote {
+                    hunk: id(0, 1),
+                    line: None,
+                    text: "Easy to miss.".into(),
+                },
             ],
             ..Plan::default()
         };
@@ -110,8 +153,22 @@ mod tests {
     fn notes_show_under_their_line_or_hunk() {
         let app = noted_app();
         // a.rs: header, hunk, line 0, line 1, note, line 2, hunk, line 0, line 1, note.
-        assert_eq!(app.rows[4], Row::Note { file: 0, hunk: 0, note: 0 });
-        assert_eq!(app.rows[9], Row::Note { file: 0, hunk: 1, note: 1 });
+        assert_eq!(
+            app.rows[4],
+            Row::Note {
+                file: 0,
+                hunk: 0,
+                note: 0
+            }
+        );
+        assert_eq!(
+            app.rows[9],
+            Row::Note {
+                file: 0,
+                hunk: 1,
+                note: 1
+            }
+        );
         assert_eq!(app.notes[0].text, "Check the bound.");
     }
 
@@ -129,10 +186,15 @@ mod tests {
         let mut app = noted_app();
         app.update(Action::Down(4));
         app.update(Action::StartComment);
-        assert!(matches!(&app.mode, Mode::Comment { input, .. } if input.text() == "Check the bound."));
+        assert!(
+            matches!(&app.mode, Mode::Comment { input, .. } if input.text() == "Check the bound.")
+        );
         app.update_input(InputAction::Submit);
         let c = &app.review.comments()[0];
-        assert_eq!((c.start, c.end, c.text.as_str()), (1, 1, "Check the bound."));
+        assert_eq!(
+            (c.start, c.end, c.text.as_str()),
+            (1, 1, "Check the bound.")
+        );
     }
 
     #[test]
@@ -141,7 +203,11 @@ mod tests {
         app.update(Action::Down(4));
         app.update(Action::DeleteComment);
         assert_eq!(app.notes.len(), 1);
-        assert!(!app.rows.contains(&Row::Note { file: 0, hunk: 0, note: 0 }));
+        assert!(!app.rows.contains(&Row::Note {
+            file: 0,
+            hunk: 0,
+            note: 0
+        }));
         let reopened = App::new(String::new(), app.diff.clone(), app.review);
         assert_eq!(reopened.notes.len(), 1);
         assert_eq!(reopened.notes[0].text, "Easy to miss.");

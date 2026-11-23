@@ -73,9 +73,15 @@ mod tests {
         AskRequest {
             title: "main..feat".into(),
             location: "src/output.rs:121".into(),
-            scopes: vec!["impl Output".into(), "fn floor_char_boundary(s: &str)".into()],
+            scopes: vec![
+                "impl Output".into(),
+                "fn floor_char_boundary(s: &str)".into(),
+            ],
             code: vec!["-fn floor_char_boundary(s: &str) -> usize {".into()],
-            hunk: vec![" // helpers".into(), "-fn floor_char_boundary(s: &str) -> usize {".into()],
+            hunk: vec![
+                " // helpers".into(),
+                "-fn floor_char_boundary(s: &str) -> usize {".into(),
+            ],
             question: "does std behave the same?".into(),
             history: Vec::new(),
         }
@@ -85,7 +91,9 @@ mod tests {
     fn prompt_carries_the_location_code_and_question() {
         let prompt = request().to_prompt();
         assert!(prompt.starts_with("Diff under review: main..feat\n"));
-        assert!(prompt.contains("looking at src/output.rs:121, inside impl Output › fn floor_char_boundary(s: &str).\n"));
+        assert!(prompt.contains(
+            "looking at src/output.rs:121, inside impl Output › fn floor_char_boundary(s: &str).\n"
+        ));
         assert!(prompt.contains("point at:\n-fn floor_char_boundary"));
         assert!(prompt.contains("The hunk it's part of:\n // helpers\n"));
         assert!(prompt.ends_with("Their question: does std behave the same?\n"));

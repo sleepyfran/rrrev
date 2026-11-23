@@ -38,7 +38,10 @@ impl App {
             Some(Row::Comment { id, .. }) => comments.iter().position(|c| c.id == id).unwrap_or(0),
             _ => 0,
         };
-        self.comments_menu = Some(CommentsMenu { selected, armed: None });
+        self.comments_menu = Some(CommentsMenu {
+            selected,
+            armed: None,
+        });
     }
 
     /// While the list is open, motions move through it, Enter goes to the
@@ -46,7 +49,9 @@ impl App {
     /// them all; anything that
     /// closes things closes it.
     pub(super) fn update_comments_menu(&mut self, action: Action) {
-        let Some(menu) = self.comments_menu else { return };
+        let Some(menu) = self.comments_menu else {
+            return;
+        };
         let last = self.review.comments().len().saturating_sub(1);
         let selected = match action {
             Action::Down(n) => menu.selected.saturating_add(n).min(last),
@@ -94,13 +99,18 @@ impl App {
             }
             _ => menu.selected,
         };
-        self.comments_menu = Some(CommentsMenu { selected, armed: None });
+        self.comments_menu = Some(CommentsMenu {
+            selected,
+            armed: None,
+        });
     }
 
     /// Answers the prompt after `Y`: dismisses the copied comments, or keeps them.
     pub fn answer_dismiss_copied(&mut self, dismiss: bool) {
         self.message = None;
-        let Some(prompt) = self.dismiss_prompt.take() else { return };
+        let Some(prompt) = self.dismiss_prompt.take() else {
+            return;
+        };
         if !dismiss {
             return;
         }
@@ -116,14 +126,19 @@ impl App {
             menu.selected = menu.selected.min(self.review.comments().len() - 1);
             menu.armed = None;
         }
-        self.message = Some(format!("Dismissed {n} comment{}", if n == 1 { "" } else { "s" }));
+        self.message = Some(format!(
+            "Dismissed {n} comment{}",
+            if n == 1 { "" } else { "s" }
+        ));
     }
 
     /// Puts the cursor on comment `id`, opening its file's fold, and
     /// switching to the files if that's the only place it shows (an
     /// outdated comment sits under its file's header there).
     fn go_to_comment(&mut self, id: u64) {
-        let Some(comment) = self.review.comment(id) else { return };
+        let Some(comment) = self.review.comment(id) else {
+            return;
+        };
         let (hunk, path) = (comment.hunk.clone(), comment.path.clone());
         let file = self
             .diff
@@ -133,7 +148,11 @@ impl App {
             .or_else(|| self.diff.files.iter().position(|f| f.path() == path));
         if let Some(file) = file {
             self.collapsed[file] = false;
-            if let Some(h) = self.diff.files[file].hunks.iter().position(|h| h.id == hunk) {
+            if let Some(h) = self.diff.files[file]
+                .hunks
+                .iter()
+                .position(|h| h.id == hunk)
+            {
                 self.unfold_hunk(file, h);
             }
             self.rebuild_rows();
@@ -149,8 +168,13 @@ impl App {
     }
 
     fn jump_to_comment_row(&mut self, id: u64) -> bool {
-        let stops = self.stops(|row| matches!(*row, Row::Comment { id: c, line: 0, .. } if c == id), |_| false);
-        let Some(&(page, row)) = stops.first() else { return false };
+        let stops = self.stops(
+            |row| matches!(*row, Row::Comment { id: c, line: 0, .. } if c == id),
+            |_| false,
+        );
+        let Some(&(page, row)) = stops.first() else {
+            return false;
+        };
         self.open_page(page, row);
         self.scroll = row;
         true
@@ -179,7 +203,10 @@ mod tests {
     }
 
     fn texts(app: &App) -> Vec<&str> {
-        app.listed_comments().iter().map(|c| c.text.as_str()).collect()
+        app.listed_comments()
+            .iter()
+            .map(|c| c.text.as_str())
+            .collect()
     }
 
     #[test]
@@ -187,12 +214,24 @@ mod tests {
         let mut app = app_with_comments();
         assert_eq!(texts(&app), ["first", "second", "third"]);
         app.update(Action::ListComments);
-        assert_eq!(app.comments_menu, Some(CommentsMenu { selected: 0, armed: None }));
+        assert_eq!(
+            app.comments_menu,
+            Some(CommentsMenu {
+                selected: 0,
+                armed: None
+            })
+        );
         // Other keys wait while it's open.
         app.update(Action::NextFile(1));
         assert_eq!(app.page, 0);
         app.update(Action::Down(10));
-        assert_eq!(app.comments_menu, Some(CommentsMenu { selected: 2, armed: None }));
+        assert_eq!(
+            app.comments_menu,
+            Some(CommentsMenu {
+                selected: 2,
+                armed: None
+            })
+        );
         app.update(Action::Quit);
         assert_eq!(app.comments_menu, None);
         assert!(!app.should_quit);
@@ -207,7 +246,14 @@ mod tests {
         assert_eq!(app.comments_menu, None);
         let id = app.listed_comments()[2].id;
         assert_eq!(app.page, 1);
-        assert_eq!(app.current_row(), Some(Row::Comment { file: 1, id, line: 0 }));
+        assert_eq!(
+            app.current_row(),
+            Some(Row::Comment {
+                file: 1,
+                id,
+                line: 0
+            })
+        );
     }
 
     #[test]
@@ -218,7 +264,14 @@ mod tests {
         app.update(Action::Down(1));
         app.update(Action::Select);
         let id = app.listed_comments()[1].id;
-        assert_eq!(app.current_row(), Some(Row::Comment { file: 0, id, line: 0 }));
+        assert_eq!(
+            app.current_row(),
+            Some(Row::Comment {
+                file: 0,
+                id,
+                line: 0
+            })
+        );
     }
 
     #[test]
@@ -229,11 +282,23 @@ mod tests {
         // The first `dd` only marks it.
         app.update(Action::DeleteComment);
         let third = app.listed_comments()[2].id;
-        assert_eq!(app.comments_menu, Some(CommentsMenu { selected: 2, armed: Some(third) }));
+        assert_eq!(
+            app.comments_menu,
+            Some(CommentsMenu {
+                selected: 2,
+                armed: Some(third)
+            })
+        );
         assert_eq!(app.review.comments().len(), 3);
         app.update(Action::DeleteComment);
         assert_eq!(texts(&app), ["first", "second"]);
-        assert_eq!(app.comments_menu, Some(CommentsMenu { selected: 1, armed: None }));
+        assert_eq!(
+            app.comments_menu,
+            Some(CommentsMenu {
+                selected: 1,
+                armed: None
+            })
+        );
         for _ in 0..4 {
             app.update(Action::DeleteComment);
         }
@@ -249,7 +314,13 @@ mod tests {
         app.update(Action::ListComments);
         app.update(Action::DeleteComment);
         app.update(Action::Down(1));
-        assert_eq!(app.comments_menu, Some(CommentsMenu { selected: 1, armed: None }));
+        assert_eq!(
+            app.comments_menu,
+            Some(CommentsMenu {
+                selected: 1,
+                armed: None
+            })
+        );
         // A fresh `dd` here marks this one rather than dismissing it.
         app.update(Action::DeleteComment);
         assert_eq!(app.review.comments().len(), 3);

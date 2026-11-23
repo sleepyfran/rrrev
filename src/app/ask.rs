@@ -44,7 +44,8 @@ impl App {
     pub(super) fn start_ask(&mut self) {
         if self.ask.running.is_some() {
             self.ask.open = true;
-            self.message = Some("Still answering the last question… (:ask cancel to stop)".to_string());
+            self.message =
+                Some("Still answering the last question… (:ask cancel to stop)".to_string());
             return;
         }
         let Some(target) = self.ask_target() else {
@@ -53,23 +54,32 @@ impl App {
             return;
         };
         self.ask.open = true;
-        self.mode = Mode::Ask { target, input: TextInput::default() };
+        self.mode = Mode::Ask {
+            target,
+            input: TextInput::default(),
+        };
     }
 
     /// `A`: shows or hides the panel.
     pub(super) fn toggle_ask_panel(&mut self) {
         if self.ask.entries.is_empty() && !self.ask.open {
-            self.message = Some("Nothing asked yet: a asks about the line under the cursor".to_string());
+            self.message =
+                Some("Nothing asked yet: a asks about the line under the cursor".to_string());
             return;
         }
         self.ask.open = !self.ask.open;
     }
 
     pub(super) fn ask_input(&mut self, action: InputAction) {
-        let Mode::Ask { input, .. } = &mut self.mode else { return };
+        let Mode::Ask { input, .. } = &mut self.mode else {
+            return;
+        };
         match action {
             InputAction::Submit => {
-                let Mode::Ask { target, input } = std::mem::replace(&mut self.mode, Mode::Normal) else { return };
+                let Mode::Ask { target, input } = std::mem::replace(&mut self.mode, Mode::Normal)
+                else {
+                    return;
+                };
                 self.submit_question(target, input.text().trim().to_string());
             }
             InputAction::Cancel => self.mode = Mode::Normal,
@@ -83,13 +93,18 @@ impl App {
             return;
         }
         self.ask.next_job += 1;
-        let job = Job { id: self.ask.next_job, started: Instant::now() };
+        let job = Job {
+            id: self.ask.next_job,
+            started: Instant::now(),
+        };
         let history = self
             .ask
             .entries
             .iter()
             .filter_map(|e| match &e.answer {
-                Answer::Done(answer) => Some((format!("({}) {}", e.location, e.question), answer.clone())),
+                Answer::Done(answer) => {
+                    Some((format!("({}) {}", e.location, e.question), answer.clone()))
+                }
                 _ => None,
             })
             .collect();
@@ -102,10 +117,18 @@ impl App {
             question: question.clone(),
             history,
         };
-        self.ask.entries.push(AskEntry { job: job.id, location: target.location, question, answer: Answer::Pending });
+        self.ask.entries.push(AskEntry {
+            job: job.id,
+            location: target.location,
+            question,
+            answer: Answer::Pending,
+        });
         self.ask.running = Some(job);
         self.ask.scroll = 0;
-        self.effect = Some(Effect::Ask { job: job.id, request });
+        self.effect = Some(Effect::Ask {
+            job: job.id,
+            request,
+        });
     }
 
     /// Takes the answer to question `job`. Late answers to cancelled
@@ -115,7 +138,9 @@ impl App {
             return;
         }
         self.ask.running = None;
-        let Some(entry) = self.ask.entries.iter_mut().find(|e| e.job == job) else { return };
+        let Some(entry) = self.ask.entries.iter_mut().find(|e| e.job == job) else {
+            return;
+        };
         entry.answer = match result {
             Ok(text) => Answer::Done(text),
             Err(e) => Answer::Failed(format!("{e:#}")),
@@ -179,18 +204,33 @@ impl App {
                     let n = self.notes.get(note)?;
                     (n.file, n.hunk, n.line, n.line)
                 }
-                Row::Hunk { file, hunk } => (file, hunk, 0, self.hunk(file, hunk).lines.len().checked_sub(1)?),
-                Row::Plumbing { file, hunk, start } => (file, hunk, start, self.run_at(file, hunk, start)?.end - 1),
-                Row::Context { file, hunk, no } => return Some(self.context_target(file, hunk, no)),
+                Row::Hunk { file, hunk } => (
+                    file,
+                    hunk,
+                    0,
+                    self.hunk(file, hunk).lines.len().checked_sub(1)?,
+                ),
+                Row::Plumbing { file, hunk, start } => {
+                    (file, hunk, start, self.run_at(file, hunk, start)?.end - 1)
+                }
+                Row::Context { file, hunk, no } => {
+                    return Some(self.context_target(file, hunk, no));
+                }
                 Row::Group { .. } | Row::File { .. } | Row::Comment { .. } => return None,
             },
         };
         let h = self.hunk(file, hunk);
         let signed = |lines: &[crate::diff::DiffLine]| -> Vec<String> {
-            lines.iter().map(|l| format!("{}{}", sign(l.kind), l.content)).collect()
+            lines
+                .iter()
+                .map(|l| format!("{}{}", sign(l.kind), l.content))
+                .collect()
         };
         let path = self.diff.files[file].path();
-        let numbers: Vec<u32> = h.lines[start..=end].iter().filter_map(|l| l.new_no.or(l.old_no)).collect();
+        let numbers: Vec<u32> = h.lines[start..=end]
+            .iter()
+            .filter_map(|l| l.new_no.or(l.old_no))
+            .collect();
         let location = match (numbers.iter().min(), numbers.iter().max()) {
             (Some(a), Some(b)) if a != b => format!("{path}:{a}-{b}"),
             (Some(a), _) => format!("{path}:{a}"),
@@ -198,7 +238,12 @@ impl App {
         };
         Some(AskTarget {
             location,
-            scopes: self.diff.scopes(file, hunk, start).into_iter().map(|s| s.label).collect(),
+            scopes: self
+                .diff
+                .scopes(file, hunk, start)
+                .into_iter()
+                .map(|s| s.label)
+                .collect(),
             code: signed(&h.lines[start..=end]),
             hunk: signed(&h.lines),
         })
@@ -207,15 +252,26 @@ impl App {
     fn context_target(&self, file: usize, hunk: usize, no: u32) -> AskTarget {
         let path = self.diff.files[file].path();
         let text = super::context_text(&self.diff, file, no).unwrap_or("");
-        let scopes = self.diff.context_source(file).map_or_else(Vec::new, |(_, side)| {
-            self.diff.scopes_at(file, side, no).into_iter().map(|s| s.label).collect()
-        });
+        let scopes = self
+            .diff
+            .context_source(file)
+            .map_or_else(Vec::new, |(_, side)| {
+                self.diff
+                    .scopes_at(file, side, no)
+                    .into_iter()
+                    .map(|s| s.label)
+                    .collect()
+            });
         let h = self.hunk(file, hunk);
         AskTarget {
             location: format!("{path}:{no} (unchanged)"),
             scopes,
             code: vec![format!(" {text}")],
-            hunk: h.lines.iter().map(|l| format!("{}{}", sign(l.kind), l.content)).collect(),
+            hunk: h
+                .lines
+                .iter()
+                .map(|l| format!("{}{}", sign(l.kind), l.content))
+                .collect(),
         }
     }
 }
@@ -230,7 +286,9 @@ mod tests {
         app.update(Action::Ask);
         type_text(app, question);
         app.update_input(InputAction::Submit);
-        let Some(Effect::Ask { job, request }) = app.effect.take() else { panic!("no ask effect") };
+        let Some(Effect::Ask { job, request }) = app.effect.take() else {
+            panic!("no ask effect")
+        };
         (job, request)
     }
 
@@ -247,14 +305,22 @@ mod tests {
 
         // One question at a time.
         app.update(Action::Ask);
-        assert!(app.message.as_deref().unwrap().starts_with("Still answering"));
+        assert!(
+            app.message
+                .as_deref()
+                .unwrap()
+                .starts_with("Still answering")
+        );
         assert_eq!(app.mode, Mode::Normal);
 
         app.finish_ask(job, Ok("Because.".into()));
         assert_eq!(app.ask.entries[0].answer, Answer::Done("Because.".into()));
         // The next question carries the last answer along.
         let (_, request) = ask(&mut app, "and then?");
-        assert_eq!(request.history, [("(a.rs:2) why?".to_string(), "Because.".to_string())]);
+        assert_eq!(
+            request.history,
+            [("(a.rs:2) why?".to_string(), "Because.".to_string())]
+        );
     }
 
     #[test]

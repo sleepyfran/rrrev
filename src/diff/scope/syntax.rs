@@ -65,18 +65,25 @@ fn spans_lines(node: Node) -> bool {
 /// Where a definition's body starts, which is where its label stops, when
 /// the query doesn't say.
 fn body(node: Node) -> Option<Node> {
-    node.child_by_field_name("body").or_else(|| node.child_by_field_name("block")).or_else(|| {
-        // Kotlin's bodies are children rather than fields.
-        let mut cursor = node.walk();
-        node.named_children(&mut cursor).find(|c| c.kind().ends_with("_body"))
-    })
+    node.child_by_field_name("body")
+        .or_else(|| node.child_by_field_name("block"))
+        .or_else(|| {
+            // Kotlin's bodies are children rather than fields.
+            let mut cursor = node.walk();
+            node.named_children(&mut cursor)
+                .find(|c| c.kind().ends_with("_body"))
+        })
 }
 
 /// The 0-based row of a node's last character: a node that ends with its
 /// line break ends on the line before.
 fn last_row(node: Node) -> usize {
     let (start, end) = (node.start_position(), node.end_position());
-    if end.column == 0 && end.row > start.row { end.row - 1 } else { end.row }
+    if end.column == 0 && end.row > start.row {
+        end.row - 1
+    } else {
+        end.row
+    }
 }
 
 /// A definition's head, on one line: from the start of the line its name is
@@ -93,7 +100,11 @@ fn label(node: Node, body: Option<Node>, source: &[String]) -> String {
     };
     let parts = (row..=end_row).filter_map(|r| {
         let line = source.get(r)?;
-        Some(if r == end_row { line.get(..end_col.min(line.len())).unwrap_or(line) } else { line.as_str() })
+        Some(if r == end_row {
+            line.get(..end_col.min(line.len())).unwrap_or(line)
+        } else {
+            line.as_str()
+        })
     });
     shorten(&join(parts))
 }
@@ -106,7 +117,9 @@ fn join<'a>(parts: impl Iterator<Item = &'a str>) -> String {
         if part.starts_with([')', ']', '>']) && out.ends_with(',') {
             out.pop();
         }
-        let tight = out.is_empty() || out.ends_with(['(', '[', '<']) || part.starts_with([')', ']', '>', ',']);
+        let tight = out.is_empty()
+            || out.ends_with(['(', '[', '<'])
+            || part.starts_with([')', ']', '>', ',']);
         if !tight {
             out.push(' ');
         }
@@ -126,7 +139,10 @@ mod tests {
     /// The labels around `line` of `text`, parsed as the file `path`.
     fn labels(path: &str, text: &str, line: u32) -> Vec<String> {
         let outline = outline(path, &source(text)).expect("a grammar for this file");
-        super::super::within(&outline, line).into_iter().map(|s| s.label).collect()
+        super::super::within(&outline, line)
+            .into_iter()
+            .map(|s| s.label)
+            .collect()
     }
 
     /// The innermost scope's first and last lines.
@@ -172,10 +188,16 @@ more
     #[test]
     fn python_reads_past_what_broke_indentation() {
         // A split signature, a docstring and a comment at column 0.
-        assert_eq!(labels("a.py", PYTHON, 15), ["class A(B)", "def run(self, a) -> int"]);
+        assert_eq!(
+            labels("a.py", PYTHON, 15),
+            ["class A(B)", "def run(self, a) -> int"]
+        );
         assert_eq!(span("a.py", PYTHON, 15), (6, 15));
         assert_eq!(span("a.py", PYTHON, 7), (6, 15));
-        assert_eq!(labels("a.py", PYTHON, 18), ["class A(B)", "async def go(self)"]);
+        assert_eq!(
+            labels("a.py", PYTHON, 18),
+            ["class A(B)", "async def go(self)"]
+        );
         // Between methods is only in the class. Decorators sit outside it.
         assert_eq!(labels("a.py", PYTHON, 16), ["class A(B)"]);
         assert!(labels("a.py", PYTHON, 4).is_empty());
@@ -204,7 +226,10 @@ mod tests {
 
     #[test]
     fn rust_definitions_but_not_declarations() {
-        assert_eq!(labels("a.rs", RUST, 10), ["impl<T> Foo<T>", "pub fn run(a: u8) -> u8"]);
+        assert_eq!(
+            labels("a.rs", RUST, 10),
+            ["impl<T> Foo<T>", "pub fn run(a: u8) -> u8"]
+        );
         assert_eq!(span("a.rs", RUST, 10), (7, 11));
         assert!(labels("a.rs", RUST, 1).is_empty());
         assert!(labels("a.rs", RUST, 2).is_empty());
@@ -237,14 +262,27 @@ describe(\"thing\", () => {
 
     #[test]
     fn typescript_functions_methods_and_tests() {
-        let method = ["export default function f(pi: X)", "class A", "run(a: number): void"];
-        assert_eq!(labels("a.ts", TYPESCRIPT, 6), [&method[..], &["const g = (x)"]].concat());
+        let method = [
+            "export default function f(pi: X)",
+            "class A",
+            "run(a: number): void",
+        ];
+        assert_eq!(
+            labels("a.ts", TYPESCRIPT, 6),
+            [&method[..], &["const g = (x)"]].concat()
+        );
         // Callbacks aren't definitions.
         assert_eq!(labels("a.ts", TYPESCRIPT, 9), method);
         assert_eq!(labels("a.ts", TYPESCRIPT, 15), ["interface I"]);
-        assert_eq!(labels("a.ts", TYPESCRIPT, 19), ["describe(\"thing\", ()", "it(\"works\", async ()"]);
+        assert_eq!(
+            labels("a.ts", TYPESCRIPT, 19),
+            ["describe(\"thing\", ()", "it(\"works\", async ()"]
+        );
         assert_eq!(labels("a.tsx", TYPESCRIPT, 6).len(), 4);
-        assert_eq!(labels("a.js", "const o = {\n  m() {\n    return 1;\n  },\n};\n", 3), ["m()"]);
+        assert_eq!(
+            labels("a.js", "const o = {\n  m() {\n    return 1;\n  },\n};\n", 3),
+            ["m()"]
+        );
     }
 
     #[test]
@@ -258,32 +296,45 @@ describe(\"thing\", () => {
     #[test]
     fn java_leaves_annotations_out_of_labels() {
         let src = "@Ann\npublic class A {\n    @Override\n    public void run() {\n        go();\n    }\n}\n";
-        assert_eq!(labels("A.java", src, 5), ["public class A", "public void run()"]);
+        assert_eq!(
+            labels("A.java", src, 5),
+            ["public class A", "public void run()"]
+        );
         // The annotation is still part of the method, for `ze`.
         assert_eq!(span("A.java", src, 5), (3, 6));
     }
 
     #[test]
     fn c_and_cpp() {
-        let c = "struct foo x;\nstruct foo {\n  int a;\n};\nstatic int\nmain(void) {\n  return 0;\n}\n";
+        let c =
+            "struct foo x;\nstruct foo {\n  int a;\n};\nstatic int\nmain(void) {\n  return 0;\n}\n";
         assert_eq!(labels("a.c", c, 7), ["static int main(void)"]);
         assert_eq!(labels("a.c", c, 3), ["struct foo"]);
         assert!(labels("a.c", c, 1).is_empty());
         let cpp = "namespace n {\ntemplate <typename T>\nclass A {\n  void run() {\n    go();\n  }\n};\n}\n";
-        assert_eq!(labels("a.cpp", cpp, 5), ["namespace n", "class A", "void run()"]);
+        assert_eq!(
+            labels("a.cpp", cpp, 5),
+            ["namespace n", "class A", "void run()"]
+        );
     }
 
     #[test]
     fn csharp() {
         let src = "namespace M {\n  [Attr]\n  public class A {\n    public int P { get; set; }\n    public void Run() {\n      Go();\n    }\n  }\n}\n";
-        assert_eq!(labels("a.cs", src, 6), ["namespace M", "public class A", "public void Run()"]);
+        assert_eq!(
+            labels("a.cs", src, 6),
+            ["namespace M", "public class A", "public void Run()"]
+        );
         assert_eq!(labels("a.cs", src, 4), ["namespace M", "public class A"]);
     }
 
     #[test]
     fn ruby_methods_and_specs() {
         let src = "module M\n  class A < B\n    def run(a)\n      a\n    end\n  end\nend\ndescribe \"x\" do\n  it \"y\" do\n    go\n  end\nend\n";
-        assert_eq!(labels("a.rb", src, 4), ["module M", "class A < B", "def run(a)"]);
+        assert_eq!(
+            labels("a.rb", src, 4),
+            ["module M", "class A < B", "def run(a)"]
+        );
         assert_eq!(span("a.rb", src, 4), (3, 5));
         assert_eq!(labels("a_spec.rb", src, 10), ["describe \"x\"", "it \"y\""]);
     }
@@ -299,8 +350,14 @@ describe(\"thing\", () => {
     #[test]
     fn kotlin() {
         let src = "class A(val x: Int) {\n    fun run(): Int {\n        return 1\n    }\n    companion object {\n        fun go() = 2\n    }\n}\nfun top(\n    a: Int,\n): Int {\n    return a\n}\n";
-        assert_eq!(labels("a.kt", src, 3), ["class A(val x: Int)", "fun run(): Int"]);
-        assert_eq!(labels("a.kt", src, 6), ["class A(val x: Int)", "companion object", "fun go()"]);
+        assert_eq!(
+            labels("a.kt", src, 3),
+            ["class A(val x: Int)", "fun run(): Int"]
+        );
+        assert_eq!(
+            labels("a.kt", src, 6),
+            ["class A(val x: Int)", "companion object", "fun go()"]
+        );
         assert_eq!(labels("a.kt", src, 12), ["fun top(a: Int): Int"]);
     }
 
@@ -331,9 +388,16 @@ let value = 3
 
     #[test]
     fn fsharp_functions_but_not_values() {
-        assert_eq!(labels("a.fs", FSHARP, 5), ["type C(x: int)", "member this.Run(a)"]);
+        assert_eq!(
+            labels("a.fs", FSHARP, 5),
+            ["type C(x: int)", "member this.Run(a)"]
+        );
         assert_eq!(labels("a.fs", FSHARP, 9), ["let add a b", "let inner c"]);
         assert_eq!(span("a.fs", FSHARP, 10), (7, 10));
-        assert!(labels("a.fs", FSHARP, 12).iter().all(|l| !l.contains("value")));
+        assert!(
+            labels("a.fs", FSHARP, 12)
+                .iter()
+                .all(|l| !l.contains("value"))
+        );
     }
 }

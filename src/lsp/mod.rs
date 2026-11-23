@@ -63,8 +63,12 @@ impl Lsp {
     /// starting it if it isn't running. Files in languages without a server,
     /// or whose server isn't in Mason, are left alone.
     pub fn open(&mut self, path: &str) {
-        let Some(index) = self.server_for(path) else { return };
-        let Some(language) = self.registry.for_path(path) else { return };
+        let Some(index) = self.server_for(path) else {
+            return;
+        };
+        let Some(language) = self.registry.for_path(path) else {
+            return;
+        };
         let full = self.workdir.join(path);
         self.servers[index].open(&full, language_id(&language.name));
     }
@@ -81,13 +85,26 @@ impl Lsp {
             return Some(index);
         }
         let Some(command) = lsp.find() else {
-            let why = if lsp.command.contains('/') { "isn't there" } else { "isn't in Mason" };
-            self.missing.insert(language.name.clone(), format!("{} {why}", lsp.command));
+            let why = if lsp.command.contains('/') {
+                "isn't there"
+            } else {
+                "isn't in Mason"
+            };
+            self.missing
+                .insert(language.name.clone(), format!("{} {why}", lsp.command));
             return None;
         };
         let id = self.servers.len();
         let log = std::env::temp_dir().join(format!("rrrev-lsp-{}.log", language.name));
-        match Server::spawn(id, &language.name, &command, &lsp.args, &root, &log, self.events.clone()) {
+        match Server::spawn(
+            id,
+            &language.name,
+            &command,
+            &lsp.args,
+            &root,
+            &log,
+            self.events.clone(),
+        ) {
             Ok(server) => {
                 self.missing.remove(&language.name);
                 self.servers.push(server);
@@ -103,10 +120,16 @@ impl Lsp {
 
     /// Adds a server that's already connected, as tests do.
     #[cfg(test)]
-    fn add(&mut self, lang: &str, root: &Path, make: impl FnOnce(usize, Sender<Event>) -> Server) -> usize {
+    fn add(
+        &mut self,
+        lang: &str,
+        root: &Path,
+        make: impl FnOnce(usize, Sender<Event>) -> Server,
+    ) -> usize {
         let id = self.servers.len();
         self.servers.push(make(id, self.events.clone()));
-        self.by_root.insert((lang.to_string(), root.to_path_buf()), id);
+        self.by_root
+            .insert((lang.to_string(), root.to_path_buf()), id);
         id
     }
 
@@ -144,7 +167,11 @@ impl Lsp {
                 State::Exited(why) => format!("{} stopped, {why}", server.name),
                 _ => format!("{} stopped", server.name),
             };
-            replies.extend(abandoned.into_iter().map(|id| Reply { server: index, id, result: Err(why.clone()) }));
+            replies.extend(abandoned.into_iter().map(|id| Reply {
+                server: index,
+                id,
+                result: Err(why.clone()),
+            }));
         }
         replies
     }
@@ -164,16 +191,27 @@ impl Lsp {
             .map(|s| {
                 let state = match &s.state {
                     State::Starting => "starting".to_string(),
-                    State::Ready => s.activity().map_or_else(|| "ready".to_string(), |a| a.replacen(&format!("{}: ", s.name), "", 1)),
+                    State::Ready => s.activity().map_or_else(
+                        || "ready".to_string(),
+                        |a| a.replacen(&format!("{}: ", s.name), "", 1),
+                    ),
                     State::Exited(why) => format!("stopped, {why}"),
                 };
                 format!("{} {state}", s.name)
             })
             .collect();
-        let mut missing: Vec<_> = self.missing.iter().map(|(lang, why)| format!("{lang}: {why}")).collect();
+        let mut missing: Vec<_> = self
+            .missing
+            .iter()
+            .map(|(lang, why)| format!("{lang}: {why}"))
+            .collect();
         missing.sort();
         parts.extend(missing);
-        if parts.is_empty() { "No language servers for these files".to_string() } else { parts.join(" · ") }
+        if parts.is_empty() {
+            "No language servers for these files".to_string()
+        } else {
+            parts.join(" · ")
+        }
     }
 
     /// Stops every server; each starts again with the next file opened.
@@ -198,9 +236,17 @@ impl Drop for Lsp {
 pub fn project_root(workdir: &Path, path: &str, roots: &[String]) -> PathBuf {
     let mut dir = workdir.join(path);
     while dir.pop() && dir.starts_with(workdir) {
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
-        let names: Vec<String> = entries.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
-        if roots.iter().any(|root| names.iter().any(|name| glob(root, name))) {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let names: Vec<String> = entries
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        if roots
+            .iter()
+            .any(|root| names.iter().any(|name| glob(root, name)))
+        {
             return dir;
         }
     }
@@ -212,8 +258,12 @@ fn glob(pattern: &str, name: &str) -> bool {
     match pattern.split_once('*') {
         None => pattern == name,
         Some((head, rest)) => {
-            let Some(name) = name.strip_prefix(head) else { return false };
-            (0..=name.len()).filter(|&i| name.is_char_boundary(i)).any(|i| glob(rest, &name[i..]))
+            let Some(name) = name.strip_prefix(head) else {
+                return false;
+            };
+            (0..=name.len())
+                .filter(|&i| name.is_char_boundary(i))
+                .any(|i| glob(rest, &name[i..]))
         }
     }
 }
@@ -241,7 +291,10 @@ pub fn to_character(line: &str, byte: usize, encoding: Encoding) -> u32 {
 pub fn to_byte(line: &str, character: u32, encoding: Encoding) -> usize {
     let character = character as usize;
     match encoding {
-        Encoding::Utf8 => (0..=character.min(line.len())).rev().find(|&i| line.is_char_boundary(i)).unwrap_or(0),
+        Encoding::Utf8 => (0..=character.min(line.len()))
+            .rev()
+            .find(|&i| line.is_char_boundary(i))
+            .unwrap_or(0),
         Encoding::Utf16 => {
             let mut units = 0;
             for (i, c) in line.char_indices() {
@@ -267,10 +320,19 @@ pub fn locations(result: &Value) -> Vec<(PathBuf, u32, u32)> {
     items
         .into_iter()
         .filter_map(|item| {
-            let uri = item.get("targetUri").or_else(|| item.get("uri"))?.as_str()?;
-            let range = item.get("targetSelectionRange").or_else(|| item.get("range"))?;
+            let uri = item
+                .get("targetUri")
+                .or_else(|| item.get("uri"))?
+                .as_str()?;
+            let range = item
+                .get("targetSelectionRange")
+                .or_else(|| item.get("range"))?;
             let start = &range["start"];
-            Some((path_from_uri(uri)?, start["line"].as_u64()? as u32, start["character"].as_u64()? as u32))
+            Some((
+                path_from_uri(uri)?,
+                start["line"].as_u64()? as u32,
+                start["character"].as_u64()? as u32,
+            ))
         })
         .collect()
 }
@@ -295,7 +357,9 @@ pub fn path_from_uri(uri: &str) -> Option<PathBuf> {
     let mut i = 0;
     while i < encoded.len() {
         if encoded[i] == b'%'
-            && let Some(byte) = encoded.get(i + 1..i + 3).and_then(|h| u8::from_str_radix(std::str::from_utf8(h).ok()?, 16).ok())
+            && let Some(byte) = encoded
+                .get(i + 1..i + 3)
+                .and_then(|h| u8::from_str_radix(std::str::from_utf8(h).ok()?, 16).ok())
         {
             bytes.push(byte);
             i += 3;
@@ -353,7 +417,13 @@ mod tests {
                 }
             }
         });
-        (index, Fake { input, output: to_client })
+        (
+            index,
+            Fake {
+                input,
+                output: to_client,
+            },
+        )
     }
 
     /// Polls until `done` holds, or fails after a second.
@@ -395,20 +465,30 @@ mod tests {
         // Progress shows in the status line until it ends.
         let progress = |kind: &str, extra: Value| {
             let mut value = json!({"kind": kind});
-            value.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            value
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
             json!({"jsonrpc": "2.0", "method": "$/progress", "params": {"token": "t", "value": value}})
         };
         fake.send(progress("begin", json!({"title": "Indexing"})));
         fake.send(progress("report", json!({"percentage": 40})));
-        poll_until(&mut lsp, |lsp, _| lsp.status().as_deref() == Some("fake-ls: Indexing 40%"));
+        poll_until(&mut lsp, |lsp, _| {
+            lsp.status().as_deref() == Some("fake-ls: Indexing 40%")
+        });
         assert_eq!(lsp.describe(), "fake-ls Indexing 40%");
         fake.send(progress("end", json!({})));
         poll_until(&mut lsp, |lsp, _| lsp.status().is_none());
 
         // The server's own requests get answers.
         fake.send(json!({"jsonrpc": "2.0", "id": 7, "method": "workspace/configuration", "params": {"items": [{}, {}]}}));
-        assert_eq!(fake.read(&mut lsp), json!({"jsonrpc": "2.0", "id": 7, "result": [null, null]}));
-        fake.send(json!({"jsonrpc": "2.0", "id": 8, "method": "window/showDocument", "params": {}}));
+        assert_eq!(
+            fake.read(&mut lsp),
+            json!({"jsonrpc": "2.0", "id": 7, "result": [null, null]})
+        );
+        fake.send(
+            json!({"jsonrpc": "2.0", "id": 8, "method": "window/showDocument", "params": {}}),
+        );
         assert_eq!(fake.read(&mut lsp)["error"]["code"], -32601);
 
         // rrrev's requests come back as replies.
@@ -424,7 +504,9 @@ mod tests {
 
         // A server that goes away says so.
         drop(fake);
-        poll_until(&mut lsp, |lsp, _| matches!(lsp.servers[index].state, State::Exited(_)));
+        poll_until(&mut lsp, |lsp, _| {
+            matches!(lsp.servers[index].state, State::Exited(_))
+        });
         assert_eq!(lsp.describe(), "fake-ls stopped, it exited");
     }
 
@@ -434,20 +516,29 @@ mod tests {
         let mut lsp = Lsp::new(dir.path(), Registry::global());
         let (index, mut fake) = connected(&mut lsp, dir.path());
         let initialize = fake.read(&mut lsp);
-        fake.send(json!({"jsonrpc": "2.0", "id": initialize["id"], "result": {"capabilities": {}}}));
+        fake.send(
+            json!({"jsonrpc": "2.0", "id": initialize["id"], "result": {"capabilities": {}}}),
+        );
         poll_until(&mut lsp, |lsp, _| lsp.servers[index].state == State::Ready);
         assert_eq!(fake.read(&mut lsp)["method"], "initialized");
 
         // A cancelled request says so to the server, and its answer is dropped.
-        let first = lsp.server(index).request("textDocument/definition", json!({}));
+        let first = lsp
+            .server(index)
+            .request("textDocument/definition", json!({}));
         assert_eq!(fake.read(&mut lsp)["id"], first);
         lsp.server(index).cancel(first);
         let cancel = fake.read(&mut lsp);
-        assert_eq!((cancel["method"].as_str(), &cancel["params"]["id"]), (Some("$/cancelRequest"), &json!(first)));
+        assert_eq!(
+            (cancel["method"].as_str(), &cancel["params"]["id"]),
+            (Some("$/cancelRequest"), &json!(first))
+        );
         fake.send(json!({"jsonrpc": "2.0", "id": first, "result": null}));
 
         // One still out when the server goes away fails, once.
-        let second = lsp.server(index).request("textDocument/definition", json!({}));
+        let second = lsp
+            .server(index)
+            .request("textDocument/definition", json!({}));
         assert_eq!(fake.read(&mut lsp)["id"], second);
         drop(fake);
         let mut got = Vec::new();
@@ -455,7 +546,10 @@ mod tests {
             got.extend(replies.iter().map(|r| (r.id, r.result.clone())));
             !got.is_empty()
         });
-        assert_eq!(got, [(second, Err("fake-ls stopped, it exited".to_string()))]);
+        assert_eq!(
+            got,
+            [(second, Err("fake-ls stopped, it exited".to_string()))]
+        );
         assert!(lsp.poll().is_empty());
     }
 
@@ -466,7 +560,9 @@ mod tests {
         let (index, mut fake) = connected(&mut lsp, dir.path());
         let initialize = fake.read(&mut lsp);
         fake.send(json!({"jsonrpc": "2.0", "id": initialize["id"], "error": {"code": 1, "message": "no"}}));
-        poll_until(&mut lsp, |lsp, _| matches!(lsp.servers[index].state, State::Exited(_)));
+        poll_until(&mut lsp, |lsp, _| {
+            matches!(lsp.servers[index].state, State::Exited(_))
+        });
         assert_eq!(lsp.describe(), "fake-ls stopped, it refused to start: no");
     }
 
@@ -498,7 +594,9 @@ mod tests {
         assert_eq!(roots("crates/a/src/lib.rs", &["Cargo.toml"]), crate_dir);
         assert_eq!(roots("x/y.cs", &["*.csproj"]), dir.path());
         assert_eq!(roots("crates/a/src/lib.rs", &["go.mod"]), dir.path());
-        assert!(glob("*.csproj", "App.csproj") && !glob("*.csproj", "App.cs") && glob("a*b*c", "aXbYc"));
+        assert!(
+            glob("*.csproj", "App.csproj") && !glob("*.csproj", "App.cs") && glob("a*b*c", "aXbYc")
+        );
     }
 
     #[test]
@@ -510,14 +608,24 @@ mod tests {
         assert_eq!(to_byte(line, 14, Encoding::Utf16), x);
         assert_eq!(to_byte(line, x as u32, Encoding::Utf8), x);
         assert_eq!(to_byte(line, 99, Encoding::Utf16), line.len());
-        assert_eq!(to_byte(line, 5, Encoding::Utf8), 4, "inside ñ, back to its start");
+        assert_eq!(
+            to_byte(line, 5, Encoding::Utf8),
+            4,
+            "inside ñ, back to its start"
+        );
     }
 
     #[test]
     fn reads_every_shape_of_location() {
         let at = |uri: &str| json!({"uri": uri, "range": {"start": {"line": 3, "character": 4}, "end": {}}});
-        assert_eq!(locations(&at("file:///a.rs")), [(PathBuf::from("/a.rs"), 3, 4)]);
-        assert_eq!(locations(&json!([at("file:///a.rs"), at("file:///b.rs")])).len(), 2);
+        assert_eq!(
+            locations(&at("file:///a.rs")),
+            [(PathBuf::from("/a.rs"), 3, 4)]
+        );
+        assert_eq!(
+            locations(&json!([at("file:///a.rs"), at("file:///b.rs")])).len(),
+            2
+        );
         let link = json!([{"targetUri": "file:///c.rs", "targetRange": {}, "targetSelectionRange": {"start": {"line": 1, "character": 2}}}]);
         assert_eq!(locations(&link), [(PathBuf::from("/c.rs"), 1, 2)]);
         assert!(locations(&Value::Null).is_empty());

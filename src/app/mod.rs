@@ -27,29 +27,29 @@ mod view;
 mod test_support;
 
 pub use action::{Action, Effect, GoTo, Spot, VerdictAction};
-pub use goto::{Place, Target};
-pub use grammars::{EnableLanguage, Grammars};
-pub use lookup::{Hover, ReferencesMenu, hover_text};
 pub use ask::{Answer, AskPanel};
 pub use column::FindChar;
 pub use comments_menu::{CommentsMenu, DismissCopied};
 pub use context::{context_numbers, context_text, is_above};
 pub use file_view::{FileView, Mark};
+pub use goto::{Place, Target};
+pub use grammars::{EnableLanguage, Grammars};
+pub use lookup::{Hover, ReferencesMenu, hover_text};
 pub use marks::Progress;
 pub use mode::{AskTarget, CommentTarget, Focus, Mode, View};
 pub use notes::PlacedNote;
-pub use verdict::LineStats;
 pub use plan::{Job, StackPlace};
 pub use search::find_matches;
 pub use theme::ThemePicker;
+pub use verdict::LineStats;
 pub use view::{NOTE_LABEL, Row};
 
 use std::collections::HashMap;
 
+use crate::appearance::Appearance;
 use crate::diff::{Diff, DiffLine, Hunk};
 use crate::input::InputAction;
 use crate::review::ReviewState;
-use crate::appearance::Appearance;
 use crate::theme::{Palette, Theme};
 
 pub struct App {
@@ -209,7 +209,9 @@ impl App {
         app.collapsed = (0..app.diff.files.len())
             .map(|f| app.diff.is_plumbing_file(f) || app.file_progress(f).is_complete())
             .collect();
-        app.hunk_folds = (0..app.diff.files.len()).map(|f| app.plumbing_folds(f)).collect();
+        app.hunk_folds = (0..app.diff.files.len())
+            .map(|f| app.plumbing_folds(f))
+            .collect();
         // A stack follows its layers, each in its plan's groups once
         // organized; a review that has a plan picks up in it.
         let followed = app.follow_plan();
@@ -247,7 +249,8 @@ impl App {
             self.update_help(action);
             return;
         }
-        if self.dismiss_prompt.is_some() || self.language_prompt.is_some() || self.ask.confirm_clear {
+        if self.dismiss_prompt.is_some() || self.language_prompt.is_some() || self.ask.confirm_clear
+        {
             // Answered through `answer_dismiss_copied`,
             // `answer_enable_language` or `answer_clear_ask`; nothing else
             // gets through.
@@ -356,7 +359,9 @@ impl App {
             Action::ToggleVerdict => self.show_verdict = true,
             Action::PickTheme => self.open_theme_picker(),
             Action::Select => match self.current_row() {
-                Some(Row::File { .. } | Row::Hunk { .. } | Row::Plumbing { .. }) => self.toggle_fold(),
+                Some(Row::File { .. } | Row::Hunk { .. } | Row::Plumbing { .. }) => {
+                    self.toggle_fold()
+                }
                 Some(Row::Line { .. } | Row::Context { .. }) => self.open_file_view(),
                 _ => {}
             },
@@ -400,7 +405,9 @@ impl App {
     /// closes it; everything else waits. How far it can scroll depends on how
     /// the help wraps, so the UI caps the scroll when it draws.
     fn update_help(&mut self, action: Action) {
-        let Some(scroll) = self.help_scroll else { return };
+        let Some(scroll) = self.help_scroll else {
+            return;
+        };
         let half = self.half_page().unsigned_abs();
         self.help_scroll = match action {
             Action::Down(n) => Some(scroll.saturating_add(n)),

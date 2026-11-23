@@ -52,7 +52,10 @@ impl Stack {
             .output()
             .with_context(|| format!("cannot run `{program}`"))?;
         if !output.status.success() {
-            bail!("`gh stack view` failed: {}", String::from_utf8_lossy(&output.stderr).trim());
+            bail!(
+                "`gh stack view` failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
         }
         Self::parse(&String::from_utf8_lossy(&output.stdout))
     }
@@ -79,7 +82,8 @@ impl Stack {
         struct Pr {
             number: Option<u64>,
         }
-        let view: View = serde_json::from_str(json.trim()).context("unexpected output from `gh stack view`")?;
+        let view: View =
+            serde_json::from_str(json.trim()).context("unexpected output from `gh stack view`")?;
         // Merged layers are in the trunk now, so the next one builds on what's below them.
         let mut base = view.trunk.clone();
         let mut layers = Vec::new();
@@ -94,7 +98,10 @@ impl Stack {
         if layers.is_empty() {
             bail!("every layer of the stack is merged");
         }
-        Ok(Stack { trunk: view.trunk, layers })
+        Ok(Stack {
+            trunk: view.trunk,
+            layers,
+        })
     }
 
     pub fn top(&self) -> &str {
@@ -124,8 +131,18 @@ mod tests {
         assert_eq!(
             stack.layers,
             [
-                Layer { branch: "auth".into(), base: "main".into(), pr: Some(12), needs_rebase: false },
-                Layer { branch: "api".into(), base: "auth".into(), pr: None, needs_rebase: true },
+                Layer {
+                    branch: "auth".into(),
+                    base: "main".into(),
+                    pr: Some(12),
+                    needs_rebase: false
+                },
+                Layer {
+                    branch: "api".into(),
+                    base: "auth".into(),
+                    pr: None,
+                    needs_rebase: true
+                },
             ]
         );
         assert_eq!(stack.layers[0].title(), "#12 auth");

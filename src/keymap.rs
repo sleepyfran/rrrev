@@ -33,7 +33,12 @@ impl KeyHandler {
             && (c != '0' || self.count.is_some())
         {
             let digit = c.to_digit(10).expect("matched a digit") as usize;
-            self.count = Some(self.count.unwrap_or(0).saturating_mul(10).saturating_add(digit));
+            self.count = Some(
+                self.count
+                    .unwrap_or(0)
+                    .saturating_mul(10)
+                    .saturating_add(digit),
+            );
             return None;
         }
 
@@ -45,9 +50,14 @@ impl KeyHandler {
                 self.count = count;
                 return None;
             }
-            (Some(p @ ('f' | 'F' | 't')), KeyCode::Char(target)) => {
-                Action::FindChar { n, find: FindChar { target, forward: p != 'F', till: p == 't' } }
-            }
+            (Some(p @ ('f' | 'F' | 't')), KeyCode::Char(target)) => Action::FindChar {
+                n,
+                find: FindChar {
+                    target,
+                    forward: p != 'F',
+                    till: p == 't',
+                },
+            },
             (Some('g'), KeyCode::Char('g')) => Action::Top,
             (Some('g'), KeyCode::Char('s')) => Action::ShowView(View::Stack),
             (Some('g'), KeyCode::Char('p')) => Action::ShowView(View::Plan),
@@ -245,9 +255,15 @@ mod tests {
     fn verdict_keys_pick_buttons() {
         let key = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
         assert_eq!(verdict_action(key('a')), Some(VerdictAction::Approve));
-        assert_eq!(verdict_action(key('r')), Some(VerdictAction::RequestChanges));
+        assert_eq!(
+            verdict_action(key('r')),
+            Some(VerdictAction::RequestChanges)
+        );
         assert_eq!(verdict_action(key('Y')), Some(VerdictAction::CopyForAgent));
-        assert_eq!(verdict_action(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)), Some(VerdictAction::Close));
+        assert_eq!(
+            verdict_action(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            Some(VerdictAction::Close)
+        );
         assert_eq!(verdict_action(key('j')), None);
     }
 
@@ -276,8 +292,14 @@ mod tests {
     fn go_to_keys() {
         let mut h = KeyHandler::default();
         assert_eq!(press(&mut h, "gd"), Some(Action::GoTo(GoTo::Definition)));
-        assert_eq!(press(&mut h, "gy"), Some(Action::GoTo(GoTo::TypeDefinition)));
-        assert_eq!(press(&mut h, "gi"), Some(Action::GoTo(GoTo::Implementation)));
+        assert_eq!(
+            press(&mut h, "gy"),
+            Some(Action::GoTo(GoTo::TypeDefinition))
+        );
+        assert_eq!(
+            press(&mut h, "gi"),
+            Some(Action::GoTo(GoTo::Implementation))
+        );
         assert_eq!(press(&mut h, "gr"), Some(Action::References));
         assert_eq!(press(&mut h, "K"), Some(Action::Hover));
     }
@@ -287,15 +309,46 @@ mod tests {
         let mut h = KeyHandler::default();
         assert_eq!(press(&mut h, "3l"), Some(Action::Right(3)));
         assert_eq!(press(&mut h, "h"), Some(Action::Left(1)));
-        assert_eq!(press(&mut h, "2w"), Some(Action::WordForward { n: 2, big: false }));
-        assert_eq!(press(&mut h, "B"), Some(Action::WordBackward { n: 1, big: true }));
-        assert_eq!(press(&mut h, "E"), Some(Action::WordEnd { n: 1, big: true }));
+        assert_eq!(
+            press(&mut h, "2w"),
+            Some(Action::WordForward { n: 2, big: false })
+        );
+        assert_eq!(
+            press(&mut h, "B"),
+            Some(Action::WordBackward { n: 1, big: true })
+        );
+        assert_eq!(
+            press(&mut h, "E"),
+            Some(Action::WordEnd { n: 1, big: true })
+        );
         assert_eq!(press(&mut h, "^"), Some(Action::FirstNonBlank));
         assert_eq!(press(&mut h, "$"), Some(Action::LineEnd));
-        let find = |target, forward, till| FindChar { target, forward, till };
-        assert_eq!(press(&mut h, "2f("), Some(Action::FindChar { n: 2, find: find('(', true, false) }));
-        assert_eq!(press(&mut h, "t)"), Some(Action::FindChar { n: 1, find: find(')', true, true) }));
-        assert_eq!(press(&mut h, "Fx"), Some(Action::FindChar { n: 1, find: find('x', false, false) }));
+        let find = |target, forward, till| FindChar {
+            target,
+            forward,
+            till,
+        };
+        assert_eq!(
+            press(&mut h, "2f("),
+            Some(Action::FindChar {
+                n: 2,
+                find: find('(', true, false)
+            })
+        );
+        assert_eq!(
+            press(&mut h, "t)"),
+            Some(Action::FindChar {
+                n: 1,
+                find: find(')', true, true)
+            })
+        );
+        assert_eq!(
+            press(&mut h, "Fx"),
+            Some(Action::FindChar {
+                n: 1,
+                find: find('x', false, false)
+            })
+        );
         // `T` is still the theme picker.
         assert_eq!(press(&mut h, "T"), Some(Action::PickTheme));
     }

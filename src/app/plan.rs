@@ -57,7 +57,12 @@ pub(super) fn resolve(plan: &Plan, diff: &Diff) -> Vec<PlanPage> {
 fn resolve_in(plan: &Plan, diff: &Diff, files: Range<usize>) -> Vec<PlanPage> {
     let positions: HashMap<&HunkId, (usize, usize)> = files
         .map(|f| (f, &diff.files[f]))
-        .flat_map(|(f, file)| file.hunks.iter().enumerate().map(move |(h, hunk)| (&hunk.id, (f, h))))
+        .flat_map(|(f, file)| {
+            file.hunks
+                .iter()
+                .enumerate()
+                .map(move |(h, hunk)| (&hunk.id, (f, h)))
+        })
         .collect();
     let mut placed = HashSet::new();
     let mut pages: Vec<PlanPage> = plan
@@ -80,12 +85,16 @@ fn resolve_in(plan: &Plan, diff: &Diff, files: Range<usize>) -> Vec<PlanPage> {
         return pages;
     }
 
-    let mut rest: Vec<(usize, usize)> = positions.into_values().filter(|p| !placed.contains(p)).collect();
+    let mut rest: Vec<(usize, usize)> = positions
+        .into_values()
+        .filter(|p| !placed.contains(p))
+        .collect();
     rest.sort();
     if !rest.is_empty() {
         pages.push(PlanPage {
             title: UNPLANNED.to_string(),
-            rationale: "Hunks the plan doesn't cover: new since it was made, or left out.".to_string(),
+            rationale: "Hunks the plan doesn't cover: new since it was made, or left out."
+                .to_string(),
             hunks: rest,
             place: None,
         });
@@ -99,10 +108,15 @@ fn resolve_in(plan: &Plan, diff: &Diff, files: Range<usize>) -> Vec<PlanPage> {
 pub(super) fn stack_pages(diff: &Diff, plan: Option<&Plan>) -> Vec<PlanPage> {
     let mut pages = Vec::new();
     for (layer, section) in diff.sections.iter().enumerate() {
-        let planned = plan.map(|p| resolve_in(p, diff, section.files.clone())).unwrap_or_default();
+        let planned = plan
+            .map(|p| resolve_in(p, diff, section.files.clone()))
+            .unwrap_or_default();
         if planned.is_empty() {
-            let hunks: Vec<_> =
-                section.files.clone().flat_map(|f| (0..diff.files[f].hunks.len()).map(move |h| (f, h))).collect();
+            let hunks: Vec<_> = section
+                .files
+                .clone()
+                .flat_map(|f| (0..diff.files[f].hunks.len()).map(move |h| (f, h)))
+                .collect();
             if !hunks.is_empty() {
                 pages.push(PlanPage {
                     title: section.title.clone(),
@@ -115,7 +129,10 @@ pub(super) fn stack_pages(diff: &Diff, plan: Option<&Plan>) -> Vec<PlanPage> {
         }
         let count = planned.len();
         pages.extend(planned.into_iter().enumerate().map(|(i, page)| PlanPage {
-            place: Some(StackPlace { layer, group: Some((i, count)) }),
+            place: Some(StackPlace {
+                layer,
+                group: Some((i, count)),
+            }),
             ..page
         }));
     }
@@ -143,26 +160,41 @@ impl App {
     /// The stack layer the cursor is in.
     pub fn current_layer(&self) -> Option<usize> {
         match self.view {
-            View::Stack => self.stack.get(self.page).and_then(|p| p.place).map(|p| p.layer),
+            View::Stack => self
+                .stack
+                .get(self.page)
+                .and_then(|p| p.place)
+                .map(|p| p.layer),
             View::Plan | View::Files => {
                 let file = self.current_file()?;
-                self.diff.sections.iter().position(|s| s.files.contains(&file))
+                self.diff
+                    .sections
+                    .iter()
+                    .position(|s| s.files.contains(&file))
             }
         }
     }
 
     /// The first stack page of `layer`.
     pub(super) fn layer_page(&self, layer: usize) -> Option<usize> {
-        self.stack.iter().position(|p| p.place.is_some_and(|p| p.layer == layer))
+        self.stack
+            .iter()
+            .position(|p| p.place.is_some_and(|p| p.layer == layer))
     }
 
     /// The files of `layer`, or the whole diff's without one.
     fn layer_files(&self, layer: Option<usize>) -> Range<usize> {
-        layer.map_or(0..self.diff.files.len(), |l| self.diff.sections[l].files.clone())
+        layer.map_or(0..self.diff.files.len(), |l| {
+            self.diff.sections[l].files.clone()
+        })
     }
 
     fn hunk_ids(&self, files: Range<usize>) -> HashSet<&HunkId> {
-        self.diff.files[files].iter().flat_map(|f| &f.hunks).map(|h| &h.id).collect()
+        self.diff.files[files]
+            .iter()
+            .flat_map(|f| &f.hunks)
+            .map(|h| &h.id)
+            .collect()
     }
 
     /// The layer to organize or clear: the one under the cursor in a stack,
@@ -183,7 +215,9 @@ impl App {
     /// Keeps hunks edited since the saved plan was made in their groups,
     /// saving the plan if that changes it. Returns how many it kept.
     pub(super) fn follow_plan(&mut self) -> usize {
-        let Some(saved) = self.review.plan() else { return 0 };
+        let Some(saved) = self.review.plan() else {
+            return 0;
+        };
         let mut plan = saved.clone();
         let followed = plan.follow(&self.diff);
         // Plans saved before anchors were kept get them now.
@@ -197,13 +231,20 @@ impl App {
     /// What opening on a saved plan has to say: hunks edited since it was
     /// made that stayed in their groups, and hunks it doesn't cover.
     pub(super) fn plan_status(&self, followed: usize) -> Option<String> {
-        let unplanned: usize =
-            self.plan.iter().chain(&self.stack).filter(|p| p.title == UNPLANNED).map(|p| p.hunks.len()).sum();
+        let unplanned: usize = self
+            .plan
+            .iter()
+            .chain(&self.stack)
+            .filter(|p| p.title == UNPLANNED)
+            .map(|p| p.hunks.len())
+            .sum();
         let mut parts = Vec::new();
         match followed {
             0 => {}
             1 => parts.push("1 hunk edited since the plan stays in its group".to_string()),
-            n => parts.push(format!("{n} hunks edited since the plan stay in their groups")),
+            n => parts.push(format!(
+                "{n} hunks edited since the plan stay in their groups"
+            )),
         }
         match unplanned {
             0 => {}
@@ -219,7 +260,11 @@ impl App {
             self.stack = stack_pages(&self.diff, self.review.plan());
             self.plan.clear();
         } else {
-            self.plan = self.review.plan().map(|p| resolve(p, &self.diff)).unwrap_or_default();
+            self.plan = self
+                .review
+                .plan()
+                .map(|p| resolve(p, &self.diff))
+                .unwrap_or_default();
         }
     }
 
@@ -241,23 +286,40 @@ impl App {
             self.message = Some("Already organizing… (:organize cancel to stop)".to_string());
             return;
         }
-        let Ok(layer) = self.target_layer() else { return };
+        let Ok(layer) = self.target_layer() else {
+            return;
+        };
         let files = self.layer_files(layer);
-        if self.diff.files[files.clone()].iter().all(|f| f.hunks.is_empty()) {
+        if self.diff.files[files.clone()]
+            .iter()
+            .all(|f| f.hunks.is_empty())
+        {
             self.message = Some("Nothing to organize".to_string());
             return;
         }
         let title = match layer {
             Some(l) => {
                 let (section, count) = (&self.diff.sections[l], self.diff.sections.len());
-                format!("{} · layer {}/{count}: {} ({})", self.title, l + 1, section.title, section.rationale)
+                format!(
+                    "{} · layer {}/{count}: {} ({})",
+                    self.title,
+                    l + 1,
+                    section.title,
+                    section.rationale
+                )
             }
             None => self.title.clone(),
         };
         self.next_job += 1;
-        let job = Job { id: self.next_job, started: Instant::now() };
+        let job = Job {
+            id: self.next_job,
+            started: Instant::now(),
+        };
         let request = OrganizeRequest::from_files(&title, &self.diff, files);
-        self.effect = Some(Effect::Organize { job: job.id, request });
+        self.effect = Some(Effect::Organize {
+            job: job.id,
+            request,
+        });
         self.organizing = Some(job);
         self.organizing_layer = layer;
         if let Some(l) = layer {
@@ -278,8 +340,12 @@ impl App {
     /// Drops the plan, saved copy included: in a stack, the plan of the layer
     /// under the cursor, or every layer's with `all`.
     fn clear_plan(&mut self, all: bool) {
-        let layer = if all { None } else {
-            let Ok(layer) = self.target_layer() else { return };
+        let layer = if all {
+            None
+        } else {
+            let Ok(layer) = self.target_layer() else {
+                return;
+            };
             layer
         };
         let message = match layer {
@@ -289,12 +355,19 @@ impl App {
                     return;
                 }
                 self.review.clear_plan();
-                if self.is_stack() { "Plan cleared: back to the stack's layers" } else { "Plan cleared" }.to_string()
+                if self.is_stack() {
+                    "Plan cleared: back to the stack's layers"
+                } else {
+                    "Plan cleared"
+                }
+                .to_string()
             }
             Some(l) => {
                 let ids = self.hunk_ids(self.layer_files(Some(l)));
                 let Some(mut saved) = self.review.plan().filter(|p| p.covers(&ids)).cloned() else {
-                    self.message = Some("No plan for this layer (:organize clear all for every layer)".to_string());
+                    self.message = Some(
+                        "No plan for this layer (:organize clear all for every layer)".to_string(),
+                    );
                     return;
                 };
                 saved.forget(&ids);
@@ -303,7 +376,10 @@ impl App {
                 } else {
                     self.review.set_plan(saved);
                 }
-                format!("Plan cleared for {}: back to its hunks", self.diff.sections[l].title)
+                format!(
+                    "Plan cleared for {}: back to its hunks",
+                    self.diff.sections[l].title
+                )
             }
         };
         self.place_notes();
@@ -359,21 +435,40 @@ impl App {
         self.place_notes();
         self.place_plan();
         // A fresh plan is read from the top.
-        self.view = if layer.is_some() { View::Stack } else { View::Plan };
+        self.view = if layer.is_some() {
+            View::Stack
+        } else {
+            View::Plan
+        };
         self.rows.clear();
         let first = layer.and_then(|l| self.layer_page(l)).unwrap_or(0);
         self.open_page(first, 0);
         let groups = match layer {
-            Some(l) => self.stack.iter().filter(|p| p.place.is_some_and(|p| p.layer == l)).count(),
+            Some(l) => self
+                .stack
+                .iter()
+                .filter(|p| p.place.is_some_and(|p| p.layer == l))
+                .count(),
             None => self.plan.len(),
         };
-        let notes = match self.notes.iter().filter(|n| files.contains(&n.file)).count() {
+        let notes = match self
+            .notes
+            .iter()
+            .filter(|n| files.contains(&n.file))
+            .count()
+        {
             0 => String::new(),
             1 => " and 1 note".to_string(),
             n => format!(" and {n} notes"),
         };
-        let what = layer.map_or("Organized".to_string(), |l| format!("Organized {}", self.diff.sections[l].title));
-        let back = if layer.is_some() { "gf files" } else { "gp plan · gf files" };
+        let what = layer.map_or("Organized".to_string(), |l| {
+            format!("Organized {}", self.diff.sections[l].title)
+        });
+        let back = if layer.is_some() {
+            "gf files"
+        } else {
+            "gp plan · gf files"
+        };
         self.message = Some(format!("{what} into {groups} groups{notes} · {back}"));
     }
 
@@ -384,13 +479,19 @@ impl App {
         }
         match view {
             View::Stack if !self.is_stack() => {
-                self.message = Some("Not a stack: `rrrev stack` reviews one layer by layer".to_string())
+                self.message =
+                    Some("Not a stack: `rrrev stack` reviews one layer by layer".to_string())
             }
-            View::Stack if self.stack.is_empty() => self.message = Some("Nothing to review in the stack".to_string()),
+            View::Stack if self.stack.is_empty() => {
+                self.message = Some("Nothing to review in the stack".to_string())
+            }
             View::Plan if self.is_stack() => {
-                self.message = Some("In a stack each layer has its own plan: gs shows them".to_string())
+                self.message =
+                    Some("In a stack each layer has its own plan: gs shows them".to_string())
             }
-            View::Plan if self.plan.is_empty() => self.message = Some("No plan yet: run :organize".to_string()),
+            View::Plan if self.plan.is_empty() => {
+                self.message = Some("No plan yet: run :organize".to_string())
+            }
             _ => self.set_view(view),
         }
     }
@@ -415,11 +516,18 @@ impl App {
         let target = if forward {
             starts.iter().filter(|&&s| s > self.page).take(n).last()
         } else {
-            starts.iter().rev().filter(|&&s| s < self.page).take(n).last()
+            starts
+                .iter()
+                .rev()
+                .filter(|&&s| s < self.page)
+                .take(n)
+                .last()
         };
         match target {
             Some(&page) => self.open_page(page, 0),
-            None => self.message = Some(if forward { "Last layer" } else { "First layer" }.to_string()),
+            None => {
+                self.message = Some(if forward { "Last layer" } else { "First layer" }.to_string())
+            }
         }
     }
 
@@ -428,12 +536,21 @@ impl App {
     pub(super) fn set_view(&mut self, view: View) {
         let current = self.current_row();
         let file = match current {
-            Some(Row::Group { group, .. }) => self.pages().get(group).and_then(|g| g.hunks.first()).map(|&(f, _)| f),
+            Some(Row::Group { group, .. }) => self
+                .pages()
+                .get(group)
+                .and_then(|g| g.hunks.first())
+                .map(|&(f, _)| f),
             row => row.and_then(Row::file),
         };
         self.view = view;
         let find = |row: Row| {
-            (0..self.page_count()).find_map(|p| self.page_rows(p).iter().position(|r| *r == row).map(|i| (p, i)))
+            (0..self.page_count()).find_map(|p| {
+                self.page_rows(p)
+                    .iter()
+                    .position(|r| *r == row)
+                    .map(|i| (p, i))
+            })
         };
         let (page, row) = current
             .filter(|row| !matches!(row, Row::Group { .. }))
@@ -446,7 +563,6 @@ impl App {
         self.scroll_with_above(self.viewport_height / 2);
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -462,8 +578,16 @@ mod tests {
         let id = |f: usize, h: usize| app.diff.files[f].hunks[h].id.clone();
         Plan {
             groups: vec![
-                PlanGroup { title: "Types".into(), rationale: "First.".into(), hunks: vec![id(1, 0)] },
-                PlanGroup { title: "Logic".into(), rationale: "Then.".into(), hunks: vec![id(0, 1)] },
+                PlanGroup {
+                    title: "Types".into(),
+                    rationale: "First.".into(),
+                    hunks: vec![id(1, 0)],
+                },
+                PlanGroup {
+                    title: "Logic".into(),
+                    rationale: "Then.".into(),
+                    hunks: vec![id(0, 1)],
+                },
             ],
             ..Plan::default()
         }
@@ -472,7 +596,9 @@ mod tests {
     fn organized_app() -> App {
         let mut app = sample_app();
         command(&mut app, "organize");
-        let Some(Effect::Organize { job, .. }) = app.effect.take() else { panic!("no organize effect") };
+        let Some(Effect::Organize { job, .. }) = app.effect.take() else {
+            panic!("no organize effect")
+        };
         assert!(app.is_organizing());
         let plan = sample_plan(&app);
         app.finish_organize(job, Ok(plan));
@@ -555,7 +681,14 @@ mod tests {
         // Past the two header lines and the file header, onto the hunk's first line.
         app.update(Action::Down(4));
         let row = app.current_row();
-        assert_eq!(row, Some(Row::Line { file: 0, hunk: 1, line: 0 }));
+        assert_eq!(
+            row,
+            Some(Row::Line {
+                file: 0,
+                hunk: 1,
+                line: 0
+            })
+        );
 
         app.update(Action::ShowView(View::Files));
         assert_eq!(app.view, View::Files);
@@ -585,12 +718,24 @@ mod tests {
                 (false, "types".to_string()),
             ]
         );
-        assert_eq!(app.rows.iter().filter(|r| matches!(r, Row::Group { .. })).count(), 4);
+        assert_eq!(
+            app.rows
+                .iter()
+                .filter(|r| matches!(r, Row::Group { .. }))
+                .count(),
+            4
+        );
 
         // Widening rewraps, and the cursor stays on the header.
         app.update(Action::Down(3));
         app.set_viewport(200, 10);
-        assert_eq!(app.rows.iter().filter(|r| matches!(r, Row::Group { .. })).count(), 2);
+        assert_eq!(
+            app.rows
+                .iter()
+                .filter(|r| matches!(r, Row::Group { .. }))
+                .count(),
+            2
+        );
         assert!(matches!(app.current_row(), Some(Row::Group { .. })));
     }
 
@@ -611,14 +756,21 @@ mod tests {
     fn cancelling_ignores_the_late_answer() {
         let mut app = sample_app();
         command(&mut app, "organize");
-        let Some(Effect::Organize { job: first, .. }) = app.effect.take() else { panic!() };
+        let Some(Effect::Organize { job: first, .. }) = app.effect.take() else {
+            panic!()
+        };
         command(&mut app, "organize cancel");
-        assert_eq!(app.effect.take(), Some(Effect::CancelOrganize { job: first }));
+        assert_eq!(
+            app.effect.take(),
+            Some(Effect::CancelOrganize { job: first })
+        );
         assert!(!app.is_organizing());
 
         // A new run starts; the cancelled one's answer arriving now changes nothing.
         command(&mut app, "organize");
-        let Some(Effect::Organize { job: second, .. }) = app.effect.take() else { panic!() };
+        let Some(Effect::Organize { job: second, .. }) = app.effect.take() else {
+            panic!()
+        };
         assert_ne!(first, second);
         let plan = sample_plan(&app);
         app.finish_organize(first, Ok(plan.clone()));
@@ -653,11 +805,19 @@ mod tests {
     fn failures_and_double_starts_are_reported() {
         let mut app = sample_app();
         command(&mut app, "organize");
-        let Some(Effect::Organize { job, .. }) = app.effect.take() else { panic!() };
+        let Some(Effect::Organize { job, .. }) = app.effect.take() else {
+            panic!()
+        };
         command(&mut app, "organize");
-        assert_eq!(app.message.as_deref(), Some("Already organizing… (:organize cancel to stop)"));
+        assert_eq!(
+            app.message.as_deref(),
+            Some("Already organizing… (:organize cancel to stop)")
+        );
         app.finish_organize(job, Err(anyhow::anyhow!("no network")));
-        assert_eq!(app.message.as_deref(), Some("error: organizing failed: no network"));
+        assert_eq!(
+            app.message.as_deref(),
+            Some("error: organizing failed: no network")
+        );
         assert_eq!(app.view, View::Files);
         assert!(!app.is_organizing());
     }
@@ -677,7 +837,13 @@ mod tests {
         let reopened = App::new(String::new(), other, app.review);
         assert_eq!(reopened.view, View::Files);
         assert!(reopened.plan.is_empty());
-        assert!(reopened.message.as_deref().unwrap().starts_with("Saved plan is for another diff"));
+        assert!(
+            reopened
+                .message
+                .as_deref()
+                .unwrap()
+                .starts_with("Saved plan is for another diff")
+        );
         // Kept, in case that diff comes back.
         assert!(reopened.review.plan().is_some());
     }
@@ -686,24 +852,45 @@ mod tests {
     fn a_useless_answer_keeps_the_old_view() {
         let mut app = sample_app();
         command(&mut app, "organize");
-        let Some(Effect::Organize { job, .. }) = app.effect.take() else { panic!() };
+        let Some(Effect::Organize { job, .. }) = app.effect.take() else {
+            panic!()
+        };
         let bogus: HunkId = serde_json::from_str("\"nope\"").unwrap();
         let plan = Plan {
-            groups: vec![PlanGroup { title: "x".into(), rationale: String::new(), hunks: vec![bogus] }],
+            groups: vec![PlanGroup {
+                title: "x".into(),
+                rationale: String::new(),
+                hunks: vec![bogus],
+            }],
             ..Plan::default()
         };
         app.finish_organize(job, Ok(plan));
         assert_eq!(app.view, View::Files);
         assert!(app.review.plan().is_none());
-        assert_eq!(app.message.as_deref(), Some("error: the organizer didn't place any hunks"));
+        assert_eq!(
+            app.message.as_deref(),
+            Some("error: the organizer didn't place any hunks")
+        );
     }
 
     /// Files: 0 a.rs in layer 1; 1 a.rs and 2 b.rs in layer 2; 3 c.rs in layer 3.
     fn stacked_app() -> App {
         let diff = Diff::sectioned(vec![
-            ("#1 types".into(), "Layer 1 of 3.".into(), vec![file("a.rs", &[3])]),
-            ("#2 logic".into(), "Layer 2 of 3.".into(), vec![file("a.rs", &[2]), file("b.rs", &[1])]),
-            ("#3 ui".into(), "Layer 3 of 3.".into(), vec![file("c.rs", &[1])]),
+            (
+                "#1 types".into(),
+                "Layer 1 of 3.".into(),
+                vec![file("a.rs", &[3])],
+            ),
+            (
+                "#2 logic".into(),
+                "Layer 2 of 3.".into(),
+                vec![file("a.rs", &[2]), file("b.rs", &[1])],
+            ),
+            (
+                "#3 ui".into(),
+                "Layer 3 of 3.".into(),
+                vec![file("c.rs", &[1])],
+            ),
         ]);
         App::new(String::new(), diff, ReviewState::default())
     }
@@ -717,7 +904,11 @@ mod tests {
     }
 
     fn group(title: &str, hunks: Vec<HunkId>) -> PlanGroup {
-        PlanGroup { title: title.into(), rationale: String::new(), hunks }
+        PlanGroup {
+            title: title.into(),
+            rationale: String::new(),
+            hunks,
+        }
     }
 
     /// Runs `:organize` where the cursor is and answers with `groups` of
@@ -728,8 +919,16 @@ mod tests {
             .map(|(title, hunks)| group(title, hunks.iter().map(|&(f, h)| id(app, f, h)).collect()))
             .collect();
         command(app, "organize");
-        let Some(Effect::Organize { job, .. }) = app.effect.take() else { panic!("no organize effect") };
-        app.finish_organize(job, Ok(Plan { groups, ..Plan::default() }));
+        let Some(Effect::Organize { job, .. }) = app.effect.take() else {
+            panic!("no organize effect")
+        };
+        app.finish_organize(
+            job,
+            Ok(Plan {
+                groups,
+                ..Plan::default()
+            }),
+        );
     }
 
     #[test]
@@ -738,8 +937,28 @@ mod tests {
         // Both files' first hunks share an index on one page.
         organize_with(&mut app, &[("Both", &[(0, 0), (1, 0)])]);
         app.update(Action::Top);
-        let first = app.rows.iter().position(|r| *r == Row::Line { file: 0, hunk: 0, line: 1 }).unwrap();
-        let other = app.rows.iter().position(|r| *r == Row::Line { file: 1, hunk: 0, line: 3 }).unwrap();
+        let first = app
+            .rows
+            .iter()
+            .position(|r| {
+                *r == Row::Line {
+                    file: 0,
+                    hunk: 0,
+                    line: 1,
+                }
+            })
+            .unwrap();
+        let other = app
+            .rows
+            .iter()
+            .position(|r| {
+                *r == Row::Line {
+                    file: 1,
+                    hunk: 0,
+                    line: 3,
+                }
+            })
+            .unwrap();
         app.cursor = first;
         app.update(Action::StartVisual);
         app.cursor = other;
@@ -756,7 +975,13 @@ mod tests {
         assert_eq!(app.view, View::Stack);
         assert_eq!(titles(&app.stack), ["#1 types", "#2 logic", "#3 ui"]);
         assert_eq!(app.stack[1].hunks, [(1, 0), (2, 0)]);
-        assert_eq!(app.stack[1].place, Some(StackPlace { layer: 1, group: None }));
+        assert_eq!(
+            app.stack[1].place,
+            Some(StackPlace {
+                layer: 1,
+                group: None
+            })
+        );
         assert_eq!(app.group_header(1)[0], (true, "2/3 #2 logic".to_string()));
         assert_eq!(app.page_position(), "layer 1/3");
         // Nothing saved: the layers come from the diff each time.
@@ -770,23 +995,46 @@ mod tests {
         app.update(Action::NextLayer(1));
         assert_eq!(app.current_layer(), Some(1));
         command(&mut app, "organize");
-        let Some(Effect::Organize { job, request }) = app.effect.take() else { panic!() };
+        let Some(Effect::Organize { job, request }) = app.effect.take() else {
+            panic!()
+        };
         let asked: Vec<_> = request.hunks.iter().map(|h| h.id.clone()).collect();
         assert_eq!(asked, [id(&app, 1, 0), id(&app, 2, 0)]);
         assert!(request.title.contains("layer 2/3: #2 logic"));
 
         // An id from another layer is dropped, like any unknown one.
-        let groups = vec![group("Types", vec![id(&app, 2, 0), id(&app, 0, 0)]), group("Logic", vec![id(&app, 1, 0)])];
-        app.finish_organize(job, Ok(Plan { groups, ..Plan::default() }));
+        let groups = vec![
+            group("Types", vec![id(&app, 2, 0), id(&app, 0, 0)]),
+            group("Logic", vec![id(&app, 1, 0)]),
+        ];
+        app.finish_organize(
+            job,
+            Ok(Plan {
+                groups,
+                ..Plan::default()
+            }),
+        );
         assert_eq!(app.view, View::Stack);
         assert_eq!(titles(&app.stack), ["#1 types", "Types", "Logic", "#3 ui"]);
         assert_eq!(app.stack[0].hunks, [(0, 0)]);
-        assert_eq!(app.stack[2].place, Some(StackPlace { layer: 1, group: Some((1, 2)) }));
+        assert_eq!(
+            app.stack[2].place,
+            Some(StackPlace {
+                layer: 1,
+                group: Some((1, 2))
+            })
+        );
         assert_eq!(app.page, 1);
-        assert_eq!(app.group_header(1)[0], (true, "2/3 #2 logic · 1/2 Types".to_string()));
+        assert_eq!(
+            app.group_header(1)[0],
+            (true, "2/3 #2 logic · 1/2 Types".to_string())
+        );
         assert_eq!(app.page_label(1), "#2 logic › Types");
         assert_eq!(app.page_position(), "layer 2/3 · group 1/2");
-        assert_eq!(app.message.as_deref(), Some("Organized #2 logic into 2 groups · gf files"));
+        assert_eq!(
+            app.message.as_deref(),
+            Some("Organized #2 logic into 2 groups · gf files")
+        );
     }
 
     #[test]
@@ -796,20 +1044,34 @@ mod tests {
         app.update(Action::NextLayer(1));
         organize_with(&mut app, &[("First", &[(1, 0), (2, 0)])]);
         organize_with(&mut app, &[("Again", &[(2, 0)])]);
-        assert_eq!(titles(&app.stack), ["Base", "Again", "Not in the plan", "#3 ui"]);
+        assert_eq!(
+            titles(&app.stack),
+            ["Base", "Again", "Not in the plan", "#3 ui"]
+        );
 
         // From the files too: the layer is the one the file is in.
         app.update(Action::ShowView(View::Files));
         assert_eq!(app.current_file(), Some(2));
         command(&mut app, "organize clear");
-        assert_eq!(app.message.as_deref(), Some("Plan cleared for #2 logic: back to its hunks"));
+        assert_eq!(
+            app.message.as_deref(),
+            Some("Plan cleared for #2 logic: back to its hunks")
+        );
         assert_eq!(app.view, View::Files);
         assert_eq!(titles(&app.stack), ["Base", "#2 logic", "#3 ui"]);
         command(&mut app, "organize clear");
-        assert!(app.message.as_deref().unwrap().starts_with("No plan for this layer"));
+        assert!(
+            app.message
+                .as_deref()
+                .unwrap()
+                .starts_with("No plan for this layer")
+        );
 
         command(&mut app, "organize clear all");
-        assert_eq!(app.message.as_deref(), Some("Plan cleared: back to the stack's layers"));
+        assert_eq!(
+            app.message.as_deref(),
+            Some("Plan cleared: back to the stack's layers")
+        );
         assert_eq!(titles(&app.stack), ["#1 types", "#2 logic", "#3 ui"]);
         assert!(app.review.plan().is_none());
     }
@@ -820,7 +1082,10 @@ mod tests {
         let app = stacked_app();
         let mut review = ReviewState::default();
         review.set_plan(Plan {
-            groups: vec![group("Mixed", vec![id(&app, 2, 0), id(&app, 0, 0)]), group("Rest", vec![id(&app, 1, 0)])],
+            groups: vec![
+                group("Mixed", vec![id(&app, 2, 0), id(&app, 0, 0)]),
+                group("Rest", vec![id(&app, 1, 0)]),
+            ],
             ..Plan::default()
         });
         let mut app = App::new(String::new(), app.diff, review);
@@ -832,14 +1097,23 @@ mod tests {
 
         app.update(Action::ShowView(View::Plan));
         assert_eq!(app.view, View::Stack);
-        assert!(app.message.as_deref().unwrap().starts_with("In a stack each layer has its own plan"));
+        assert!(
+            app.message
+                .as_deref()
+                .unwrap()
+                .starts_with("In a stack each layer has its own plan")
+        );
     }
 
     #[test]
     fn capital_r_in_a_stack_reviews_only_the_file_under_the_cursor() {
         let mut app = stacked_app();
         app.update(Action::NextLayer(1));
-        let b = app.rows.iter().position(|r| *r == Row::Hunk { file: 2, hunk: 0 }).unwrap();
+        let b = app
+            .rows
+            .iter()
+            .position(|r| *r == Row::Hunk { file: 2, hunk: 0 })
+            .unwrap();
         app.cursor = b;
         app.update(Action::TogglePageReviewed);
         assert!(app.is_reviewed(2, 0));
@@ -885,18 +1159,32 @@ mod tests {
     #[test]
     fn hunks_new_since_the_plan_land_in_the_last_group() {
         let app = organized_app();
-        let files = vec![file("a.rs", &[3, 2]), file("b.rs", &[4]), file("c.rs", &[1])];
+        let files = vec![
+            file("a.rs", &[3, 2]),
+            file("b.rs", &[4]),
+            file("c.rs", &[1]),
+        ];
         let reopened = App::new(String::new(), Diff::new(files), app.review);
         assert_eq!(reopened.plan.last().unwrap().hunks, [(0, 0), (2, 0)]);
     }
 
     #[test]
     fn edited_hunks_stay_in_their_groups() {
-        let before = Diff::new(vec![file_at("a.rs", &[(10, "one"), (50, "two")]), file_at("b.rs", &[(5, "three")])]);
+        let before = Diff::new(vec![
+            file_at("a.rs", &[(10, "one"), (50, "two")]),
+            file_at("b.rs", &[(5, "three")]),
+        ]);
         let id = |diff: &Diff, f: usize, h: usize| diff.files[f].hunks[h].id.clone();
         let mut plan = Plan {
-            groups: vec![group("First", vec![id(&before, 0, 1)]), group("Then", vec![id(&before, 1, 0), id(&before, 0, 0)])],
-            notes: vec![crate::organizer::AgentNote { hunk: id(&before, 0, 1), line: Some(50), text: "Look".into() }],
+            groups: vec![
+                group("First", vec![id(&before, 0, 1)]),
+                group("Then", vec![id(&before, 1, 0), id(&before, 0, 0)]),
+            ],
+            notes: vec![crate::organizer::AgentNote {
+                hunk: id(&before, 0, 1),
+                line: Some(50),
+                text: "Look".into(),
+            }],
             ..Plan::default()
         };
         plan.anchor(&before);
@@ -916,7 +1204,9 @@ mod tests {
         assert_eq!(app.plan[2].hunks, [(2, 0)]);
         assert_eq!(
             app.message.as_deref(),
-            Some("1 hunk edited since the plan stays in its group · 1 hunk isn't in the plan: see “Not in the plan”")
+            Some(
+                "1 hunk edited since the plan stays in its group · 1 hunk isn't in the plan: see “Not in the plan”"
+            )
         );
         // Saved, so the next edit is followed from here.
         let saved = app.review.plan().unwrap();
@@ -935,6 +1225,9 @@ mod tests {
         review.set_plan(plan);
         let reopened = App::new(String::new(), app.diff.clone(), review);
         assert_eq!(reopened.review.plan().unwrap().anchors.len(), 2);
-        assert_eq!(reopened.message.as_deref(), Some("1 hunk isn't in the plan: see “Not in the plan”"));
+        assert_eq!(
+            reopened.message.as_deref(),
+            Some("1 hunk isn't in the plan: see “Not in the plan”")
+        );
     }
 }

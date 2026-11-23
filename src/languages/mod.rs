@@ -105,12 +105,17 @@ impl Language {
     /// The server to run: the first one that's installed, else the first
     /// one (so messages name what the user would install).
     pub fn server(&self) -> Option<&Lsp> {
-        self.lsp.iter().find(|l| l.find().is_some()).or(self.lsp.first())
+        self.lsp
+            .iter()
+            .find(|l| l.find().is_some())
+            .or(self.lsp.first())
     }
 
     fn matches(&self, name: &str) -> bool {
         self.filenames.iter().any(|f| f == name)
-            || name.rsplit_once('.').is_some_and(|(_, ext)| self.extensions.iter().any(|e| e == ext))
+            || name
+                .rsplit_once('.')
+                .is_some_and(|(_, ext)| self.extensions.iter().any(|e| e == ext))
     }
 }
 
@@ -143,7 +148,11 @@ static GLOBAL: OnceLock<Registry> = OnceLock::new();
 impl Registry {
     /// The languages that ship with rrrev.
     pub fn builtin() -> Self {
-        Self { languages: Vec::new() }.merge(BUILTIN).expect("the built-in languages.toml parses")
+        Self {
+            languages: Vec::new(),
+        }
+        .merge(BUILTIN)
+        .expect("the built-in languages.toml parses")
     }
 
     /// The built-in languages with the user's file on top, if there is one.
@@ -168,7 +177,9 @@ impl Registry {
 
     fn merge_file(self, path: &Path) -> Result<Self> {
         match fs::read_to_string(path) {
-            Ok(text) => self.merge(&text).with_context(|| format!("in {}", path.display())),
+            Ok(text) => self
+                .merge(&text)
+                .with_context(|| format!("in {}", path.display())),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(self),
             Err(e) => Err(e).with_context(|| format!("cannot read {}", path.display())),
         }
@@ -249,7 +260,11 @@ mod tests {
         assert_eq!(name_for(&registry, "Makefile"), None);
         let rust = registry.get("rust").unwrap();
         assert_eq!(rust.server().unwrap().command, "rust-analyzer");
-        assert!(registry.iter().all(|l| l.grammar.as_ref().is_some_and(|g| g.rev.len() == 40)));
+        assert!(
+            registry
+                .iter()
+                .all(|l| l.grammar.as_ref().is_some_and(|g| g.rev.len() == 40))
+        );
     }
 
     #[test]
@@ -269,7 +284,10 @@ mod tests {
             )
             .unwrap();
         let kotlin = registry.get("kotlin").unwrap();
-        assert_eq!(kotlin.server().unwrap().command, "/opt/kotlin-lsp/bin/kotlin-lsp");
+        assert_eq!(
+            kotlin.server().unwrap().command,
+            "/opt/kotlin-lsp/bin/kotlin-lsp"
+        );
         assert!(kotlin.server().unwrap().args.is_empty());
         assert_eq!(kotlin.extensions, ["kt", "kts"]);
         assert!(kotlin.grammar.is_some());
@@ -281,17 +299,32 @@ mod tests {
     fn typescript_prefers_tsgo_and_falls_back() {
         let registry = Registry::builtin();
         for name in ["javascript", "typescript", "tsx"] {
-            let commands: Vec<_> = registry.get(name).unwrap().lsp.iter().map(|l| l.command.as_str()).collect();
+            let commands: Vec<_> = registry
+                .get(name)
+                .unwrap()
+                .lsp
+                .iter()
+                .map(|l| l.command.as_str())
+                .collect();
             assert_eq!(commands, ["tsgo", "typescript-language-server"], "{name}");
         }
-        assert_eq!(registry.get("tsx").unwrap().lsp[0].args, ["--lsp", "--stdio"]);
+        assert_eq!(
+            registry.get("tsx").unwrap().lsp[0].args,
+            ["--lsp", "--stdio"]
+        );
     }
 
     #[test]
     fn bad_overrides_are_errors() {
-        let err = Registry::builtin().merge("[[language]]\nname = \"zig\"").unwrap_err();
+        let err = Registry::builtin()
+            .merge("[[language]]\nname = \"zig\"")
+            .unwrap_err();
         assert!(err.to_string().contains("needs `extensions`"), "{err}");
-        assert!(Registry::builtin().merge("[[language]]\nname = \"rust\"\nextension = [\"rs\"]").is_err());
+        assert!(
+            Registry::builtin()
+                .merge("[[language]]\nname = \"rust\"\nextension = [\"rs\"]")
+                .is_err()
+        );
         assert!(Registry::builtin().merge("not toml").is_err());
     }
 
@@ -299,8 +332,15 @@ mod tests {
     fn reads_the_file_if_there_is_one() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("languages.toml");
-        assert_eq!(Registry::builtin().merge_file(&path).unwrap(), Registry::builtin());
-        fs::write(&path, "[[language]]\nname = \"rust\"\nextensions = [\"rs\", \"rsx\"]\n").unwrap();
+        assert_eq!(
+            Registry::builtin().merge_file(&path).unwrap(),
+            Registry::builtin()
+        );
+        fs::write(
+            &path,
+            "[[language]]\nname = \"rust\"\nextensions = [\"rs\", \"rsx\"]\n",
+        )
+        .unwrap();
         let registry = Registry::builtin().merge_file(&path).unwrap();
         assert_eq!(registry.get("rust").unwrap().extensions, ["rs", "rsx"]);
         fs::write(&path, "nope").unwrap();

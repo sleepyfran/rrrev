@@ -56,7 +56,12 @@ pub struct Sources {
 impl Sources {
     /// Splits file contents into lines, as the diff numbers them.
     pub fn lines(bytes: &[u8]) -> Source {
-        Arc::new(String::from_utf8_lossy(bytes).lines().map(str::to_string).collect())
+        Arc::new(
+            String::from_utf8_lossy(bytes)
+                .lines()
+                .map(str::to_string)
+                .collect(),
+        )
     }
 }
 
@@ -92,20 +97,39 @@ impl Diff {
                 });
             }
         }
-        let words = files.iter().map(|f| f.hunks.iter().map(|h| words::changes(&h.lines)).collect()).collect();
-        Diff { files, sections: Vec::new(), sources: Vec::new(), words, outlines: Vec::new(), plumbing: Vec::new() }
+        let words = files
+            .iter()
+            .map(|f| f.hunks.iter().map(|h| words::changes(&h.lines)).collect())
+            .collect();
+        Diff {
+            files,
+            sections: Vec::new(),
+            sources: Vec::new(),
+            words,
+            outlines: Vec::new(),
+            plumbing: Vec::new(),
+        }
     }
 
     /// The same diff, with the files' full text.
     pub fn with_sources(self, sources: Vec<Sources>) -> Self {
         let outlines = sources.iter().map(|_| Default::default()).collect();
         let plumbing = sources.iter().map(|_| Default::default()).collect();
-        Diff { sources, outlines, plumbing, ..self }
+        Diff {
+            sources,
+            outlines,
+            plumbing,
+            ..self
+        }
     }
 
     /// The byte ranges of a line's content that changed, word by word.
     pub fn word_changes(&self, file: usize, hunk: usize, line: usize) -> &[Range<usize>] {
-        self.words.get(file).and_then(|f| f.get(hunk)).and_then(|h| h.get(line)).map_or(&[], Vec::as_slice)
+        self.words
+            .get(file)
+            .and_then(|f| f.get(hunk))
+            .and_then(|h| h.get(line))
+            .map_or(&[], Vec::as_slice)
     }
 
     /// The text to show around a file's hunks: the new side, or the old one
@@ -124,9 +148,19 @@ impl Diff {
     pub fn scopes(&self, file: usize, hunk: usize, line: usize) -> Vec<scope::Scope> {
         let l = &self.files[file].hunks[hunk].lines[line];
         let sources = self.sources.get(file);
-        let new = sources.and_then(|s| s.new.as_ref()).and(l.new_no).map(|no| (Side::New, no));
-        let old = sources.and_then(|s| s.old.as_ref()).and(l.old_no).map(|no| (Side::Old, no));
-        let on_side = if l.kind == LineKind::Removed { old.or(new) } else { new.or(old) };
+        let new = sources
+            .and_then(|s| s.new.as_ref())
+            .and(l.new_no)
+            .map(|no| (Side::New, no));
+        let old = sources
+            .and_then(|s| s.old.as_ref())
+            .and(l.old_no)
+            .map(|no| (Side::Old, no));
+        let on_side = if l.kind == LineKind::Removed {
+            old.or(new)
+        } else {
+            new.or(old)
+        };
         on_side.map_or_else(Vec::new, |(side, no)| self.scopes_at(file, side, no))
     }
 
@@ -139,7 +173,9 @@ impl Diff {
             Side::Old => sources.and_then(|s| s.old.as_ref()),
             Side::New => sources.and_then(|s| s.new.as_ref()),
         };
-        let Some(source) = source else { return Vec::new() };
+        let Some(source) = source else {
+            return Vec::new();
+        };
         let f = &self.files[file];
         let path = match side {
             Side::Old => f.old_path.as_deref(),
@@ -169,7 +205,10 @@ impl Diff {
             // In `Side` order, as `scopes_at` and `is_plumbing` read them.
             let paths = [f.old_path.as_deref(), f.new_path.as_deref()];
             for (side, path) in paths.into_iter().enumerate() {
-                if registry.for_path(path.unwrap_or(f.path())).is_some_and(|l| l.name == language) {
+                if registry
+                    .for_path(path.unwrap_or(f.path()))
+                    .is_some_and(|l| l.name == language)
+                {
                     if let Some(sides) = self.outlines.get_mut(file) {
                         sides[side] = OnceLock::new();
                     }
@@ -191,7 +230,9 @@ impl Diff {
         }
         let mut changed = false;
         for line in &self.files[file].hunks[hunk].lines {
-            if !matches!(line.kind, LineKind::Added | LineKind::Removed) || line.content.trim().is_empty() {
+            if !matches!(line.kind, LineKind::Added | LineKind::Removed)
+                || line.content.trim().is_empty()
+            {
                 continue;
             }
             if self.line_is_plumbing(file, line) != Some(true) {
@@ -218,7 +259,9 @@ impl Diff {
             Side::New => (sources.new.as_ref(), f.new_path.as_deref()),
         };
         let source = source?;
-        let lines = sides[side as usize].get_or_init(|| plumbing::lines(path.unwrap_or(f.path()), source)).as_deref()?;
+        let lines = sides[side as usize]
+            .get_or_init(|| plumbing::lines(path.unwrap_or(f.path()), source))
+            .as_deref()?;
         lines.get((no as usize).checked_sub(1)?).copied()
     }
 
@@ -260,11 +303,25 @@ impl Diff {
     /// line, or failing that the context git put in its `@@` header.
     pub fn hunk_scope(&self, file: usize, hunk: usize) -> Option<String> {
         let h = &self.files[file].hunks[hunk];
-        let first = h.lines.iter().position(|l| matches!(l.kind, LineKind::Added | LineKind::Removed)).unwrap_or(0);
-        if self.sources.get(file).is_some_and(|s| s.new.is_some() || s.old.is_some()) {
-            return (!h.lines.is_empty()).then(|| self.scopes(file, hunk, first).pop().map(|s| s.label)).flatten();
+        let first = h
+            .lines
+            .iter()
+            .position(|l| matches!(l.kind, LineKind::Added | LineKind::Removed))
+            .unwrap_or(0);
+        if self
+            .sources
+            .get(file)
+            .is_some_and(|s| s.new.is_some() || s.old.is_some())
+        {
+            return (!h.lines.is_empty())
+                .then(|| self.scopes(file, hunk, first).pop().map(|s| s.label))
+                .flatten();
         }
-        let context = h.header.rsplit_once("@@").map(|(_, rest)| rest.trim()).unwrap_or("");
+        let context = h
+            .header
+            .rsplit_once("@@")
+            .map(|(_, rest)| rest.trim())
+            .unwrap_or("");
         (!context.is_empty()).then(|| context.to_string())
     }
 
@@ -275,9 +332,16 @@ impl Diff {
         for (title, rationale, part) in parts {
             let start = files.len();
             files.extend(part);
-            sections.push(Section { title, rationale, files: start..files.len() });
+            sections.push(Section {
+                title,
+                rationale,
+                files: start..files.len(),
+            });
         }
-        Diff { sections, ..Diff::new(files) }
+        Diff {
+            sections,
+            ..Diff::new(files)
+        }
     }
 }
 
@@ -363,7 +427,10 @@ const GENERATED_FILES: &[&str] = &[
 impl FileDiff {
     /// The path the file has after the change, or before it for deletions.
     pub fn path(&self) -> &str {
-        self.new_path.as_deref().or(self.old_path.as_deref()).unwrap_or("")
+        self.new_path
+            .as_deref()
+            .or(self.old_path.as_deref())
+            .unwrap_or("")
     }
 
     pub fn looks_generated(&self) -> bool {
@@ -429,7 +496,8 @@ pub struct DiffLine {
 #[cfg(test)]
 pub fn mixed_diff() -> Diff {
     let old = "//! Doc.\n\nuse a::B;\nuse c::D;\nuse e::F;\n\nuse g::H;\nuse i::J;\n\nfn f() {\n    1\n}\n";
-    let new = "//! Doc.\n\nuse a::B;\nuse e::F;\n\nuse k::L;\nuse i::J;\n\nfn f(l: L) {\n    2\n}\n";
+    let new =
+        "//! Doc.\n\nuse a::B;\nuse e::F;\n\nuse k::L;\nuse i::J;\n\nfn f(l: L) {\n    2\n}\n";
     let line = |kind, old_no: Option<u32>, new_no: Option<u32>, content: &str| DiffLine {
         kind,
         old_no,
@@ -470,8 +538,15 @@ pub fn mixed_diff() -> Diff {
         is_binary: false,
         hunks: vec![hunk],
     };
-    let source = |text: &str| Some(Arc::new(text.lines().map(str::to_string).collect::<Vec<_>>()));
-    Diff::new(vec![file]).with_sources(vec![Sources { old: source(old), new: source(new) }])
+    let source = |text: &str| {
+        Some(Arc::new(
+            text.lines().map(str::to_string).collect::<Vec<_>>(),
+        ))
+    };
+    Diff::new(vec![file]).with_sources(vec![Sources {
+        old: source(old),
+        new: source(new),
+    }])
 }
 
 #[cfg(test)]
@@ -479,7 +554,12 @@ mod tests {
     use super::*;
 
     fn line(kind: LineKind, no: u32, content: &str) -> DiffLine {
-        DiffLine { kind, old_no: Some(no), new_no: Some(no), content: content.to_string() }
+        DiffLine {
+            kind,
+            old_no: Some(no),
+            new_no: Some(no),
+            content: content.to_string(),
+        }
     }
 
     fn hunk(start: u32, lines: Vec<DiffLine>) -> Hunk {
@@ -505,18 +585,34 @@ mod tests {
     }
 
     fn ids(diff: &Diff) -> Vec<&HunkId> {
-        diff.files.iter().flat_map(|f| &f.hunks).map(|h| &h.id).collect()
+        diff.files
+            .iter()
+            .flat_map(|f| &f.hunks)
+            .map(|h| &h.id)
+            .collect()
     }
 
     #[test]
     fn hunk_ids_ignore_position_and_context() {
         let a = Diff::new(vec![file(
             "a.rs",
-            vec![hunk(1, vec![line(LineKind::Context, 1, "ctx"), line(LineKind::Added, 2, "x")])],
+            vec![hunk(
+                1,
+                vec![
+                    line(LineKind::Context, 1, "ctx"),
+                    line(LineKind::Added, 2, "x"),
+                ],
+            )],
         )]);
         let moved = Diff::new(vec![file(
             "a.rs",
-            vec![hunk(90, vec![line(LineKind::Context, 90, "other"), line(LineKind::Added, 91, "x")])],
+            vec![hunk(
+                90,
+                vec![
+                    line(LineKind::Context, 90, "other"),
+                    line(LineKind::Added, 91, "x"),
+                ],
+            )],
         )]);
         assert_eq!(ids(&a), ids(&moved));
         assert_eq!(ids(&a)[0].0.len(), 16);
@@ -525,7 +621,10 @@ mod tests {
     #[test]
     fn hunk_ids_depend_on_path_and_changes() {
         let make = |path: &str, kind, content: &str| {
-            Diff::new(vec![file(path, vec![hunk(1, vec![line(kind, 1, content)])])])
+            Diff::new(vec![file(
+                path,
+                vec![hunk(1, vec![line(kind, 1, content)])],
+            )])
         };
         let base = make("a.rs", LineKind::Added, "x");
         assert_ne!(ids(&base), ids(&make("b.rs", LineKind::Added, "x")));
@@ -538,7 +637,11 @@ mod tests {
         let same = || file("a.rs", vec![hunk(1, vec![line(LineKind::Added, 1, "x")])]);
         let diff = Diff::sectioned(vec![
             ("one".into(), String::new(), vec![same()]),
-            ("two".into(), String::new(), vec![same(), file("b.rs", Vec::new())]),
+            (
+                "two".into(),
+                String::new(),
+                vec![same(), file("b.rs", Vec::new())],
+            ),
         ]);
         let ids = ids(&diff);
         assert_ne!(ids[0], ids[1]);
@@ -547,13 +650,35 @@ mod tests {
 
     #[test]
     fn forgets_the_outlines_of_one_language() {
-        let source = || Some(Arc::new(vec!["fn a() {".to_string(), "    1".into(), "}".into()]));
-        let rust = file("a.rs", vec![hunk(2, vec![line(LineKind::Added, 2, "    1")])]);
-        let mut diff = Diff::new(vec![rust, file("b.py", Vec::new())])
-            .with_sources(vec![Sources { old: source(), new: source() }, Sources { old: None, new: source() }]);
+        let source = || {
+            Some(Arc::new(vec![
+                "fn a() {".to_string(),
+                "    1".into(),
+                "}".into(),
+            ]))
+        };
+        let rust = file(
+            "a.rs",
+            vec![hunk(2, vec![line(LineKind::Added, 2, "    1")])],
+        );
+        let mut diff = Diff::new(vec![rust, file("b.py", Vec::new())]).with_sources(vec![
+            Sources {
+                old: source(),
+                new: source(),
+            },
+            Sources {
+                old: None,
+                new: source(),
+            },
+        ]);
         diff.scopes_at(0, Side::New, 2);
         diff.scopes_at(1, Side::New, 2);
-        let parsed = |diff: &Diff| diff.outlines.iter().map(|s| s[Side::New as usize].get().is_some()).collect::<Vec<_>>();
+        let parsed = |diff: &Diff| {
+            diff.outlines
+                .iter()
+                .map(|s| s[Side::New as usize].get().is_some())
+                .collect::<Vec<_>>()
+        };
         assert_eq!(parsed(&diff), [true, true]);
         diff.forget_outlines("rust");
         assert_eq!(parsed(&diff), [false, true]);
@@ -581,19 +706,62 @@ mod tests {
 
     #[test]
     fn plumbing_hunks_change_only_imports() {
-        let lines = |text: &str| Some(Arc::new(text.lines().map(str::to_string).collect::<Vec<_>>()));
+        let lines = |text: &str| {
+            Some(Arc::new(
+                text.lines().map(str::to_string).collect::<Vec<_>>(),
+            ))
+        };
         let old = "use a::B;\nuse c::D;\n\nfn f() {}\n";
         let new = "use a::B;\nuse e::F;\n\nfn f() { 1 }\n";
-        let imports = hunk(2, vec![
-            DiffLine { kind: LineKind::Removed, old_no: Some(2), new_no: None, content: "use c::D;".into() },
-            DiffLine { kind: LineKind::Added, old_no: None, new_no: Some(2), content: "use e::F;".into() },
-            DiffLine { kind: LineKind::Context, old_no: Some(3), new_no: Some(3), content: String::new() },
-        ]);
-        let code = hunk(4, vec![
-            DiffLine { kind: LineKind::Removed, old_no: Some(4), new_no: None, content: "fn f() {}".into() },
-            DiffLine { kind: LineKind::Added, old_no: None, new_no: Some(4), content: "fn f() { 1 }".into() },
-        ]);
-        let blank = hunk(3, vec![DiffLine { kind: LineKind::Added, old_no: None, new_no: Some(3), content: String::new() }]);
+        let imports = hunk(
+            2,
+            vec![
+                DiffLine {
+                    kind: LineKind::Removed,
+                    old_no: Some(2),
+                    new_no: None,
+                    content: "use c::D;".into(),
+                },
+                DiffLine {
+                    kind: LineKind::Added,
+                    old_no: None,
+                    new_no: Some(2),
+                    content: "use e::F;".into(),
+                },
+                DiffLine {
+                    kind: LineKind::Context,
+                    old_no: Some(3),
+                    new_no: Some(3),
+                    content: String::new(),
+                },
+            ],
+        );
+        let code = hunk(
+            4,
+            vec![
+                DiffLine {
+                    kind: LineKind::Removed,
+                    old_no: Some(4),
+                    new_no: None,
+                    content: "fn f() {}".into(),
+                },
+                DiffLine {
+                    kind: LineKind::Added,
+                    old_no: None,
+                    new_no: Some(4),
+                    content: "fn f() { 1 }".into(),
+                },
+            ],
+        );
+        let blank = hunk(
+            3,
+            vec![DiffLine {
+                kind: LineKind::Added,
+                old_no: None,
+                new_no: Some(3),
+                content: String::new(),
+            }],
+        );
         let diff = Diff::new(vec![
             file("a.rs", vec![imports.clone(), code]),
             file("b.rs", vec![imports.clone()]),
@@ -602,11 +770,23 @@ mod tests {
             file("d.rs", vec![blank]),
         ])
         .with_sources(vec![
-            Sources { old: lines(old), new: lines(new) },
-            Sources { old: lines(old), new: lines(new) },
+            Sources {
+                old: lines(old),
+                new: lines(new),
+            },
+            Sources {
+                old: lines(old),
+                new: lines(new),
+            },
             Sources::default(),
-            Sources { old: lines(old), new: lines(new) },
-            Sources { old: lines(old), new: lines(new) },
+            Sources {
+                old: lines(old),
+                new: lines(new),
+            },
+            Sources {
+                old: lines(old),
+                new: lines(new),
+            },
         ]);
         assert!(diff.is_plumbing(0, 0) && !diff.is_plumbing(0, 1));
         assert!(!diff.is_plumbing_file(0) && diff.is_plumbing_file(1));

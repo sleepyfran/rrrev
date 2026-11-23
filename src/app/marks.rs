@@ -29,7 +29,9 @@ impl App {
     }
 
     pub fn file_progress(&self, file: usize) -> Progress {
-        let hunks: Vec<_> = (0..self.diff.files[file].hunks.len()).map(|h| (file, h)).collect();
+        let hunks: Vec<_> = (0..self.diff.files[file].hunks.len())
+            .map(|h| (file, h))
+            .collect();
         self.hunks_progress(&hunks)
     }
 
@@ -39,15 +41,25 @@ impl App {
 
     pub fn layer_progress(&self, layer: usize) -> Progress {
         let files = self.diff.sections[layer].files.clone();
-        let hunks: Vec<_> = files.flat_map(|f| (0..self.diff.files[f].hunks.len()).map(move |h| (f, h))).collect();
+        let hunks: Vec<_> = files
+            .flat_map(|f| (0..self.diff.files[f].hunks.len()).map(move |h| (f, h)))
+            .collect();
         self.hunks_progress(&hunks)
     }
 
     pub fn progress(&self) -> Progress {
-        (0..self.diff.files.len()).map(|f| self.file_progress(f)).fold(
-            Progress { reviewed: 0, total: 0 },
-            |acc, p| Progress { reviewed: acc.reviewed + p.reviewed, total: acc.total + p.total },
-        )
+        (0..self.diff.files.len())
+            .map(|f| self.file_progress(f))
+            .fold(
+                Progress {
+                    reviewed: 0,
+                    total: 0,
+                },
+                |acc, p| Progress {
+                    reviewed: acc.reviewed + p.reviewed,
+                    total: acc.total + p.total,
+                },
+            )
     }
 
     /// `r`: the hunk under the cursor. On a header, everything under it on
@@ -91,7 +103,11 @@ impl App {
     /// `file`'s hunks on the current page.
     fn toggle_file_on_page_reviewed(&mut self, file: usize) {
         if self.page < self.page_count() {
-            let hunks: Vec<_> = self.page_hunks(self.page).into_iter().filter(|&(f, _)| f == file).collect();
+            let hunks: Vec<_> = self
+                .page_hunks(self.page)
+                .into_iter()
+                .filter(|&(f, _)| f == file)
+                .collect();
             self.toggle_hunks_reviewed(&hunks);
         }
     }
@@ -115,9 +131,13 @@ impl App {
     /// and one it un-finishes unfolds again.
     fn set_hunks_reviewed(&mut self, hunks: &[(usize, usize)], reviewed: bool) {
         let files: BTreeSet<usize> = hunks.iter().map(|&(f, _)| f).collect();
-        let was_complete: Vec<bool> = files.iter().map(|&f| self.file_progress(f).is_complete()).collect();
+        let was_complete: Vec<bool> = files
+            .iter()
+            .map(|&f| self.file_progress(f).is_complete())
+            .collect();
         for &(file, hunk) in hunks {
-            self.review.set_reviewed(&self.hunk(file, hunk).id.clone(), reviewed);
+            self.review
+                .set_reviewed(&self.hunk(file, hunk).id.clone(), reviewed);
         }
         for (&file, was) in files.iter().zip(was_complete) {
             let complete = self.file_progress(file).is_complete();
@@ -140,7 +160,13 @@ mod tests {
     fn plumbing_counts_as_done_without_a_mark() {
         let mut app = plumbing_app();
         // a.rs: the import hunk is done, the function isn't; b.rs is all done.
-        assert_eq!(app.file_progress(0), Progress { reviewed: 1, total: 2 });
+        assert_eq!(
+            app.file_progress(0),
+            Progress {
+                reviewed: 1,
+                total: 2
+            }
+        );
         assert!(app.file_progress(1).is_complete());
         assert!(!app.is_reviewed(0, 0));
         // ]u goes past the plumbing to the function.
@@ -161,7 +187,13 @@ mod tests {
         app.update(Action::ToggleReviewed);
         assert!(app.is_reviewed(0, 0));
         assert!(!app.is_reviewed(0, 1));
-        assert_eq!(app.progress(), Progress { reviewed: 1, total: 3 });
+        assert_eq!(
+            app.progress(),
+            Progress {
+                reviewed: 1,
+                total: 3
+            }
+        );
         assert!(app.review.take_dirty());
 
         app.update(Action::ToggleReviewed);
@@ -193,7 +225,14 @@ mod tests {
 
         // The second hunk's first line: the last one left in a.rs.
         app.update(Action::Down(5));
-        assert_eq!(app.current_row(), Some(Row::Line { file: 0, hunk: 1, line: 0 }));
+        assert_eq!(
+            app.current_row(),
+            Some(Row::Line {
+                file: 0,
+                hunk: 1,
+                line: 0
+            })
+        );
         app.update(Action::ToggleReviewed);
         assert!(app.collapsed[0]);
         assert_eq!(app.rows, [Row::File { file: 0 }]);

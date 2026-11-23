@@ -15,11 +15,20 @@ pub enum Action {
     Left(usize),
     Right(usize),
     /// `w` / `W`: to the next word's (or WORD's) start.
-    WordForward { n: usize, big: bool },
+    WordForward {
+        n: usize,
+        big: bool,
+    },
     /// `b` / `B`: back to a word's start.
-    WordBackward { n: usize, big: bool },
+    WordBackward {
+        n: usize,
+        big: bool,
+    },
     /// `e` / `E`: to a word's end.
-    WordEnd { n: usize, big: bool },
+    WordEnd {
+        n: usize,
+        big: bool,
+    },
     /// `0`: the start of the line.
     LineStart,
     /// `^`: the line's first non-blank character.
@@ -27,7 +36,10 @@ pub enum Action {
     /// `$`: the end of the line.
     LineEnd,
     /// `f` / `F` / `t` and a character.
-    FindChar { n: usize, find: FindChar },
+    FindChar {
+        n: usize,
+        find: FindChar,
+    },
     HalfPageDown,
     HalfPageUp,
     Top,
@@ -148,33 +160,63 @@ pub enum VerdictAction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
     /// Edit the comment being written in `$EDITOR`, then call `finish_editor`.
-    OpenEditor { initial: String },
-    Export { format: Format, path: Option<PathBuf> },
+    OpenEditor {
+        initial: String,
+    },
+    Export {
+        format: Format,
+        path: Option<PathBuf>,
+    },
     /// Plan the review in the background, then call `finish_organize` with
     /// the same `job`.
-    Organize { job: u64, request: OrganizeRequest },
+    Organize {
+        job: u64,
+        request: OrganizeRequest,
+    },
     /// Stop that job; its result, if one still arrives, is ignored.
-    CancelOrganize { job: u64 },
+    CancelOrganize {
+        job: u64,
+    },
     /// Answer a question in the background, then call `finish_ask` with the
     /// same `job`.
-    Ask { job: u64, request: AskRequest },
-    CancelAsk { job: u64 },
+    Ask {
+        job: u64,
+        request: AskRequest,
+    },
+    CancelAsk {
+        job: u64,
+    },
     /// Put `text` on the system clipboard.
-    Copy { text: String },
+    Copy {
+        text: String,
+    },
     /// Keep `theme` for the next session.
-    SaveTheme { theme: &'static Theme },
+    SaveTheme {
+        theme: &'static Theme,
+    },
     /// `:lsp`: say how the language servers are doing, or restart them.
-    Lsp { restart: bool },
+    Lsp {
+        restart: bool,
+    },
     /// Ask the language server for `spot`'s definition, then call
     /// `finish_go_to`.
-    GoTo { kind: GoTo, spot: Spot },
+    GoTo {
+        kind: GoTo,
+        spot: Spot,
+    },
     /// Ask for `spot`'s references, then call `finish_references`.
-    References { spot: Spot },
+    References {
+        spot: Spot,
+    },
     /// Ask about `spot`, then call `finish_hover`.
-    Hover { spot: Spot },
+    Hover {
+        spot: Spot,
+    },
     /// Build the language's grammar in the background, then call
     /// `finish_enable_language`.
-    EnableLanguage { name: String },
+    EnableLanguage {
+        name: String,
+    },
 }
 
 /// What `gd` and its kin look for.

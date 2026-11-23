@@ -33,8 +33,22 @@ pub struct FileView {
 }
 
 impl FileView {
-    pub fn new(path: String, side: Side, lines: Source, file: Option<usize>, marks: Vec<Option<Mark>>) -> Self {
-        Self { path, side, lines, file, marks, caret: Caret::default(), scroll: 0 }
+    pub fn new(
+        path: String,
+        side: Side,
+        lines: Source,
+        file: Option<usize>,
+        marks: Vec<Option<Mark>>,
+    ) -> Self {
+        Self {
+            path,
+            side,
+            lines,
+            file,
+            marks,
+            caret: Caret::default(),
+            scroll: 0,
+        }
     }
 
     /// The character the cursor is on, in its line.
@@ -77,7 +91,9 @@ impl FileView {
     /// nothing matches.
     fn search(&mut self, query: &str, n: usize, forward: bool) -> Option<bool> {
         let count = self.lines.len();
-        let hits: Vec<usize> = (0..count).filter(|&i| !find_matches(&self.lines[i], query).is_empty()).collect();
+        let hits: Vec<usize> = (0..count)
+            .filter(|&i| !find_matches(&self.lines[i], query).is_empty())
+            .collect();
         if hits.is_empty() {
             return None;
         }
@@ -94,7 +110,11 @@ impl FileView {
                 Some(i) => i,
                 None => {
                     wrapped = true;
-                    if forward { hits[0] } else { hits[hits.len() - 1] }
+                    if forward {
+                        hits[0]
+                    } else {
+                        hits[hits.len() - 1]
+                    }
                 }
             };
         }
@@ -108,7 +128,10 @@ impl FileView {
 pub fn marks(file: &FileDiff, side: Side, len: usize) -> Vec<Option<Mark>> {
     let mut marks = vec![None; len];
     let mut set = |no: Option<u32>, mark: Mark| {
-        if let Some(slot) = no.and_then(|n| (n as usize).checked_sub(1)).and_then(|i| marks.get_mut(i)) {
+        if let Some(slot) = no
+            .and_then(|n| (n as usize).checked_sub(1))
+            .and_then(|i| marks.get_mut(i))
+        {
             // A gap never hides the line's own change.
             if slot.is_none() || mark != Mark::Gap {
                 *slot = Some(mark);
@@ -137,7 +160,11 @@ pub fn marks(file: &FileDiff, side: Side, len: usize) -> Vec<Option<Mark>> {
             let has_mine = run.iter().any(|l| l.kind == mine);
             let has_theirs = run.iter().any(|l| l.kind == theirs);
             if has_mine {
-                let mark = if has_theirs { Mark::Modified } else { Mark::Changed };
+                let mark = if has_theirs {
+                    Mark::Modified
+                } else {
+                    Mark::Changed
+                };
                 for l in run.iter().filter(|l| l.kind == mine) {
                     set(number(l), mark);
                 }
@@ -158,7 +185,9 @@ impl App {
     /// Enter on a code line: the whole file, at the cursor. A removed line
     /// opens the old version, anything else the new one.
     pub(super) fn open_file_view(&mut self) {
-        let Some(row) = self.current_row() else { return };
+        let Some(row) = self.current_row() else {
+            return;
+        };
         let (file, side, no) = match row {
             Row::Line { file, hunk, line } => {
                 let l = self.line(file, hunk, line);
@@ -205,25 +234,42 @@ impl App {
         let half = self.half_page().unsigned_abs();
         let height = self.viewport_height;
         let highlighting = self.highlighted_search().is_some();
-        let Some(view) = self.file_view.as_mut() else { return };
+        let Some(view) = self.file_view.as_mut() else {
+            return;
+        };
         let last = view.last();
         match action {
             Action::Down(n) => view.caret.line = view.caret.line.saturating_add(n).min(last),
             Action::Up(n) => view.caret.line = view.caret.line.saturating_sub(n),
-            Action::HalfPageDown => view.caret.line = view.caret.line.saturating_add(half).min(last),
+            Action::HalfPageDown => {
+                view.caret.line = view.caret.line.saturating_add(half).min(last)
+            }
             Action::HalfPageUp => view.caret.line = view.caret.line.saturating_sub(half),
             Action::Top => view.caret.line = 0,
             Action::Bottom => view.caret.line = last,
             Action::NextHunk(n) => {
                 let here = view.caret.line;
-                match view.change_starts().into_iter().filter(|&i| i > here).take(n).last() {
+                match view
+                    .change_starts()
+                    .into_iter()
+                    .filter(|&i| i > here)
+                    .take(n)
+                    .last()
+                {
                     Some(i) => view.caret.line = i,
                     None => self.message = Some("No more changes below".to_string()),
                 }
             }
             Action::PrevHunk(n) => {
                 let here = view.caret.line;
-                match view.change_starts().into_iter().rev().filter(|&i| i < here).take(n).last() {
+                match view
+                    .change_starts()
+                    .into_iter()
+                    .rev()
+                    .filter(|&i| i < here)
+                    .take(n)
+                    .last()
+                {
                     Some(i) => view.caret.line = i,
                     None => self.message = Some("No more changes above".to_string()),
                 }
@@ -252,13 +298,19 @@ impl App {
     /// `n` / `N` in the file view. Returns `false` when there's no file view.
     pub(super) fn search_file_view(&mut self, query: &str, n: usize, forward: bool) -> bool {
         let height = self.viewport_height;
-        let Some(view) = self.file_view.as_mut() else { return false };
+        let Some(view) = self.file_view.as_mut() else {
+            return false;
+        };
         match view.search(query, n, forward) {
             None => self.message = Some(format!("Pattern not found: {query}")),
             Some(true) => {
                 self.message = Some(
-                    if forward { "search hit BOTTOM, continuing at TOP" } else { "search hit TOP, continuing at BOTTOM" }
-                        .to_string(),
+                    if forward {
+                        "search hit BOTTOM, continuing at TOP"
+                    } else {
+                        "search hit TOP, continuing at BOTTOM"
+                    }
+                    .to_string(),
                 )
             }
             Some(false) => {}
@@ -286,14 +338,33 @@ mod tests {
     use crate::review::ReviewState;
 
     fn line(kind: LineKind, old_no: Option<u32>, new_no: Option<u32>, content: &str) -> DiffLine {
-        DiffLine { kind, old_no, new_no, content: content.into() }
+        DiffLine {
+            kind,
+            old_no,
+            new_no,
+            content: content.into(),
+        }
     }
 
     /// `a.rs`: line 2 modified, line 4 removed, line 6 added.
     fn sample() -> (FileDiff, Sources) {
         use LineKind::*;
-        let old = ["fn a() {", "    old();", "    keep();", "    gone();", "    end();", "}"];
-        let new = ["fn a() {", "    new();", "    keep();", "    end();", "    added();", "}"];
+        let old = [
+            "fn a() {",
+            "    old();",
+            "    keep();",
+            "    gone();",
+            "    end();",
+            "}",
+        ];
+        let new = [
+            "fn a() {",
+            "    new();",
+            "    keep();",
+            "    end();",
+            "    added();",
+            "}",
+        ];
         let hunk = Hunk {
             id: Default::default(),
             header: "@@ -1,6 +1,6 @@".into(),
@@ -320,7 +391,13 @@ mod tests {
             hunks: vec![hunk],
         };
         let lines = |l: &[&str]| Arc::new(l.iter().map(|s| s.to_string()).collect::<Vec<_>>());
-        (file, Sources { old: Some(lines(&old)), new: Some(lines(&new)) })
+        (
+            file,
+            Sources {
+                old: Some(lines(&old)),
+                new: Some(lines(&new)),
+            },
+        )
     }
 
     fn sample_app() -> App {
@@ -336,8 +413,14 @@ mod tests {
     fn marks_each_side() {
         use Mark::*;
         let (file, _) = sample();
-        assert_eq!(marks(&file, Side::New, 6), [None, Some(Modified), None, Some(Gap), Some(Changed), None]);
-        assert_eq!(marks(&file, Side::Old, 6), [None, Some(Modified), None, Some(Changed), None, Some(Gap)]);
+        assert_eq!(
+            marks(&file, Side::New, 6),
+            [None, Some(Modified), None, Some(Gap), Some(Changed), None]
+        );
+        assert_eq!(
+            marks(&file, Side::Old, 6),
+            [None, Some(Modified), None, Some(Changed), None, Some(Gap)]
+        );
     }
 
     #[test]
@@ -349,7 +432,10 @@ mod tests {
         assert_eq!(app.cursor_column(), Some(4));
         app.update(Action::Select);
         let view = app.file_view.as_ref().unwrap();
-        assert_eq!((view.side, view.line_no(), view.caret.column), (Side::New, 2, 4));
+        assert_eq!(
+            (view.side, view.line_no(), view.caret.column),
+            (Side::New, 2, 4)
+        );
         assert_eq!(app.file_view_cursor(), Some(4..5));
         // Back where it was.
         app.update(Action::Quit);
@@ -387,7 +473,10 @@ mod tests {
         app.update(Action::LineEnd);
         app.update(Action::Up(1));
         let view = app.file_view.as_ref().unwrap();
-        assert_eq!((view.line_no(), view.caret.on(&view.lines[..])), (5, Some(11)));
+        assert_eq!(
+            (view.line_no(), view.caret.on(&view.lines[..])),
+            (5, Some(11))
+        );
         app.update(Action::Top);
         app.update(Action::Down(100));
         assert_eq!(app.file_view.as_ref().unwrap().line_no(), 6);
@@ -404,7 +493,10 @@ mod tests {
         let view = app.file_view.as_ref().unwrap();
         assert_eq!((view.line_no(), view.caret.column), (4, 4));
         app.update(Action::SearchNext(1));
-        assert_eq!(app.message.as_deref(), Some("search hit BOTTOM, continuing at TOP"));
+        assert_eq!(
+            app.message.as_deref(),
+            Some("search hit BOTTOM, continuing at TOP")
+        );
         // Esc clears the highlight first, then closes.
         app.update(Action::Cancel);
         assert!(app.file_view.is_some());

@@ -8,11 +8,15 @@ use crate::input::{InputAction, TextInput};
 
 impl App {
     pub(super) fn enter_command(&mut self) {
-        self.mode = Mode::Command { input: TextInput::default() };
+        self.mode = Mode::Command {
+            input: TextInput::default(),
+        };
     }
 
     pub(super) fn command_input(&mut self, action: InputAction) {
-        let Mode::Command { input } = &mut self.mode else { return };
+        let Mode::Command { input } = &mut self.mode else {
+            return;
+        };
         match action {
             InputAction::Submit => {
                 let command = input.text().trim().to_string();
@@ -83,15 +87,31 @@ mod tests {
         command(&mut app, "export json out.json");
         assert_eq!(
             app.effect.take(),
-            Some(Effect::Export { format: Format::Json, path: Some("out.json".into()) })
+            Some(Effect::Export {
+                format: Format::Json,
+                path: Some("out.json".into())
+            })
         );
         command(&mut app, "export");
-        assert_eq!(app.effect.take(), Some(Effect::Export { format: Format::Markdown, path: None }));
+        assert_eq!(
+            app.effect.take(),
+            Some(Effect::Export {
+                format: Format::Markdown,
+                path: None
+            })
+        );
         command(&mut app, "export pdf");
         assert!(app.message.as_deref().unwrap().starts_with("error:"));
 
         command(&mut app, "3");
-        assert_eq!(app.current_row(), Some(Row::Line { file: 0, hunk: 0, line: 2 }));
+        assert_eq!(
+            app.current_row(),
+            Some(Row::Line {
+                file: 0,
+                hunk: 0,
+                line: 2
+            })
+        );
         command(&mut app, "nope");
         assert_eq!(app.message.as_deref(), Some("error: not a command: nope"));
         command(&mut app, "w");

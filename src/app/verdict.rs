@@ -66,11 +66,23 @@ impl App {
             for (h, hunk) in file.hunks.iter().enumerate() {
                 let reviewed = self.review.is_reviewed(&hunk.id);
                 let plumbing = self.diff.is_plumbing(f, h);
-                let runs = if reviewed || plumbing { Vec::new() } else { self.diff.plumbing_runs(f, h) };
-                for (i, _) in hunk.lines.iter().enumerate().filter(|(_, l)| is_change(l.kind)) {
+                let runs = if reviewed || plumbing {
+                    Vec::new()
+                } else {
+                    self.diff.plumbing_runs(f, h)
+                };
+                for (i, _) in hunk
+                    .lines
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, l)| is_change(l.kind))
+                {
                     if reviewed {
                         stats.good += 1;
-                    } else if plumbing || (runs.iter().any(|r| r.contains(&i)) && !self.review.is_seen(&hunk.id, i)) {
+                    } else if plumbing
+                        || (runs.iter().any(|r| r.contains(&i))
+                            && !self.review.is_seen(&hunk.id, i))
+                    {
                         stats.plumbing += 1;
                     } else if self.review.is_seen(&hunk.id, i) {
                         stats.read += 1;
@@ -86,37 +98,68 @@ impl App {
     /// A key pressed on the verdict page.
     pub fn verdict_action(&mut self, action: VerdictAction) {
         self.message = None;
-        let message = self.review.verdict().map_or(String::new(), |v| v.message.clone());
-        let set = |kind| Some(Verdict { kind, message: message.clone() });
+        let message = self
+            .review
+            .verdict()
+            .map_or(String::new(), |v| v.message.clone());
+        let set = |kind| {
+            Some(Verdict {
+                kind,
+                message: message.clone(),
+            })
+        };
         match action {
             VerdictAction::Approve => self.review.set_verdict(set(VerdictKind::Approve)),
-            VerdictAction::RequestChanges => self.review.set_verdict(set(VerdictKind::RequestChanges)),
+            VerdictAction::RequestChanges => {
+                self.review.set_verdict(set(VerdictKind::RequestChanges))
+            }
             VerdictAction::Comment => self.review.set_verdict(set(VerdictKind::Comment)),
             VerdictAction::Message => {
-                self.mode = Mode::VerdictMessage { input: TextInput::new(message.clone()) };
+                self.mode = Mode::VerdictMessage {
+                    input: TextInput::new(message.clone()),
+                };
             }
             VerdictAction::Clear => self.review.set_verdict(None),
             VerdictAction::CopyForAgent => self.copy_for_agent(),
-            VerdictAction::Export => self.effect = Some(Effect::Export { format: Format::Markdown, path: None }),
+            VerdictAction::Export => {
+                self.effect = Some(Effect::Export {
+                    format: Format::Markdown,
+                    path: None,
+                })
+            }
             VerdictAction::Close => self.show_verdict = false,
         }
         if let Some(verdict) = self.review.verdict().filter(|_| {
-            matches!(action, VerdictAction::Approve | VerdictAction::RequestChanges | VerdictAction::Comment)
+            matches!(
+                action,
+                VerdictAction::Approve | VerdictAction::RequestChanges | VerdictAction::Comment
+            )
         }) {
-            self.message = Some(format!("{} · e exports it with the comments", verdict.kind.label()));
+            self.message = Some(format!(
+                "{} · e exports it with the comments",
+                verdict.kind.label()
+            ));
         }
     }
 
     /// Typing the message to the author. Saving it without a verdict yet
     /// makes it a comment.
     pub(super) fn verdict_message_input(&mut self, action: InputAction) {
-        let Mode::VerdictMessage { input } = &mut self.mode else { return };
+        let Mode::VerdictMessage { input } = &mut self.mode else {
+            return;
+        };
         match action {
             InputAction::Submit => {
                 let text = input.text().trim().to_string();
                 self.mode = Mode::Normal;
-                let kind = self.review.verdict().map_or(VerdictKind::Comment, |v| v.kind);
-                self.review.set_verdict(Some(Verdict { kind, message: text }));
+                let kind = self
+                    .review
+                    .verdict()
+                    .map_or(VerdictKind::Comment, |v| v.kind);
+                self.review.set_verdict(Some(Verdict {
+                    kind,
+                    message: text,
+                }));
             }
             InputAction::Cancel => self.mode = Mode::Normal,
             InputAction::OpenEditor => {}
@@ -133,8 +176,13 @@ impl App {
             return;
         }
         let n = export.comments.len();
-        self.effect = Some(Effect::Copy { text: export::agent_brief(&export) });
-        self.message = Some(format!("Copied {n} comment{} for an agent", if n == 1 { "" } else { "s" }));
+        self.effect = Some(Effect::Copy {
+            text: export::agent_brief(&export),
+        });
+        self.message = Some(format!(
+            "Copied {n} comment{} for an agent",
+            if n == 1 { "" } else { "s" }
+        ));
         // Handed over, they may well be done with: offer to clear them.
         let ids = self.review.comments().iter().map(|c| c.id).collect();
         self.dismiss_prompt = Some(DismissCopied { ids });
@@ -146,27 +194,46 @@ impl App {
             let lines = &self.hunk(file, hunk).lines[start..=end];
             // Removed lines aren't in the file any more, so they're left out
             // unless that's all there is.
-            let kept: Vec<&str> = lines.iter().filter(|l| l.kind != LineKind::Removed).map(|l| l.content.as_str()).collect();
-            let lines: Vec<&str> = if kept.is_empty() { lines.iter().map(|l| l.content.as_str()).collect() } else { kept };
+            let kept: Vec<&str> = lines
+                .iter()
+                .filter(|l| l.kind != LineKind::Removed)
+                .map(|l| l.content.as_str())
+                .collect();
+            let lines: Vec<&str> = if kept.is_empty() {
+                lines.iter().map(|l| l.content.as_str()).collect()
+            } else {
+                kept
+            };
             let n = lines.len();
             let text = lines.join("\n");
             self.mode = Mode::Normal;
             (text, format!("{n} line{}", if n == 1 { "" } else { "s" }))
         } else {
             match self.current_row() {
-                Some(Row::Line { file, hunk, line }) => (self.line(file, hunk, line).content.clone(), "1 line".into()),
-                Some(Row::Context { file, no, .. }) => {
-                    (super::context_text(&self.diff, file, no).unwrap_or("").to_string(), "1 line".into())
+                Some(Row::Line { file, hunk, line }) => {
+                    (self.line(file, hunk, line).content.clone(), "1 line".into())
                 }
+                Some(Row::Context { file, no, .. }) => (
+                    super::context_text(&self.diff, file, no)
+                        .unwrap_or("")
+                        .to_string(),
+                    "1 line".into(),
+                ),
                 Some(Row::Hunk { file, hunk }) => {
                     let lines = &self.hunk(file, hunk).lines;
-                    let text = lines.iter().map(|l| format!("{}{}", sign(l.kind), l.content)).collect::<Vec<_>>();
+                    let text = lines
+                        .iter()
+                        .map(|l| format!("{}{}", sign(l.kind), l.content))
+                        .collect::<Vec<_>>();
                     (text.join("\n"), "the hunk".into())
                 }
                 Some(Row::Plumbing { file, hunk, start }) => {
                     let run = self.run_at(file, hunk, start).unwrap_or(start..start + 1);
                     let lines = &self.hunk(file, hunk).lines[run];
-                    let text = lines.iter().map(|l| format!("{}{}", sign(l.kind), l.content)).collect::<Vec<_>>();
+                    let text = lines
+                        .iter()
+                        .map(|l| format!("{}{}", sign(l.kind), l.content))
+                        .collect::<Vec<_>>();
                     (text.join("\n"), format!("{} lines", lines.len()))
                 }
                 Some(Row::Comment { id, .. }) => match self.review.comment(id) {
@@ -177,7 +244,9 @@ impl App {
                     Some(n) => (n.text.clone(), "the note".into()),
                     None => return,
                 },
-                Some(Row::File { file }) => (self.diff.files[file].path().to_string(), "the path".into()),
+                Some(Row::File { file }) => {
+                    (self.diff.files[file].path().to_string(), "the path".into())
+                }
                 Some(Row::Group { .. }) | None => {
                     self.message = Some("Nothing to copy here".to_string());
                     return;
@@ -198,14 +267,38 @@ mod tests {
     #[test]
     fn counts_lines_good_read_and_unseen() {
         let mut app = sample_app();
-        assert_eq!(app.line_stats(), LineStats { good: 0, read: 0, plumbing: 0, unseen: 9 });
+        assert_eq!(
+            app.line_stats(),
+            LineStats {
+                good: 0,
+                read: 0,
+                plumbing: 0,
+                unseen: 9
+            }
+        );
         let rows = app.rows[..4].to_vec();
         app.mark_seen(&rows);
-        assert_eq!(app.line_stats(), LineStats { good: 0, read: 2, plumbing: 0, unseen: 7 });
+        assert_eq!(
+            app.line_stats(),
+            LineStats {
+                good: 0,
+                read: 2,
+                plumbing: 0,
+                unseen: 7
+            }
+        );
         app.update(Action::Down(2));
         app.update(Action::ToggleReviewed);
         let stats = app.line_stats();
-        assert_eq!(stats, LineStats { good: 3, read: 0, plumbing: 0, unseen: 6 });
+        assert_eq!(
+            stats,
+            LineStats {
+                good: 3,
+                read: 0,
+                plumbing: 0,
+                unseen: 6
+            }
+        );
         assert_eq!(stats.seen_percent(), 33);
     }
 
@@ -221,7 +314,13 @@ mod tests {
         app.verdict_action(VerdictAction::Message);
         type_text(&mut app, "Nice work");
         app.update_input(InputAction::Submit);
-        assert_eq!(app.review.verdict(), Some(&Verdict { kind: VerdictKind::Comment, message: "Nice work".into() }));
+        assert_eq!(
+            app.review.verdict(),
+            Some(&Verdict {
+                kind: VerdictKind::Comment,
+                message: "Nice work".into()
+            })
+        );
         app.verdict_action(VerdictAction::Approve);
         assert_eq!(app.review.verdict().unwrap().kind, VerdictKind::Approve);
         assert_eq!(app.review.verdict().unwrap().message, "Nice work");
@@ -239,7 +338,9 @@ mod tests {
         app.update(Action::Down(3));
         comment(&mut app, "why the lock?");
         app.update(Action::CopyForAgent);
-        let Some(Effect::Copy { text }) = app.effect.take() else { panic!("no copy") };
+        let Some(Effect::Copy { text }) = app.effect.take() else {
+            panic!("no copy")
+        };
         assert!(text.contains("- `a.rs:2`: why the lock?"));
     }
 
@@ -248,15 +349,30 @@ mod tests {
         let mut app = sample_app();
         app.update(Action::Down(2));
         app.update(Action::Yank);
-        assert_eq!(app.effect.take(), Some(Effect::Copy { text: "a.rs 0 0".into() }));
+        assert_eq!(
+            app.effect.take(),
+            Some(Effect::Copy {
+                text: "a.rs 0 0".into()
+            })
+        );
         app.update(Action::StartVisual);
         app.update(Action::Down(1));
         app.update(Action::Yank);
-        assert_eq!(app.effect.take(), Some(Effect::Copy { text: "a.rs 0 0\na.rs 0 1".into() }));
+        assert_eq!(
+            app.effect.take(),
+            Some(Effect::Copy {
+                text: "a.rs 0 0\na.rs 0 1".into()
+            })
+        );
         assert_eq!(app.mode, Mode::Normal);
         assert_eq!(app.message.as_deref(), Some("Copied 2 lines"));
         app.update(Action::Up(2));
         app.update(Action::Yank);
-        assert_eq!(app.effect.take(), Some(Effect::Copy { text: "+a.rs 0 0\n+a.rs 0 1\n+a.rs 0 2".into() }));
+        assert_eq!(
+            app.effect.take(),
+            Some(Effect::Copy {
+                text: "+a.rs 0 0\n+a.rs 0 1\n+a.rs 0 2".into()
+            })
+        );
     }
 }

@@ -43,7 +43,10 @@ pub fn list(registry: &Registry) -> String {
     for language in registry.iter() {
         let grammar = match status(language) {
             Status::Enabled => "enabled".to_string(),
-            Status::Broken(why) => format!("broken ({why}); run `rrrev lang enable {}` again", language.name),
+            Status::Broken(why) => format!(
+                "broken ({why}); run `rrrev lang enable {}` again",
+                language.name
+            ),
             Status::Available => "not enabled".to_string(),
             Status::NoGrammar => "no grammar".to_string(),
         };
@@ -62,10 +65,13 @@ pub fn list(registry: &Registry) -> String {
 /// to tell the user.
 pub fn enable(language: &Language) -> Result<String> {
     let name = &language.name;
-    let Some(source) = &language.grammar else { bail!("{name} has no grammar to build") };
+    let Some(source) = &language.grammar else {
+        bail!("{name} has no grammar to build")
+    };
     let target = grammar::path(name).context("no home directory to keep grammars in")?;
     let work = std::env::temp_dir().join(format!("rrrev-grammar-{name}-{}", std::process::id()));
-    let built = fetch(source, &work).and_then(|src| build(&src, &work.join(format!("{name}.lib")), name));
+    let built =
+        fetch(source, &work).and_then(|src| build(&src, &work.join(format!("{name}.lib")), name));
     let result = built.and_then(|lib| {
         fs::create_dir_all(target.parent().unwrap())?;
         // Moved into place only once it loads, so a failed build leaves a
@@ -85,7 +91,10 @@ pub fn enable(language: &Language) -> Result<String> {
                 "\nIts server, {}, isn't in Mason's folder ({}). Install it from Neovim with :Mason \
                  to get go to definition and references.",
                 lsp.command,
-                super::mason_bin().map_or_else(|| "~/.local/share/nvim/mason/bin".into(), |p| p.display().to_string()),
+                super::mason_bin().map_or_else(
+                    || "~/.local/share/nvim/mason/bin".into(),
+                    |p| p.display().to_string()
+                ),
             );
         }
         _ => {}
@@ -114,9 +123,23 @@ fn fetch(grammar: &Grammar, work: &Path) -> Result<PathBuf> {
     git(&["init", "-q"])?;
     git(&["fetch", "-q", "--depth", "1", &grammar.git, &grammar.rev])
         .with_context(|| format!("cannot fetch {} at {}", grammar.git, grammar.rev))?;
-    git(&["-c", "advice.detachedHead=false", "checkout", "-q", "FETCH_HEAD"])?;
-    let src = grammar.path.as_ref().map_or_else(|| repo.clone(), |p| repo.join(p)).join("src");
-    anyhow::ensure!(src.join("parser.c").exists(), "{} has no parser.c", src.display());
+    git(&[
+        "-c",
+        "advice.detachedHead=false",
+        "checkout",
+        "-q",
+        "FETCH_HEAD",
+    ])?;
+    let src = grammar
+        .path
+        .as_ref()
+        .map_or_else(|| repo.clone(), |p| repo.join(p))
+        .join("src");
+    anyhow::ensure!(
+        src.join("parser.c").exists(),
+        "{} has no parser.c",
+        src.display()
+    );
     Ok(src)
 }
 
@@ -128,7 +151,11 @@ fn build(src: &Path, out: &Path, name: &str) -> Result<PathBuf> {
     let (compiler, mut command) = if cpp_scanner.exists() {
         let cxx = std::env::var("CXX").unwrap_or_else(|_| "c++".into());
         let mut command = Command::new(&cxx);
-        command.args(["-x", "c"]).arg(src.join("parser.c")).args(["-x", "c++"]).arg(&cpp_scanner);
+        command
+            .args(["-x", "c"])
+            .arg(src.join("parser.c"))
+            .args(["-x", "c++"])
+            .arg(&cpp_scanner);
         (cxx, command)
     } else {
         let cc = std::env::var("CC").unwrap_or_else(|_| "cc".into());
@@ -139,16 +166,25 @@ fn build(src: &Path, out: &Path, name: &str) -> Result<PathBuf> {
         }
         (cc, command)
     };
-    command.args(["-shared", "-fPIC", "-O2", "-w", "-I"]).arg(src).arg("-o").arg(out);
+    command
+        .args(["-shared", "-fPIC", "-O2", "-w", "-I"])
+        .arg(src)
+        .arg("-o")
+        .arg(out);
     run(&mut command, &compiler).with_context(|| format!("cannot build the {name} grammar"))?;
     grammar::load(out, &grammar::symbol(name))?;
     Ok(out.to_path_buf())
 }
 
 fn run(command: &mut Command, what: &str) -> Result<()> {
-    let output = command.output().with_context(|| format!("cannot run {what}; is it installed?"))?;
+    let output = command
+        .output()
+        .with_context(|| format!("cannot run {what}; is it installed?"))?;
     if !output.status.success() {
-        bail!("{what} failed: {}", String::from_utf8_lossy(&output.stderr).trim());
+        bail!(
+            "{what} failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
     }
     Ok(())
 }

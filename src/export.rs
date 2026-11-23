@@ -55,7 +55,13 @@ pub struct ExportedComment {
 impl ExportedComment {
     /// `path:41-43`, using new-side lines when there are any.
     pub fn location(&self) -> String {
-        let range = |(a, b): (u32, u32)| if a == b { a.to_string() } else { format!("{a}-{b}") };
+        let range = |(a, b): (u32, u32)| {
+            if a == b {
+                a.to_string()
+            } else {
+                format!("{a}-{b}")
+            }
+        };
         match (self.new_lines, self.old_lines) {
             (Some(new), _) => format!("{}:{}", self.path, range(new)),
             (None, Some(old)) => format!("{} (removed lines {})", self.path, range(old)),
@@ -66,7 +72,12 @@ impl ExportedComment {
 
 /// Gathers every comment, in file order then line order.
 pub fn collect(title: &str, diff: &Diff, review: &ReviewState) -> Export {
-    let live = |c: &crate::review::Comment| diff.files.iter().flat_map(|f| &f.hunks).any(|h| h.id == c.hunk);
+    let live = |c: &crate::review::Comment| {
+        diff.files
+            .iter()
+            .flat_map(|f| &f.hunks)
+            .any(|h| h.id == c.hunk)
+    };
     let mut comments: Vec<_> = review
         .comments()
         .iter()
@@ -80,20 +91,36 @@ pub fn collect(title: &str, diff: &Diff, review: &ReviewState) -> Export {
         })
         .collect();
     comments.sort_by_key(|c| (c.path.clone(), c.new_lines.or(c.old_lines)));
-    Export { title: title.to_string(), verdict: review.verdict().cloned(), comments }
+    Export {
+        title: title.to_string(),
+        verdict: review.verdict().cloned(),
+        comments,
+    }
 }
 
 /// The comments as a short brief for a coding agent: each as `path:line`
 /// and what the reviewer wrote, the way you'd paste them into a chat.
 pub fn agent_brief(export: &Export) -> String {
     let mut out = format!("Review comments on {} to address:\n", export.title);
-    if let Some(verdict) = export.verdict.as_ref().filter(|v| !v.message.trim().is_empty()) {
+    if let Some(verdict) = export
+        .verdict
+        .as_ref()
+        .filter(|v| !v.message.trim().is_empty())
+    {
         out += &format!("\nOverall: {}\n", verdict.message.trim());
     }
     for comment in &export.comments {
-        let outdated = if comment.outdated { " (on code that has since changed)" } else { "" };
+        let outdated = if comment.outdated {
+            " (on code that has since changed)"
+        } else {
+            ""
+        };
         let mut lines = comment.text.trim().lines();
-        out += &format!("\n- `{}`{outdated}: {}\n", comment.location(), lines.next().unwrap_or(""));
+        out += &format!(
+            "\n- `{}`{outdated}: {}\n",
+            comment.location(),
+            lines.next().unwrap_or("")
+        );
         for line in lines {
             out += &format!("  {line}\n");
         }
@@ -117,11 +144,19 @@ pub fn render(export: &Export, format: Format) -> Result<String> {
 }
 
 fn markdown(export: &Export) -> String {
-    let mut out = format!("# Review comments: {} ({})\n", export.title, export.comments.len());
+    let mut out = format!(
+        "# Review comments: {} ({})\n",
+        export.title,
+        export.comments.len()
+    );
     if let Some(verdict) = &export.verdict {
         out += &format!("\n**{}**", verdict.kind.label());
         let message = verdict.message.trim();
-        out += &if message.is_empty() { "\n".to_string() } else { format!(": {message}\n") };
+        out += &if message.is_empty() {
+            "\n".to_string()
+        } else {
+            format!(": {message}\n")
+        };
     }
     for comment in &export.comments {
         let outdated = if comment.outdated { " (outdated)" } else { "" };
@@ -134,7 +169,12 @@ fn markdown(export: &Export) -> String {
 /// `code` in a `diff` code block, ending in a newline.
 fn fenced_diff(code: &[String]) -> String {
     // A fence longer than any backtick run in the code can't be closed early.
-    let longest_run = code.iter().flat_map(|l| l.split(|c| c != '`')).map(str::len).max().unwrap_or(0);
+    let longest_run = code
+        .iter()
+        .flat_map(|l| l.split(|c| c != '`'))
+        .map(str::len)
+        .max()
+        .unwrap_or(0);
     let fence = "`".repeat(longest_run.max(2) + 1);
     format!("{fence}diff\n{}\n{fence}\n", code.join("\n"))
 }
@@ -159,7 +199,11 @@ impl CommentSink for FileSink {
         fs::write(&self.path, render(export, self.format)?)
             .with_context(|| format!("cannot write {}", self.path.display()))?;
         let n = export.comments.len();
-        Ok(format!("Exported {n} comment{} to {}", if n == 1 { "" } else { "s" }, self.path.display()))
+        Ok(format!(
+            "Exported {n} comment{} to {}",
+            if n == 1 { "" } else { "s" },
+            self.path.display()
+        ))
     }
 }
 
@@ -167,7 +211,12 @@ impl CommentSink for FileSink {
 mod tests {
     use super::*;
 
-    fn exported(path: &str, new_lines: Option<(u32, u32)>, code: &[&str], text: &str) -> ExportedComment {
+    fn exported(
+        path: &str,
+        new_lines: Option<(u32, u32)>,
+        code: &[&str],
+        text: &str,
+    ) -> ExportedComment {
         ExportedComment {
             path: path.into(),
             old_lines: Some((7, 7)),
@@ -180,9 +229,15 @@ mod tests {
 
     #[test]
     fn locations_prefer_new_lines() {
-        assert_eq!(exported("a.rs", Some((3, 5)), &[], "").location(), "a.rs:3-5");
+        assert_eq!(
+            exported("a.rs", Some((3, 5)), &[], "").location(),
+            "a.rs:3-5"
+        );
         assert_eq!(exported("a.rs", Some((3, 3)), &[], "").location(), "a.rs:3");
-        assert_eq!(exported("a.rs", None, &[], "").location(), "a.rs (removed lines 7)");
+        assert_eq!(
+            exported("a.rs", None, &[], "").location(),
+            "a.rs (removed lines 7)"
+        );
     }
 
     #[test]
@@ -206,21 +261,38 @@ mod tests {
             verdict: None,
             comments: vec![exported("README.md", Some((1, 1)), &["+```rust"], "x")],
         };
-        assert!(render(&export, Format::Markdown).unwrap().contains("````diff\n+```rust\n````"));
+        assert!(
+            render(&export, Format::Markdown)
+                .unwrap()
+                .contains("````diff\n+```rust\n````")
+        );
     }
 
     #[test]
     fn verdicts_lead_the_markdown_and_the_brief() {
         use crate::review::VerdictKind;
-        let mut outdated = exported("b.rs", Some((9, 9)), &["-let a = 1;", "+let b = 1;"], "Rename\nthis too");
+        let mut outdated = exported(
+            "b.rs",
+            Some((9, 9)),
+            &["-let a = 1;", "+let b = 1;"],
+            "Rename\nthis too",
+        );
         outdated.outdated = true;
         let export = Export {
             title: "main..feat".into(),
-            verdict: Some(Verdict { kind: VerdictKind::RequestChanges, message: "Close, two nits.".into() }),
-            comments: vec![exported("a.rs", Some((3, 4)), &["+x"], "Why two locks?"), outdated],
+            verdict: Some(Verdict {
+                kind: VerdictKind::RequestChanges,
+                message: "Close, two nits.".into(),
+            }),
+            comments: vec![
+                exported("a.rs", Some((3, 4)), &["+x"], "Why two locks?"),
+                outdated,
+            ],
         };
         let md = render(&export, Format::Markdown).unwrap();
-        assert!(md.starts_with("# Review comments: main..feat (2)\n\n**Changes requested**: Close, two nits.\n"));
+        assert!(md.starts_with(
+            "# Review comments: main..feat (2)\n\n**Changes requested**: Close, two nits.\n"
+        ));
         assert_eq!(
             agent_brief(&export),
             "Review comments on main..feat to address:\n\nOverall: Close, two nits.\n\n\
@@ -234,10 +306,20 @@ mod tests {
     fn file_sink_writes_and_reports() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("out").join("c.json");
-        let export = Export { title: String::new(), verdict: None, comments: vec![exported("a.rs", None, &[], "x")] };
-        let note = FileSink { path: path.clone(), format: Format::Json }.send(&export).unwrap();
+        let export = Export {
+            title: String::new(),
+            verdict: None,
+            comments: vec![exported("a.rs", None, &[], "x")],
+        };
+        let note = FileSink {
+            path: path.clone(),
+            format: Format::Json,
+        }
+        .send(&export)
+        .unwrap();
         assert!(note.starts_with("Exported 1 comment to"));
-        let json: serde_json::Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
         assert_eq!(json["comments"][0]["text"], "x");
     }
 }

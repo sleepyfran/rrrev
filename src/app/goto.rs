@@ -46,7 +46,10 @@ impl App {
             page: self.page,
             cursor: self.cursor,
             column: self.column,
-            file: self.file_view.as_ref().map(|v| (v.path.clone(), v.caret.line, v.caret.column)),
+            file: self
+                .file_view
+                .as_ref()
+                .map(|v| (v.path.clone(), v.caret.line, v.caret.column)),
         }
     }
 
@@ -75,7 +78,12 @@ impl App {
             }
             let text = view.lines.get(view.caret.line).cloned().unwrap_or_default();
             let column = view.caret.bytes(&view.lines[..]).map_or(0, |b| b.start);
-            return Ok(Spot { path: view.path.clone(), line: view.caret.line as u32, column, text });
+            return Ok(Spot {
+                path: view.path.clone(),
+                line: view.caret.line as u32,
+                column,
+                text,
+            });
         }
         let (file, no, text) = match self.current_row() {
             Some(Row::Line { file, hunk, line }) => {
@@ -86,19 +94,33 @@ impl App {
                 }
             }
             Some(Row::Context { file, no, .. }) => match self.diff.context_source(file) {
-                Some((source, Side::New)) => (file, no, source.get(no as usize - 1).cloned().unwrap_or_default()),
+                Some((source, Side::New)) => (
+                    file,
+                    no,
+                    source.get(no as usize - 1).cloned().unwrap_or_default(),
+                ),
                 _ => return Err(OLD),
             },
             _ => return Err("Move to a line of code first"),
         };
         let path = self.diff.files[file].new_path.clone().ok_or(OLD)?;
         let column = self.cursor_bytes().map_or(0, |b| b.start);
-        Ok(Spot { path, line: no - 1, column, text })
+        Ok(Spot {
+            path,
+            line: no - 1,
+            column,
+            text,
+        })
     }
 
     /// The server's answer: goes to the first place it gave. `note` is said
     /// alongside, e.g. that the reviewed revision isn't checked out.
-    pub fn finish_go_to(&mut self, kind: GoTo, targets: Result<Vec<Target>, String>, note: Option<&str>) {
+    pub fn finish_go_to(
+        &mut self,
+        kind: GoTo,
+        targets: Result<Vec<Target>, String>,
+        note: Option<&str>,
+    ) {
         let targets = match targets {
             Ok(targets) => targets,
             Err(e) => {
@@ -124,10 +146,18 @@ impl App {
 
     /// Where the diff shows a target's line, as a page and row.
     pub(super) fn shown_at(&self, target: &Target) -> Option<(usize, usize)> {
-        let file = self.diff.files.iter().position(|f| f.new_path.as_deref() == Some(target.path.as_str()))?;
+        let file = self
+            .diff
+            .files
+            .iter()
+            .position(|f| f.new_path.as_deref() == Some(target.path.as_str()))?;
         let no = target.line as u32 + 1;
         let shown = |row: &Row| match *row {
-            Row::Line { file: f, hunk, line } => {
+            Row::Line {
+                file: f,
+                hunk,
+                line,
+            } => {
                 let l = self.line(f, hunk, line);
                 f == file && l.kind != LineKind::Removed && l.new_no == Some(no)
             }
@@ -142,7 +172,8 @@ impl App {
     /// Its line in the diff when the diff shows it, else the file view.
     pub(super) fn go_to_target(&mut self, target: &Target) {
         let column = target.lines.get(target.line).map_or(0, |l| {
-            l.get(..target.column).map_or(l.chars().count(), |before| before.chars().count())
+            l.get(..target.column)
+                .map_or(l.chars().count(), |before| before.chars().count())
         });
         if let Some((page, row)) = self.shown_at(target) {
             self.file_view = None;
@@ -151,13 +182,26 @@ impl App {
             self.scroll = row.saturating_sub(self.viewport_height / 2);
             return;
         }
-        let file = self.diff.files.iter().position(|f| f.new_path.as_deref() == Some(target.path.as_str()));
+        let file = self
+            .diff
+            .files
+            .iter()
+            .position(|f| f.new_path.as_deref() == Some(target.path.as_str()));
         let marks = match file {
             Some(file) => marks(&self.diff.files[file], Side::New, target.lines.len()),
             None => vec![None; target.lines.len()],
         };
-        let mut view = FileView::new(target.path.clone(), Side::New, target.lines.clone(), file, marks);
-        view.caret = Caret { line: target.line.min(target.lines.len().saturating_sub(1)), column };
+        let mut view = FileView::new(
+            target.path.clone(),
+            Side::New,
+            target.lines.clone(),
+            file,
+            marks,
+        );
+        view.caret = Caret {
+            line: target.line.min(target.lines.len().saturating_sub(1)),
+            column,
+        };
         view.scroll = view.caret.line.saturating_sub(self.viewport_height / 2);
         self.file_view = Some(view);
     }
@@ -210,9 +254,14 @@ mod tests {
             .unwrap();
         app.update(Action::GoTo(GoTo::Definition));
         match app.effect.take() {
-            Some(Effect::GoTo { kind: GoTo::Definition, spot }) => {
+            Some(Effect::GoTo {
+                kind: GoTo::Definition,
+                spot,
+            }) => {
                 let row = app.current_row().unwrap();
-                let Row::Line { file, hunk, line } = row else { panic!("{row:?}") };
+                let Row::Line { file, hunk, line } = row else {
+                    panic!("{row:?}")
+                };
                 let l = app.line(file, hunk, line);
                 assert_eq!(spot.line + 1, l.new_no.unwrap());
                 assert_eq!(spot.text, l.content);
@@ -237,9 +286,16 @@ mod tests {
         app.update(Action::Down(2));
         let before = (app.page, app.cursor);
         let lines = ["mod a;", "", "pub fn helper() {}"];
-        app.finish_go_to(GoTo::Definition, Ok(vec![target("src/other.rs", 2, 7, &lines)]), None);
+        app.finish_go_to(
+            GoTo::Definition,
+            Ok(vec![target("src/other.rs", 2, 7, &lines)]),
+            None,
+        );
         let view = app.file_view.as_ref().expect("the file view");
-        assert_eq!((view.path.as_str(), view.line_no(), view.cursor_column()), ("src/other.rs", 3, 7));
+        assert_eq!(
+            (view.path.as_str(), view.line_no(), view.cursor_column()),
+            ("src/other.rs", 3, 7)
+        );
         assert_eq!(app.message, None);
         app.update(Action::JumpBack);
         assert!(app.file_view.is_none());
@@ -253,16 +309,25 @@ mod tests {
         let (file, no) = (0..app.rows.len())
             .rev()
             .find_map(|i| match app.rows[i] {
-                Row::Line { file, hunk, line } => app.line(file, hunk, line).new_no.map(|n| (file, n)),
+                Row::Line { file, hunk, line } => {
+                    app.line(file, hunk, line).new_no.map(|n| (file, n))
+                }
                 _ => None,
             })
             .unwrap();
         let path = app.diff.files[file].new_path.clone().unwrap();
         let lines: Vec<String> = (0..no).map(|_| "    x".to_string()).collect();
-        let t = Target { path, line: no as usize - 1, column: 4, lines: Arc::new(lines) };
+        let t = Target {
+            path,
+            line: no as usize - 1,
+            column: 4,
+            lines: Arc::new(lines),
+        };
         app.finish_go_to(GoTo::Definition, Ok(vec![t.clone(), t]), Some("may be off"));
         assert!(app.file_view.is_none());
-        let Some(Row::Line { file, hunk, line }) = app.current_row() else { panic!() };
+        let Some(Row::Line { file, hunk, line }) = app.current_row() else {
+            panic!()
+        };
         assert_eq!(app.line(file, hunk, line).new_no, Some(no));
         assert_eq!(app.column, 4);
         assert_eq!(app.message.as_deref(), Some("1 of 2 places · may be off"));
