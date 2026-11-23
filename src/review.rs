@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::diff::HunkId;
 use crate::organizer::Plan;
+use crate::walkthrough::Walkthrough;
 
 const VERSION: u32 = 1;
 
@@ -33,6 +34,9 @@ pub struct ReviewState {
     /// How the review ends, once the reviewer says.
     #[serde(default)]
     verdict: Option<Verdict>,
+    /// The latest walkthrough, as the AI returned it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    walkthrough: Option<Walkthrough>,
     /// Set when there are changes that haven't been saved yet.
     #[serde(skip)]
     dirty: bool,
@@ -167,6 +171,19 @@ impl ReviewState {
 
     pub fn clear_plan(&mut self) {
         self.dirty |= self.plan.take().is_some();
+    }
+
+    pub fn walkthrough(&self) -> Option<&Walkthrough> {
+        self.walkthrough.as_ref()
+    }
+
+    pub fn set_walkthrough(&mut self, walkthrough: Walkthrough) {
+        self.walkthrough = Some(walkthrough);
+        self.dirty = true;
+    }
+
+    pub fn clear_walkthrough(&mut self) {
+        self.dirty |= self.walkthrough.take().is_some();
     }
 
     /// Whether line `line` of hunk `id` has been on screen.

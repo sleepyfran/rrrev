@@ -251,6 +251,8 @@ pub struct HunkSummary {
     pub header: String,
     /// Diff lines with their sign; empty for generated files.
     pub lines: Vec<String>,
+    /// Each line's new-side number; `None` for removed lines.
+    pub numbers: Vec<Option<u32>>,
     pub generated: bool,
     /// Only imports, exports and the like: shown, but marked as such.
     pub plumbing: bool,
@@ -259,6 +261,10 @@ pub struct HunkSummary {
 /// Lines shown per hunk; past that the organizer gets a count. Plenty to tell
 /// what a hunk is about without blowing up the prompt on huge diffs.
 const MAX_LINES_PER_HUNK: usize = 80;
+/// Lines a walkthrough's prompt holds in all. It explains the code rather
+/// than sorting it, so hunks go in whole while they fit; this only keeps a
+/// huge diff from making a huge prompt.
+const MAX_NUMBERED_LINES: usize = 4000;
 
 impl OrganizeRequest {
     #[cfg(test)]
@@ -294,6 +300,14 @@ impl OrganizeRequest {
                                 })
                                 .collect()
                         },
+                        numbers: if generated {
+                            Vec::new()
+                        } else {
+                            hunk.lines
+                                .iter()
+                                .map(|line| line.new_no.filter(|_| line.kind != LineKind::Removed))
+                                .collect()
+                        },
                         generated,
                         plumbing: !generated && diff.is_plumbing(f, h),
                     })
@@ -307,11 +321,58 @@ impl OrganizeRequest {
 
     /// The diff as plain text, each hunk introduced by `=== <id> <path> <header>`.
     pub fn to_prompt(&self) -> String {
+        self.render(false, Some(MAX_LINES_PER_HUNK), "")
+    }
+
+    /// [`Self::to_prompt`] with each line led by its new-side number, blank
+    /// for removed lines, so an answer can point at lines. Hunks go in whole
+    /// unless the diff is over [`MAX_NUMBERED_LINES`]; then the longest are
+    /// cut short, each saying so.
+    pub fn to_numbered_prompt(&self) -> String {
+        self.render(
+            true,
+            self.cap_for(MAX_NUMBERED_LINES),
+            " not shown: the diff is too large to send whole",
+        )
+    }
+
+    /// The most lines per hunk that keeps the whole diff within `budget`,
+    /// cutting only the longest hunks; `None` when it fits as it is.
+    fn cap_for(&self, budget: usize) -> Option<usize> {
+        let mut lengths: Vec<usize> = self
+            .hunks
+            .iter()
+            .filter(|h| !h.generated)
+            .map(|h| h.lines.len())
+            .collect();
+        if lengths.iter().sum::<usize>() <= budget {
+            return None;
+        }
+        lengths.sort_unstable();
+        let mut left = budget;
+        for (i, &len) in lengths.iter().enumerate() {
+            let hunks = lengths.len() - i;
+            if len * hunks > left {
+                return Some(left / hunks);
+            }
+            left -= len;
+        }
+        None
+    }
+
+    /// The prompt, with at most `max_lines` per hunk; a hunk cut short ends
+    /// with how many lines are missing and `why`.
+    fn render(&self, numbered: bool, max_lines: Option<usize>, why: &str) -> String {
         let mut out = format!(
             "Diff under review: {}\n{} hunks follow.\n",
             self.title,
             self.hunks.len()
         );
+        let max_lines = max_lines.unwrap_or(usize::MAX);
+        if !why.is_empty() && self.hunks.iter().any(|h| h.lines.len() > max_lines) {
+            out += "The diff is too large to send whole: its longest hunks are cut short, \
+                    each saying how many lines are missing.\n";
+        }
         for hunk in &self.hunks {
             out += &format!("\n=== {} {} {}\n", hunk.id.as_str(), hunk.path, hunk.header);
             if hunk.generated {
@@ -321,12 +382,18 @@ impl OrganizeRequest {
             if hunk.plumbing {
                 out += "(plumbing: only imports, exports or the like)\n";
             }
-            for line in hunk.lines.iter().take(MAX_LINES_PER_HUNK) {
+            for (i, line) in hunk.lines.iter().take(max_lines).enumerate() {
+                if numbered {
+                    match hunk.numbers.get(i).copied().flatten() {
+                        Some(no) => out += &format!("{no:>5} "),
+                        None => out += "      ",
+                    }
+                }
                 out += line;
                 out.push('\n');
             }
-            if hunk.lines.len() > MAX_LINES_PER_HUNK {
-                out += &format!("… {} more lines\n", hunk.lines.len() - MAX_LINES_PER_HUNK);
+            if hunk.lines.len() > max_lines {
+                out += &format!("… {} more lines{why}\n", hunk.lines.len() - max_lines);
             }
         }
         out
@@ -401,6 +468,51 @@ mod tests {
         // Generated files are listed so they get placed, but without content.
         assert!(prompt.contains("Cargo.lock @@ -1 +1 @@\n(generated file, content omitted)\n"));
         assert!(!prompt.contains("+version"));
+    }
+
+    #[test]
+    fn numbered_prompt_leads_lines_with_their_new_side_number() {
+        let mut diff = diff(&[("a.rs", &["x"])]);
+        let mut removed = diff.files[0].hunks[0].lines[0].clone();
+        removed.kind = LineKind::Removed;
+        removed.new_no = None;
+        removed.content = "old".into();
+        diff.files[0].hunks[0].lines.insert(0, removed);
+        let prompt = OrganizeRequest::from_diff("", &diff).to_numbered_prompt();
+        assert!(prompt.contains("@@ -1 +1 @@\n      -old\n    1 +x\n"));
+    }
+
+    #[test]
+    fn a_walkthrough_gets_whole_hunks_until_the_diff_is_too_large() {
+        let mut diff = diff(&[("a.rs", &["x", "y"]), ("b.rs", &["z"])]);
+        let lines = |diff: &mut Diff, f: usize, n: usize| {
+            let line = diff.files[f].hunks[0].lines[0].clone();
+            diff.files[f].hunks[0].lines = vec![line; n];
+        };
+        // Far past what `to_prompt` shows of a hunk, but it all fits.
+        lines(&mut diff, 0, 1000);
+        let prompt = OrganizeRequest::from_diff("", &diff).to_numbered_prompt();
+        assert_eq!(prompt.matches(" +x\n").count(), 1000);
+        assert!(!prompt.contains("more lines"));
+
+        // Too large: only the longest hunks are cut, to what's left.
+        lines(&mut diff, 0, MAX_NUMBERED_LINES);
+        lines(&mut diff, 1, MAX_NUMBERED_LINES);
+        let prompt = OrganizeRequest::from_diff("", &diff).to_numbered_prompt();
+        let cap = (MAX_NUMBERED_LINES - 1) / 2;
+        assert_eq!(prompt.matches(" +x\n").count(), cap);
+        assert_eq!(prompt.matches(" +z\n").count(), cap);
+        assert_eq!(prompt.matches(" +y\n").count(), 1);
+        assert!(prompt.contains("The diff is too large to send whole"));
+        assert_eq!(
+            prompt
+                .matches(&format!(
+                    "… {} more lines not shown: the diff is too large to send whole\n",
+                    MAX_NUMBERED_LINES - cap
+                ))
+                .count(),
+            2
+        );
     }
 
     #[test]

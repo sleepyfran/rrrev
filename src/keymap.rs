@@ -1,6 +1,6 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::{Action, FindChar, GoTo, VerdictAction, View};
+use crate::app::{Action, FindChar, GoTo, VerdictAction, View, WalkthroughAction};
 use crate::input::InputAction;
 
 /// Turns key presses into actions, handling vim-style counts (`5j`) and
@@ -67,6 +67,7 @@ impl KeyHandler {
             (Some('g'), KeyCode::Char('y')) => Action::GoTo(GoTo::TypeDefinition),
             (Some('g'), KeyCode::Char('i')) => Action::GoTo(GoTo::Implementation),
             (Some('g'), KeyCode::Char('r')) => Action::References,
+            (Some('g'), KeyCode::Char('w')) => Action::OpenWalkthrough,
             (Some(']'), KeyCode::Char('s')) => Action::NextLayer(n),
             (Some('['), KeyCode::Char('s')) => Action::PrevLayer(n),
             (Some(']'), KeyCode::Char('c')) => Action::NextHunk(n),
@@ -159,6 +160,37 @@ pub fn verdict_action(key: KeyEvent) -> Option<VerdictAction> {
         KeyCode::Char('x') => VerdictAction::Clear,
         KeyCode::Char('Y' | 'y') => VerdictAction::CopyForAgent,
         KeyCode::Char('e') => VerdictAction::Export,
+        _ => return None,
+    })
+}
+
+/// Keys in the walkthrough: across slides sideways, through the code up
+/// and down, and through the explanation with `J` / `K`.
+pub fn walkthrough_action(key: KeyEvent) -> Option<WalkthroughAction> {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    Some(match key.code {
+        KeyCode::Char('c') if ctrl => WalkthroughAction::Close,
+        KeyCode::Char('d') if ctrl => WalkthroughAction::CodeHalfDown,
+        KeyCode::Char('u') if ctrl => WalkthroughAction::CodeHalfUp,
+        KeyCode::Char('e') if ctrl => WalkthroughAction::TextDown(3),
+        KeyCode::Char('y') if ctrl => WalkthroughAction::TextUp(3),
+        KeyCode::Esc | KeyCode::Char('q') => WalkthroughAction::Close,
+        KeyCode::Char('l' | 'n' | ' ') | KeyCode::Right | KeyCode::Tab => {
+            WalkthroughAction::Next(1)
+        }
+        KeyCode::Char('h' | 'p' | 'N') | KeyCode::Left | KeyCode::BackTab | KeyCode::Backspace => {
+            WalkthroughAction::Prev(1)
+        }
+        KeyCode::Char('g') | KeyCode::Home => WalkthroughAction::First,
+        KeyCode::Char('G') | KeyCode::End => WalkthroughAction::Last,
+        KeyCode::Char('j') | KeyCode::Down => WalkthroughAction::CodeDown(1),
+        KeyCode::Char('k') | KeyCode::Up => WalkthroughAction::CodeUp(1),
+        KeyCode::PageDown => WalkthroughAction::CodeHalfDown,
+        KeyCode::PageUp => WalkthroughAction::CodeHalfUp,
+        KeyCode::Char('J') => WalkthroughAction::TextDown(1),
+        KeyCode::Char('K') => WalkthroughAction::TextUp(1),
+        KeyCode::Char('r') => WalkthroughAction::Review,
+        KeyCode::Enter => WalkthroughAction::Open,
         _ => return None,
     })
 }

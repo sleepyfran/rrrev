@@ -183,13 +183,13 @@ impl App {
     }
 
     /// The files of `layer`, or the whole diff's without one.
-    fn layer_files(&self, layer: Option<usize>) -> Range<usize> {
+    pub(super) fn layer_files(&self, layer: Option<usize>) -> Range<usize> {
         layer.map_or(0..self.diff.files.len(), |l| {
             self.diff.sections[l].files.clone()
         })
     }
 
-    fn hunk_ids(&self, files: Range<usize>) -> HashSet<&HunkId> {
+    pub(super) fn hunk_ids(&self, files: Range<usize>) -> HashSet<&HunkId> {
         self.diff.files[files]
             .iter()
             .flat_map(|f| &f.hunks)
@@ -199,7 +199,7 @@ impl App {
 
     /// The layer to organize or clear: the one under the cursor in a stack,
     /// none in a plain diff. `Err` when in a stack but on no layer.
-    fn target_layer(&mut self) -> Result<Option<usize>, ()> {
+    pub(super) fn target_layer(&mut self) -> Result<Option<usize>, ()> {
         if !self.is_stack() {
             return Ok(None);
         }
@@ -297,19 +297,7 @@ impl App {
             self.message = Some("Nothing to organize".to_string());
             return;
         }
-        let title = match layer {
-            Some(l) => {
-                let (section, count) = (&self.diff.sections[l], self.diff.sections.len());
-                format!(
-                    "{} · layer {}/{count}: {} ({})",
-                    self.title,
-                    l + 1,
-                    section.title,
-                    section.rationale
-                )
-            }
-            None => self.title.clone(),
-        };
+        let title = self.target_title(layer);
         self.next_job += 1;
         let job = Job {
             id: self.next_job,
@@ -324,6 +312,23 @@ impl App {
         self.organizing_layer = layer;
         if let Some(l) = layer {
             self.message = Some(format!("Organizing {}…", self.diff.sections[l].title));
+        }
+    }
+
+    /// What the AI is told it's looking at: the diff, and the layer in a stack.
+    pub(super) fn target_title(&self, layer: Option<usize>) -> String {
+        match layer {
+            Some(l) => {
+                let (section, count) = (&self.diff.sections[l], self.diff.sections.len());
+                format!(
+                    "{} · layer {}/{count}: {} ({})",
+                    self.title,
+                    l + 1,
+                    section.title,
+                    section.rationale
+                )
+            }
+            None => self.title.clone(),
         }
     }
 

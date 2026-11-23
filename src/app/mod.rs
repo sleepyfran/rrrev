@@ -22,11 +22,12 @@ mod search;
 mod theme;
 mod verdict;
 mod view;
+mod walkthrough;
 
 #[cfg(test)]
 mod test_support;
 
-pub use action::{Action, Effect, GoTo, Spot, VerdictAction};
+pub use action::{Action, Effect, GoTo, Spot, VerdictAction, WalkthroughAction};
 pub use ask::{Answer, AskPanel};
 pub use column::FindChar;
 pub use comments_menu::{CommentsMenu, DismissCopied};
@@ -43,6 +44,7 @@ pub use search::find_matches;
 pub use theme::ThemePicker;
 pub use verdict::LineStats;
 pub use view::{NOTE_LABEL, Row};
+pub use walkthrough::{Deck, ShownHunk, SlideKind};
 
 use std::collections::HashMap;
 
@@ -99,8 +101,16 @@ pub struct App {
     pub organizing: Option<Job>,
     /// The stack layer that run is planning; `None` for a plain diff.
     organizing_layer: Option<usize>,
-    /// Id for the next organizer run.
+    /// Id for the next organizer or walkthrough run.
     next_job: u64,
+    /// The walkthrough run in progress, if any.
+    pub walking: Option<Job>,
+    /// The files that run is about.
+    walking_files: std::ops::Range<usize>,
+    /// The walkthrough, while it's open.
+    pub walkthrough: Option<Deck>,
+    /// The slide it was closed on, to reopen there.
+    walkthrough_slide: usize,
     /// The last `/` query, kept for `n` / `N`.
     pub search: Option<String>,
     /// Whether matches of `search` are highlighted; `Esc` turns it off.
@@ -181,6 +191,10 @@ impl App {
             organizing: None,
             organizing_layer: None,
             next_job: 0,
+            walking: None,
+            walking_files: 0..0,
+            walkthrough: None,
+            walkthrough_slide: 0,
             search: None,
             highlight_search: false,
             help_scroll: None,
@@ -254,6 +268,15 @@ impl App {
             // Answered through `answer_dismiss_copied`,
             // `answer_enable_language` or `answer_clear_ask`; nothing else
             // gets through.
+            return;
+        }
+        if self.walkthrough.is_some() {
+            // It has its own keys; only the help and closing get through.
+            match action {
+                Action::ToggleHelp => self.help_scroll = Some(0),
+                Action::Cancel | Action::Quit => self.walkthrough_action(WalkthroughAction::Close),
+                _ => {}
+            }
             return;
         }
         if self.hover.is_some() {
@@ -357,6 +380,7 @@ impl App {
             Action::CopyForAgent => self.copy_for_agent(),
             Action::ListComments => self.open_comments_menu(),
             Action::ToggleVerdict => self.show_verdict = true,
+            Action::OpenWalkthrough => self.open_walkthrough(),
             Action::PickTheme => self.open_theme_picker(),
             Action::Select => match self.current_row() {
                 Some(Row::File { .. } | Row::Hunk { .. } | Row::Plumbing { .. }) => {

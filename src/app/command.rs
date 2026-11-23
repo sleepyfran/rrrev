@@ -43,6 +43,7 @@ impl App {
             }
             "export" => self.export_command(&args),
             "organize" => self.organize_command(&args),
+            "walkthrough" | "walk" => self.walkthrough_command(&args),
             "ask" => self.ask_command(&args),
             "comments" => self.open_comments_menu(),
             "verdict" => self.show_verdict = true,

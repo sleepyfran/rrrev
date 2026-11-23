@@ -177,6 +177,8 @@ pub struct Animator {
     busy: bool,
     popups: [PopupState; Popup::COUNT],
     page: Option<(View, usize)>,
+    /// The walkthrough's slide, while it's open.
+    walkthrough: Option<usize>,
     /// Columns the diff is pushed aside by, while a new page slides in.
     slide: Option<Tween>,
     /// The page and row count the scroll belongs to; a scroll on another
@@ -201,6 +203,7 @@ impl Animator {
             busy: false,
             popups: Default::default(),
             page: None,
+            walkthrough: None,
             slide: None,
             scroll_rows: None,
             scroll_target: 0,
@@ -230,6 +233,19 @@ impl Animator {
         self.glint_colors = (app.palette.green, app.palette.on_accent);
         if !self.enabled {
             return;
+        }
+
+        // A new slide comes in like a new page.
+        let slide = app.walkthrough.as_ref().map(|deck| deck.slide);
+        if let (Some(old), Some(new)) = (std::mem::replace(&mut self.walkthrough, slide), slide)
+            && old != new
+        {
+            let from = if new < old {
+                -SLIDE_COLUMNS
+            } else {
+                SLIDE_COLUMNS
+            };
+            self.slide = Some(Tween::new(from, 0.0, SLIDE, self.now));
         }
 
         let page = (app.view, app.page);

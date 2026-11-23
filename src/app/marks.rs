@@ -122,7 +122,7 @@ impl App {
     /// Marks the rest of a partly reviewed set; only a fully reviewed set
     /// gets unmarked. Goes by the marks alone, so plumbing that counts as
     /// done still gets marked with the rest.
-    fn toggle_hunks_reviewed(&mut self, hunks: &[(usize, usize)]) {
+    pub(super) fn toggle_hunks_reviewed(&mut self, hunks: &[(usize, usize)]) {
         let reviewed = !hunks.iter().all(|&(f, h)| self.is_reviewed(f, h));
         self.set_hunks_reviewed(hunks, reviewed);
     }

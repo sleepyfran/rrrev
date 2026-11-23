@@ -107,6 +107,8 @@ pub enum Action {
     ListComments,
     /// `S`: the summary of the review, and its verdict.
     ToggleVerdict,
+    /// `gw`: the saved walkthrough.
+    OpenWalkthrough,
     /// `T`: the theme picker.
     PickTheme,
     Select,
@@ -156,6 +158,28 @@ pub enum VerdictAction {
     Close,
 }
 
+/// Keys in the walkthrough.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WalkthroughAction {
+    Next(usize),
+    Prev(usize),
+    First,
+    Last,
+    /// Scroll the code.
+    CodeDown(usize),
+    CodeUp(usize),
+    CodeHalfDown,
+    CodeHalfUp,
+    /// Scroll the explanation.
+    TextDown(usize),
+    TextUp(usize),
+    /// Mark the slide's hunks reviewed.
+    Review,
+    /// Close it on the code at the top of the slide, in the diff.
+    Open,
+    Close,
+}
+
 /// Work `update` can't do itself, for the main loop to carry out.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
@@ -175,6 +199,15 @@ pub enum Effect {
     },
     /// Stop that job; its result, if one still arrives, is ignored.
     CancelOrganize {
+        job: u64,
+    },
+    /// Write a walkthrough in the background, then call `finish_walkthrough`
+    /// with the same `job`.
+    WalkThrough {
+        job: u64,
+        request: OrganizeRequest,
+    },
+    CancelWalkThrough {
         job: u64,
     },
     /// Answer a question in the background, then call `finish_ask` with the

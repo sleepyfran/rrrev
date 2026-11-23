@@ -8,6 +8,9 @@ use ratatui::{
 
 use std::ops::Range;
 
+mod walkthrough;
+use walkthrough::render_walkthrough;
+
 use crate::anim::{Animator, Popup};
 use crate::app::{
     Answer, App, CommentTarget, FileView, Focus, LineStats, Mark, Mode, Progress, Row, View,
@@ -46,71 +49,14 @@ pub fn render(
     .areas(frame.area());
 
     app.set_compact(frame.area().width < COMPACT_BELOW);
-    let body = if app.show_sidebar && !app.compact {
-        let width = (main.width * 3 / 10).clamp(24, 48).min(main.width / 2);
-        let [sidebar, body] =
-            Layout::horizontal([Constraint::Length(width), Constraint::Min(0)]).areas(main);
-        let (_, entries) = render_sidebar(frame, sidebar, app, false);
-        anim.glint_sidebar(frame.buffer_mut(), app, &entries);
-        body
-    } else {
-        main
-    };
-
-    // The ask panel docks to the right of a wide diff, or under a narrow one.
-    let (body, ask_area) = match app.ask.open {
-        true if body.width >= ASK_DOCK_RIGHT_FROM => {
-            let width = (body.width * 2 / 5).clamp(36, 72);
-            let [body, ask] =
-                Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(body);
-            (body, Some((ask, true)))
-        }
-        true => {
-            let [body, ask] =
-                Layout::vertical([Constraint::Percentage(55), Constraint::Min(0)]).areas(body);
-            (body, Some((ask, false)))
-        }
-        false => (body, None),
-    };
-
-    // The comment box covers the bottom of the diff, so rows scroll above it
-    // and the commented line stays in sight.
-    let comment_box = comment_box_area(app, body);
-    let diff_area = Rect {
-        height: body.height - comment_box.map_or(0, |b| b.height),
-        ..body
-    };
-    // Where the cursor is in its file, above the rows.
-    let [crumbs, rows_area] =
-        Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(diff_area);
-    app.set_viewport(rows_area.width as usize, rows_area.height as usize);
     render_title(frame, title, app);
     anim.glint_title(frame.buffer_mut(), title);
-    if let Some(view) = &app.file_view {
-        render_file_crumbs(frame, crumbs, app, view);
-        render_file_view(frame, rows_area, app, view, highlighter);
-    } else {
-        render_breadcrumbs(frame, crumbs, app);
-        let scroll = anim.scroll(app);
-        let rows = render_body(frame, rows_area, app, highlighter, scroll);
-        let shown: Vec<Row> = rows.iter().map(|(row, _)| *row).collect();
+    if app.walkthrough.is_some() {
+        let shown = render_walkthrough(frame, main, app, highlighter);
         app.mark_seen(&shown);
-        anim.glint_rows(frame.buffer_mut(), &rows);
-        anim.slide(frame.buffer_mut(), rows_area);
-    }
-    if let Some((area, docked_right)) = ask_area {
-        render_ask_panel(frame, area, app, highlighter, docked_right);
-    }
-    let cursor = comment_box.map(|area| render_comment_box(frame, area, app));
-    if let Some(unroll) = anim.popup(frame.buffer_mut(), Popup::Comment, comment_box, None)
-        && let Some((x, y)) = cursor
-    {
-        // Keep the cursor on its row while the box rises, or on the box's top.
-        let y = unroll
-            .row(y)
-            .or(unroll.row(comment_box.map_or(y, |b| b.y)))
-            .unwrap_or(y);
-        frame.set_cursor_position((x, y));
+        anim.slide(frame.buffer_mut(), main);
+    } else {
+        render_review(frame, main, app, highlighter, anim);
     }
     render_status(frame, status, app, pending);
 
@@ -181,6 +127,81 @@ pub fn render(
         None
     };
     anim.popup(frame.buffer_mut(), Popup::Confirm, confirm, Some(&under));
+}
+
+/// The sidebar, the diff (or the file open over it), the ask panel and the
+/// comment box.
+fn render_review(
+    frame: &mut Frame,
+    main: Rect,
+    app: &mut App,
+    highlighter: &mut Highlighter,
+    anim: &mut Animator,
+) {
+    let body = if app.show_sidebar && !app.compact {
+        let width = (main.width * 3 / 10).clamp(24, 48).min(main.width / 2);
+        let [sidebar, body] =
+            Layout::horizontal([Constraint::Length(width), Constraint::Min(0)]).areas(main);
+        let (_, entries) = render_sidebar(frame, sidebar, app, false);
+        anim.glint_sidebar(frame.buffer_mut(), app, &entries);
+        body
+    } else {
+        main
+    };
+
+    // The ask panel docks to the right of a wide diff, or under a narrow one.
+    let (body, ask_area) = match app.ask.open {
+        true if body.width >= ASK_DOCK_RIGHT_FROM => {
+            let width = (body.width * 2 / 5).clamp(36, 72);
+            let [body, ask] =
+                Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(body);
+            (body, Some((ask, true)))
+        }
+        true => {
+            let [body, ask] =
+                Layout::vertical([Constraint::Percentage(55), Constraint::Min(0)]).areas(body);
+            (body, Some((ask, false)))
+        }
+        false => (body, None),
+    };
+
+    // The comment box covers the bottom of the diff, so rows scroll above it
+    // and the commented line stays in sight.
+    let comment_box = comment_box_area(app, body);
+    let diff_area = Rect {
+        height: body.height - comment_box.map_or(0, |b| b.height),
+        ..body
+    };
+    // Where the cursor is in its file, above the rows.
+    let [crumbs, rows_area] =
+        Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(diff_area);
+    app.set_viewport(rows_area.width as usize, rows_area.height as usize);
+    if let Some(view) = &app.file_view {
+        render_file_crumbs(frame, crumbs, app, view);
+        render_file_view(frame, rows_area, app, view, highlighter);
+    } else {
+        render_breadcrumbs(frame, crumbs, app);
+        let scroll = anim.scroll(app);
+        let rows = render_body(frame, rows_area, app, highlighter, scroll);
+        let shown: Vec<Row> = rows.iter().map(|(row, _)| *row).collect();
+        app.mark_seen(&shown);
+        anim.glint_rows(frame.buffer_mut(), &rows);
+        anim.slide(frame.buffer_mut(), rows_area);
+    }
+    if let Some((area, docked_right)) = ask_area {
+        render_ask_panel(frame, area, app, highlighter, docked_right);
+    }
+    let cursor = comment_box.map(|area| render_comment_box(frame, area, app));
+    if let Some(unroll) = anim.popup(frame.buffer_mut(), Popup::Comment, comment_box, None)
+        && let Some((x, y)) = cursor
+    {
+        // Keep the cursor on its row while the box rises, or on the box's top.
+        let y = unroll
+            .row(y)
+            .or(unroll.row(comment_box.map_or(y, |b| b.y)))
+            .unwrap_or(y);
+        frame.set_cursor_position((x, y));
+    }
 }
 
 /// The list of every comment, centred over the screen: where each is, and
@@ -755,6 +776,14 @@ fn render_title(frame: &mut Frame, area: Rect, app: &App) {
         ),
         None => String::new(),
     };
+    let walking = match app.walking {
+        Some(job) => format!(
+            "{} writing the walkthrough… {}s · ",
+            spinner(job.started),
+            job.started.elapsed().as_secs()
+        ),
+        None => String::new(),
+    };
     // The panel shows its own spinner; this one is for when it's hidden.
     let asking = match app.ask.running.filter(|_| !app.ask.open) {
         Some(job) => format!("{} asking… · ", spinner(job.started)),
@@ -762,7 +791,7 @@ fn render_title(frame: &mut Frame, area: Rect, app: &App) {
     };
     let seen = format!("{}% seen · ", app.line_stats().seen_percent());
     let right = format!(
-        "{organizing}{asking}{comments}{seen}{}/{} hunks reviewed{done} ",
+        "{organizing}{walking}{asking}{comments}{seen}{}/{} hunks reviewed{done} ",
         progress.reviewed, progress.total
     );
     // In a narrow pane the status on the right matters more than the title.
@@ -1445,8 +1474,18 @@ fn hanging(
     hang: Vec<Span<'static>>,
     text: Vec<Span<'static>>,
 ) -> Vec<Line<'static>> {
-    let column = gutter.iter().map(|s| s.content.chars().count()).sum();
-    wrap_spans(text, app.text_room(column))
+    hanging_in(app.viewport_width, gutter, hang, text)
+}
+
+/// [`hanging`] in a pane `width` columns wide.
+fn hanging_in(
+    width: usize,
+    gutter: Vec<Span<'static>>,
+    hang: Vec<Span<'static>>,
+    text: Vec<Span<'static>>,
+) -> Vec<Line<'static>> {
+    let column: usize = gutter.iter().map(|s| s.content.chars().count()).sum();
+    wrap_spans(text, width.saturating_sub(column))
         .into_iter()
         .enumerate()
         .map(|(i, chunk)| {
@@ -1527,6 +1566,19 @@ fn diff_line(
     line: usize,
     at: Option<Range<usize>>,
 ) -> Vec<Line<'static>> {
+    diff_line_in(app, highlighter, file, hunk, line, at, app.viewport_width)
+}
+
+/// [`diff_line`] wrapped to a pane `width` columns wide.
+fn diff_line_in(
+    app: &App,
+    highlighter: &mut Highlighter,
+    file: usize,
+    hunk: usize,
+    line: usize,
+    at: Option<Range<usize>>,
+    width: usize,
+) -> Vec<Line<'static>> {
     let p = app.palette;
     let l = app.line(file, hunk, line);
     let w = app.gutter_width;
@@ -1592,7 +1644,7 @@ fn diff_line(
         .into_iter()
         .map(|(style, text)| (style, text.replace('\t', "    ")))
         .collect();
-    hanging(app, gutter, hang, highlighted(segments, app))
+    hanging_in(width, gutter, hang, highlighted(segments, app))
 }
 
 /// Splits `segments` where `ranges` (byte offsets into their joined text)
@@ -2360,6 +2412,7 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
         (Mode::Ask { .. }, _) => " ASK ",
         (Mode::VerdictMessage { .. }, _) => " VERDICT ",
         _ if app.show_verdict => " VERDICT ",
+        _ if app.walkthrough.is_some() => " WALKTHROUGH ",
         _ if app.language_prompt.is_some() => " LANGUAGE ",
         _ if app.dismiss_prompt.is_some() => " COPIED ",
         _ if app.ask.confirm_clear => " CLEAR ",
@@ -2375,7 +2428,10 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
         mode
     };
     let mut parts = vec![mode.to_string()];
-    if let Some(view) = &app.file_view {
+    if let Some(deck) = &app.walkthrough {
+        parts.push(format!("slide {}/{}", deck.slide + 1, deck.slides.len()));
+        parts.push(deck.current().title.trim().to_string());
+    } else if let Some(view) = &app.file_view {
         parts.push(format!("{}:{}", view.path, view.line_no()));
         parts.push(format!("line {} of {}", view.line_no(), view.lines.len()));
     } else if let Some(row) = app.current_row() {
@@ -2447,6 +2503,9 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, pending: &str) {
                     || app.ask.confirm_clear =>
                 {
                     " "
+                }
+                _ if app.walkthrough.is_some() => {
+                    " ? help  l next  h previous  r reviewed  Enter go there  q close "
                 }
                 _ if app.file_view.is_some() => {
                     " ? help  ]c [c changes  / search  q back to the diff "

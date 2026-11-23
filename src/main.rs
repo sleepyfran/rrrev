@@ -18,6 +18,7 @@ mod review;
 mod text;
 mod theme;
 mod ui;
+mod walkthrough;
 
 use std::collections::HashMap;
 use std::fs;
@@ -52,6 +53,7 @@ use keymap::KeyHandler;
 use organizer::claude::ClaudeCli;
 use organizer::{Cancel, Organizer, Plan};
 use review::ReviewState;
+use walkthrough::{Narrator, Walkthrough};
 
 /// Keyboard-driven code review in the terminal.
 #[derive(Parser)]
@@ -188,6 +190,7 @@ fn main() -> Result<()> {
     app.grammars.status = Some(languages::manage::status);
     let claude = Arc::new(ClaudeCli::from_env());
     let organizer: Arc<dyn Organizer> = claude.clone();
+    let narrator: Arc<dyn Narrator> = claude.clone();
     let assistant: Arc<dyn Assistant> = claude;
     app.set_appearance(Appearance::detect());
     app.set_theme(config::theme());
@@ -201,6 +204,7 @@ fn main() -> Result<()> {
         &state_file,
         Ai {
             organizer,
+            narrator,
             assistant,
         },
         highlighter,
@@ -216,14 +220,17 @@ const TICK: Duration = Duration::from_millis(100);
 
 /// What a background organizer run sends back: its job id and its answer.
 type PlanResult = (u64, Result<Plan>);
+/// What a background walkthrough run sends back: its job id and its answer.
+type WalkthroughResult = (u64, Result<Walkthrough>);
 /// What a background question sends back: its job id and the answer.
 type AskResult = (u64, Result<String>);
 /// What a grammar build sends back: the language, and whether it worked.
 type BuildResult = (String, Result<()>);
 
-/// The AI behind `:organize` and the ask panel.
+/// The AI behind `:organize`, `:walkthrough` and the ask panel.
 struct Ai {
     organizer: Arc<dyn Organizer>,
+    narrator: Arc<dyn Narrator>,
     assistant: Arc<dyn Assistant>,
 }
 
@@ -252,9 +259,12 @@ fn run(
     let mut keys = KeyHandler::default();
     let (plans_tx, plans): (Sender<PlanResult>, Receiver<PlanResult>) = mpsc::channel();
     let (answers_tx, answers): (Sender<AskResult>, Receiver<AskResult>) = mpsc::channel();
+    let (walks_tx, walks): (Sender<WalkthroughResult>, Receiver<WalkthroughResult>) =
+        mpsc::channel();
     let (builds_tx, builds): (Sender<BuildResult>, Receiver<BuildResult>) = mpsc::channel();
     let mut running: Option<Running> = None;
     let mut asking: Option<Running> = None;
+    let mut walking: Option<Running> = None;
     let mut anim = Animator::from_env();
     let appearance = appearance::Watch::start();
     // The question out to a language server, if any: a new one calls off
@@ -273,6 +283,12 @@ fn run(
                 running = None;
             }
             app.finish_organize(job, result);
+        }
+        while let Ok((job, result)) = walks.try_recv() {
+            if walking.as_ref().is_some_and(|r| r.job == job) {
+                walking = None;
+            }
+            app.finish_walkthrough(job, result);
         }
         for reply in lsp.poll() {
             let Some(asked) = asked.take_if(|a| (a.server, a.id) == (reply.server, reply.id))
@@ -348,6 +364,13 @@ fn run(
                 } else if let Some(action) = keys.handle(key) {
                     app.update(action);
                 }
+            } else if app.walkthrough.is_some() && app.help_scroll.is_none() {
+                // So does the walkthrough.
+                if let Some(action) = keymap::walkthrough_action(key) {
+                    app.walkthrough_action(action);
+                } else if let Some(action) = keys.handle(key) {
+                    app.update(action);
+                }
             } else if let Some(action) = keys.handle(key) {
                 app.update(action);
             }
@@ -389,6 +412,27 @@ fn run(
                 // The thread kills the process and exits shortly; the app
                 // ignores whatever it sends back.
                 if let Some(run) = running.take_if(|r| r.job == job) {
+                    run.cancel.cancel();
+                }
+            }
+            Some(Effect::WalkThrough { job, request }) => {
+                let (narrator, done, cancel) = (
+                    Arc::clone(&ai.narrator),
+                    walks_tx.clone(),
+                    Cancel::default(),
+                );
+                let token = cancel.clone();
+                let thread = thread::spawn(move || {
+                    let _ = done.send((job, narrator.walk_through(&request, &token)));
+                });
+                walking = Some(Running {
+                    job,
+                    cancel,
+                    thread,
+                });
+            }
+            Some(Effect::CancelWalkThrough { job }) => {
+                if let Some(run) = walking.take_if(|r| r.job == job) {
                     run.cancel.cancel();
                 }
             }
@@ -464,7 +508,7 @@ fn run(
         }
     }
     // Don't leave an AI process running after we're gone.
-    for run in [running, asking].into_iter().flatten() {
+    for run in [running, asking, walking].into_iter().flatten() {
         run.stop();
     }
     Ok(())

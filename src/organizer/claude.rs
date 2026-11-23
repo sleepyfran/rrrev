@@ -5,9 +5,11 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 
 use super::{Cancel, OrganizeRequest, Organizer, Plan};
 use crate::ask::{AskRequest, Assistant};
+use crate::walkthrough::{Narrator, Walkthrough};
 
 const SYSTEM_PROMPT: &str = "\
 You plan code reviews. You get a diff split into hunks, each introduced by a \
@@ -29,6 +31,41 @@ new-side line number it is about, and says in one or two sentences what to \
 check. Most hunks need no note; a small diff may need none at all.";
 
 const SCHEMA: &str = r#"{"type":"object","properties":{"groups":{"type":"array","items":{"type":"object","properties":{"title":{"type":"string"},"rationale":{"type":"string"},"hunks":{"type":"array","items":{"type":"string"}}},"required":["title","rationale","hunks"]}},"notes":{"type":"array","items":{"type":"object","properties":{"hunk":{"type":"string"},"line":{"type":"integer"},"text":{"type":"string"}},"required":["hunk","text"]}}},"required":["groups"]}"#;
+
+const WALKTHROUGH_SYSTEM_PROMPT: &str = "\
+You walk a reviewer through a code change, the way the author would present \
+it to a colleague on slides. You get a diff split into hunks, each introduced \
+by a line `=== <id> <path> <hunk header>`, and each line led by its new-side \
+line number (blank for removed lines). You can read any file in the \
+repository with your tools: look things up (definitions, callers, tests) \
+rather than guess.\n\n\
+First sort every hunk into important or plumbing. Plumbing is what a \
+reviewer can take on trust: imports and exports, renames carried through \
+call sites, formatting, mechanical wiring, boilerplate a new signature \
+forces, version bumps, lockfiles and generated files. Hunks marked as \
+plumbing in the diff usually are. List the ids of plumbing hunks in \
+`plumbing`; they stay out of the slides.\n\n\
+Then write slides over the important hunks, in the order that makes the \
+change easiest to follow: what the rest depends on first (data types, \
+interfaces, schemas, configuration), then the core logic, then where it is \
+used, then tests. Each slide is one idea. Its `title` is a few words. Its \
+`body` is Markdown for a narrow terminal pane: what the code on the slide \
+does, why, how it connects to the slides before it, and anything to check \
+closely (a subtle behaviour change, a risk, an edge case). Keep it to a \
+short paragraph or two, a list where it helps; use `inline code` for names; \
+no headings, no tables, and no code blocks repeating the code, which is \
+shown next to the text. Its `code` lists what the slide is about, in reading \
+order: a hunk id, and optionally `from` and `to`, new-side line numbers, to \
+show only part of a long hunk. A hunk may be split across slides with line \
+ranges, or appear on more than one. Every important hunk belongs on at least \
+one slide. A hunk cut short because the diff is too large says so: you may \
+read the rest of the file with your tools, but its removed lines are gone, \
+so say on the slide when part of a hunk went unseen rather than guess at \
+it. Copy hunk ids exactly. Aim for 3 to 12 slides, fewer for a small \
+change. Last, `summary`: two to four sentences of Markdown on what the \
+change does as a whole and how the walkthrough goes about it.";
+
+const WALKTHROUGH_SCHEMA: &str = r#"{"type":"object","properties":{"summary":{"type":"string"},"plumbing":{"type":"array","items":{"type":"string"}},"slides":{"type":"array","items":{"type":"object","properties":{"title":{"type":"string"},"body":{"type":"string"},"code":{"type":"array","items":{"type":"object","properties":{"hunk":{"type":"string"},"from":{"type":"integer"},"to":{"type":"integer"}},"required":["hunk"]}}},"required":["title","body","code"]}}},"required":["summary","plumbing","slides"]}"#;
 
 const ASK_SYSTEM_PROMPT: &str = "\
 You help someone review a code change in their terminal. They point at some \
@@ -69,6 +106,24 @@ impl Organizer for ClaudeCli {
         ];
         let (stdout, outcome) = self.run(&args, request.to_prompt(), cancel)?;
         let parsed = parse_response(&stdout);
+        self.finish(outcome, &stdout, parsed)
+    }
+}
+
+impl Narrator for ClaudeCli {
+    /// Read-only tools, like the ask panel, so the explanations can draw on
+    /// the code around the diff.
+    fn walk_through(&self, request: &OrganizeRequest, cancel: &Cancel) -> Result<Walkthrough> {
+        let args = [
+            "--tools",
+            "Read,Grep,Glob",
+            "--system-prompt",
+            WALKTHROUGH_SYSTEM_PROMPT,
+            "--json-schema",
+            WALKTHROUGH_SCHEMA,
+        ];
+        let (stdout, outcome) = self.run(&args, request.to_numbered_prompt(), cancel)?;
+        let parsed = parse_structured(&stdout, "a walkthrough");
         self.finish(outcome, &stdout, parsed)
     }
 }
@@ -200,16 +255,22 @@ fn parse_text(stdout: &str) -> Result<String> {
     }
 }
 
-/// Reads the `--output-format json` envelope.
+/// Reads a plan out of the `--output-format json` envelope.
 fn parse_response(stdout: &str) -> Result<Plan> {
+    parse_structured(stdout, "a plan")
+}
+
+/// Reads the `--json-schema` answer, `what` it should be, out of the
+/// `--output-format json` envelope.
+fn parse_structured<T: DeserializeOwned>(stdout: &str, what: &str) -> Result<T> {
     #[derive(Deserialize)]
-    struct Envelope {
+    struct Envelope<T> {
         #[serde(default)]
         is_error: bool,
         result: Option<String>,
-        structured_output: Option<Plan>,
+        structured_output: Option<T>,
     }
-    let envelope: Envelope =
+    let envelope: Envelope<T> =
         serde_json::from_str(stdout.trim()).context("unexpected output from claude")?;
     if envelope.is_error {
         bail!(
@@ -220,10 +281,12 @@ fn parse_response(stdout: &str) -> Result<Plan> {
         );
     }
     match (envelope.structured_output, envelope.result) {
-        (Some(plan), _) => Ok(plan),
+        (Some(answer), _) => Ok(answer),
         // Older CLIs return the JSON as text only.
-        (None, Some(text)) => serde_json::from_str(&text).context("claude did not return a plan"),
-        (None, None) => bail!("claude did not return a plan"),
+        (None, Some(text)) => {
+            serde_json::from_str(&text).with_context(|| format!("claude did not return {what}"))
+        }
+        (None, None) => bail!("claude did not return {what}"),
     }
 }
 
@@ -275,6 +338,20 @@ mod tests {
                 .unwrap()
                 .notes
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn reads_walkthroughs() {
+        let stdout = r#"{"is_error":false,"structured_output":{"summary":"Adds X.","plumbing":["p"],"slides":[{"title":"Types","body":"The `X` type.","code":[{"hunk":"abc","from":3,"to":9},{"hunk":"def"}]}]}}"#;
+        let walkthrough: Walkthrough = parse_structured(stdout, "a walkthrough").unwrap();
+        assert_eq!(walkthrough.slides[0].code[0].from, Some(3));
+        assert_eq!(walkthrough.slides[0].code[1].to, None);
+        assert_eq!(walkthrough.plumbing[0].as_str(), "p");
+        let error = parse_structured::<Walkthrough>(r#"{"result":null}"#, "a walkthrough");
+        assert_eq!(
+            error.unwrap_err().to_string(),
+            "claude did not return a walkthrough"
         );
     }
 

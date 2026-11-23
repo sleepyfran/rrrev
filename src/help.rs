@@ -145,6 +145,29 @@ pub const SECTIONS: &[Section] = &[
         ],
     },
     Section {
+        title: "Walkthrough",
+        entries: &[
+            (
+                ":walkthrough",
+                "Claude walks you through the change as slides: what it does on the left, its code on the right, in the order that's easiest to follow, plumbing left out. It reads the repository, so it takes a while; in a stack, the layer under the cursor",
+            ),
+            ("gw", "open the walkthrough again, on the slide you left"),
+            ("h / l   ← / →", "previous / next slide (also p / n, Space)"),
+            ("g / G", "first / last slide"),
+            ("j / k   C-d / C-u", "scroll the code"),
+            ("J / K   C-e / C-y", "scroll the explanation"),
+            (
+                "r",
+                "mark the slide's hunks reviewed; on the last slide, the plumbing too",
+            ),
+            (
+                "Enter",
+                "close it on the code at the top of the slide, in the diff, to read around it, comment or ask",
+            ),
+            ("q / Esc", "close it"),
+        ],
+    },
+    Section {
         title: "Wrapping up",
         entries: &[
             ("S   :verdict", "what you went through, and your verdict"),
@@ -219,6 +242,14 @@ pub const SECTIONS: &[Section] = &[
                 "plan the review with AI, in the background, with notes on what to check",
             ),
             (":organize cancel", "stop a running plan"),
+            (
+                ":walkthrough [new]",
+                "the walkthrough of the change (in a stack, of the layer): the saved one, or a new one",
+            ),
+            (
+                ":walkthrough cancel / clear",
+                "stop writing it / forget the saved one",
+            ),
             (
                 ":organize clear [all]",
                 "drop the plan (in a stack, the layer's; all: every layer's)",
