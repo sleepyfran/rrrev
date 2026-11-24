@@ -109,6 +109,34 @@ impl GitSource {
         })
     }
 
+    /// The same source on a repository handle of its own, for another
+    /// thread to load from.
+    pub fn reopen(&self) -> Result<Self> {
+        let repo = Repository::discover(self.workdir()).context("not inside a git repository")?;
+        Ok(Self {
+            repo,
+            spec: self.spec.clone(),
+        })
+    }
+
+    /// The folders git keeps its own files in: this checkout's (where
+    /// `HEAD` and the index are) and, in a linked worktree, the shared one
+    /// (where the branches are). The same folder once when they're one.
+    pub fn git_dirs(&self) -> Vec<PathBuf> {
+        let mut dirs = vec![self.repo.path().to_path_buf()];
+        let common = self.repo.commondir();
+        if common != self.repo.path() {
+            dirs.push(common.to_path_buf());
+        }
+        dirs
+    }
+
+    /// Whether git ignores `path`, relative to the working folder, as it
+    /// does a build's output. A path it can't tell about isn't.
+    pub fn is_ignored(&self, path: &Path) -> bool {
+        self.repo.is_path_ignored(path).unwrap_or(false)
+    }
+
     /// The working folder, which diff paths are relative to.
     pub fn workdir(&self) -> &Path {
         self.repo.workdir().unwrap_or(self.repo.path())

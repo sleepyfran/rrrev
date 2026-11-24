@@ -19,6 +19,7 @@ mod text;
 mod theme;
 mod ui;
 mod walkthrough;
+mod watch;
 
 use std::collections::HashMap;
 use std::fs;
@@ -28,7 +29,7 @@ use std::process::{Command, ExitStatus};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
@@ -45,8 +46,8 @@ use anim::Animator;
 use app::{App, Effect};
 use appearance::Appearance;
 use ask::Assistant;
+use diff::DiffSource;
 use diff::git::{DiffSpec, GitSource};
-use diff::{DiffSource, Sources};
 use export::{CommentSink, FileSink, Format};
 use highlight::Highlighter;
 use keymap::KeyHandler;
@@ -272,6 +273,11 @@ fn run(
     // The question out to a language server, if any: a new one calls off
     // the last, so only the latest answer counts.
     let mut asked: Option<Asked> = None;
+    // Edits made elsewhere while the review is open, waiting for a moment
+    // the review can take them.
+    let diffs = watch::DiffWatch::start(source, &app.diff);
+    let mut file_watch = watch::FileWatch::default();
+    let mut waiting: Option<diff::Diff> = None;
     while !app.should_quit {
         app.offer_grammar();
         terminal
@@ -321,6 +327,19 @@ fn run(
             }
         }
         app.lsp_status = lsp.status();
+        if let Some(diff) = diffs.changed() {
+            waiting = Some(diff);
+        }
+        if app.can_reload() {
+            follow_edits(
+                app,
+                &mut waiting,
+                &mut file_watch,
+                source,
+                &mut highlighter,
+                lsp,
+            );
+        }
         while let Ok((job, result)) = answers.try_recv() {
             if asking.as_ref().is_some_and(|r| r.job == job) {
                 asking = None;
@@ -407,6 +426,7 @@ fn run(
                 } else {
                     match source.load() {
                         Ok(diff) => {
+                            // The user just made these edits, so the title bar doesn't flag them.
                             app.reload(diff, read_source(&file));
                             highlighter.forget_files();
                             lsp.changed(&path);
@@ -753,7 +773,81 @@ fn open_in_neovim(
 
 /// A file's text as the diff splits it, or `None` if it can't be read.
 fn read_source(path: &Path) -> Option<diff::Source> {
-    fs::read(path).ok().map(|bytes| Sources::lines(&bytes))
+    watch::read(path)
+}
+
+/// Takes in what changed on disk since the last look: the diff `waiting`
+/// from the watcher, and the file open in the file view if it's the
+/// working tree's. Anything that did change lights up the title bar.
+fn follow_edits(
+    app: &mut App,
+    waiting: &mut Option<diff::Diff>,
+    file_watch: &mut watch::FileWatch,
+    source: &GitSource,
+    highlighter: &mut Highlighter,
+    lsp: &mut lsp::Lsp,
+) {
+    // Whether anything changed, and the files whose text did, for the
+    // language servers.
+    let mut any = false;
+    let mut edited = Vec::new();
+    if let Some(diff) = waiting.take() {
+        let before = hunks_by_path(&app.diff);
+        let after = hunks_by_path(&diff);
+        if app.reload_diff(diff) {
+            any = true;
+            edited.extend(
+                after
+                    .into_iter()
+                    .filter(|(path, ids)| before.get(path) != Some(ids))
+                    .map(|(path, _)| path),
+            );
+        }
+    }
+    let shown = app
+        .file_view
+        .as_ref()
+        .filter(|v| v.side == diff::Side::New)
+        .map(|v| (v.path.clone(), v.lines.clone()));
+    let seen = file_watch.check(
+        source.workdir(),
+        shown.as_ref().map(|(p, l)| (p.as_str(), l)),
+        Instant::now(),
+    );
+    if let (Some(change), Some((path, _))) = (seen, shown) {
+        let text = match change {
+            watch::FileChange::Edited(text) => Some(text),
+            watch::FileChange::Gone => None,
+        };
+        if app.reload_file(text) {
+            any = true;
+            edited.push(path);
+        }
+    }
+    if !any {
+        return;
+    }
+    highlighter.forget_files();
+    edited.sort();
+    edited.dedup();
+    for path in &edited {
+        lsp.changed(path);
+    }
+    open_in_servers(lsp, app);
+    app.updated = Some(Instant::now());
+}
+
+/// Each file's hunk ids, by path.
+fn hunks_by_path(diff: &diff::Diff) -> HashMap<String, Vec<diff::HunkId>> {
+    diff.files
+        .iter()
+        .map(|f| {
+            (
+                f.path().to_string(),
+                f.hunks.iter().map(|h| h.id.clone()).collect(),
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]

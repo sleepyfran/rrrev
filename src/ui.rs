@@ -49,7 +49,7 @@ pub fn render(
     .areas(frame.area());
 
     app.set_compact(frame.area().width < COMPACT_BELOW);
-    render_title(frame, title, app);
+    render_title(frame, title, app, anim.updated(app.updated));
     anim.glint_title(frame.buffer_mut(), title);
     if app.walkthrough.is_some() {
         let shown = render_walkthrough(frame, main, app, highlighter);
@@ -759,7 +759,8 @@ fn highlighted(segments: Vec<Segment>, app: &App) -> Vec<Span<'static>> {
     spans
 }
 
-fn render_title(frame: &mut Frame, area: Rect, app: &App) {
+/// `updated` is whether the "updated" badge shows lit, while it shows.
+fn render_title(frame: &mut Frame, area: Rect, app: &App, updated: Option<bool>) {
     let p = app.palette;
     let files = app.diff.files.len();
     let left = format!(
@@ -796,28 +797,44 @@ fn render_title(frame: &mut Frame, area: Rect, app: &App) {
         None => String::new(),
     };
     let seen = format!("{}% seen · ", app.line_stats().seen_percent());
+    let badge = updated.map(|lit| {
+        let style = if lit {
+            Style::new()
+                .fg(p.on_accent)
+                .bg(p.blue)
+                .remove_modifier(Modifier::REVERSED)
+        } else {
+            Style::new()
+        };
+        Span::styled(" ↻ updated ", style.bold())
+    });
+    let badge_width = badge.as_ref().map_or(0, |b| b.content.chars().count() + 1);
     let right = format!(
         "{organizing}{walking}{asking}{comments}{seen}{}/{} hunks reviewed{done} ",
         progress.reviewed, progress.total
     );
     // In a narrow pane the status on the right matters more than the title.
-    let left = if left.chars().count() + right.chars().count() > area.width as usize {
+    let wide = right.chars().count() + badge_width;
+    let left = if left.chars().count() + wide > area.width as usize {
         " rrrev ".to_string()
     } else {
         left
     };
-    let pad = (area.width as usize).saturating_sub(left.chars().count() + right.chars().count());
+    let pad = (area.width as usize).saturating_sub(left.chars().count() + wide);
     let right_style = if progress.is_complete() {
         Style::new().fg(p.green)
     } else {
         Style::new()
     };
-    let line = Line::from(vec![
-        Span::raw(left),
-        Span::raw(" ".repeat(pad)),
-        Span::styled(right, right_style.bold()),
-    ]);
-    frame.render_widget(Paragraph::new(line).style(app.palette.bar()), area);
+    let mut spans = vec![Span::raw(left), Span::raw(" ".repeat(pad))];
+    if let Some(badge) = badge {
+        spans.extend([badge, Span::raw(" ")]);
+    }
+    spans.push(Span::styled(right, right_style.bold()));
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)).style(app.palette.bar()),
+        area,
+    );
 }
 
 /// A braille spinner frame for something running since `started`.

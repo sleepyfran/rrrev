@@ -27,6 +27,10 @@ const GLINT: Duration = Duration::from_millis(450);
 const SLIDE_COLUMNS: f32 = 8.0;
 /// Shorter scrolls snap, so stepping with `j` / `k` stays crisp.
 const MIN_SMOOTH_SCROLL: f32 = 3.0;
+/// How long the title bar says the review was updated under it.
+const UPDATED: Duration = Duration::from_millis(3000);
+/// One beat of that word's pulse: lit for the first half, plain the second.
+const PULSE: Duration = Duration::from_millis(600);
 /// Width of the band that sweeps across what was just marked reviewed.
 const GLINT_WIDTH: u16 = 6;
 
@@ -437,6 +441,17 @@ impl Animator {
     }
 
     /// Sweeps across the title bar when the last hunk gets reviewed.
+    /// Whether the title bar's "updated" shows lit, after the review was
+    /// updated at `since`; `None` once it's gone. It pulses, or with
+    /// animations off holds lit until it goes.
+    pub fn updated(&self, since: Option<Instant>) -> Option<bool> {
+        let age = self.now.saturating_duration_since(since?);
+        if age >= UPDATED {
+            return None;
+        }
+        Some(!self.enabled || age.as_millis() % PULSE.as_millis() < PULSE.as_millis() / 2)
+    }
+
     pub fn glint_title(&self, buf: &mut Buffer, area: Rect) {
         if let Some(start) = self.completed {
             sweep(
@@ -538,6 +553,25 @@ mod tests {
                     .collect()
             })
             .collect()
+    }
+
+    #[test]
+    fn updated_pulses_then_goes() {
+        let mut anim = Animator::new(true);
+        let since = Instant::now();
+        anim.now = since;
+        assert_eq!(anim.updated(Some(since)), Some(true));
+        anim.now = since + PULSE / 2;
+        assert_eq!(anim.updated(Some(since)), Some(false));
+        anim.now = since + PULSE;
+        assert_eq!(anim.updated(Some(since)), Some(true));
+        anim.now = since + UPDATED;
+        assert_eq!(anim.updated(Some(since)), None);
+        assert_eq!(anim.updated(None), None);
+
+        let mut still = Animator::new(false);
+        still.now = since + PULSE / 2;
+        assert_eq!(still.updated(Some(since)), Some(true));
     }
 
     #[test]

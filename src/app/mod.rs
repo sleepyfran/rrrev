@@ -97,6 +97,9 @@ pub struct App {
     pub message: Option<String>,
     /// What a language server is busy with, like indexing, for the status line.
     pub lsp_status: Option<String>,
+    /// When the diff or the open file last changed under the review, for
+    /// the title bar to say so for a moment.
+    pub updated: Option<std::time::Instant>,
     pub effect: Option<Effect>,
     /// The organizer run in progress, if any.
     pub organizing: Option<Job>,
@@ -192,6 +195,7 @@ impl App {
             compact: false,
             message: None,
             lsp_status: None,
+            updated: None,
             effect: None,
             organizing: None,
             organizing_layer: None,

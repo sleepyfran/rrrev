@@ -1,11 +1,12 @@
 //! Picking the diff up again after the files changed under it, as they do
-//! when Neovim edits one from the file view.
+//! when Neovim edits one from the file view, or another window does while
+//! rrrev watches.
 
 use std::collections::HashMap;
 
 use super::file_view::{FileView, marks};
-use super::{App, Row, View};
-use crate::diff::{Diff, Side, Source};
+use super::{App, Mode, Row, View};
+use crate::diff::{Diff, HunkId, Side, Source};
 
 impl App {
     /// The diff as it is now, and the text of the file the file view is on
@@ -13,27 +14,76 @@ impl App {
     /// files and hunks is rebuilt from the new one, as a fresh start would;
     /// the review itself is kept by hunk id. The file view and the diff's
     /// cursor stay where they were, as near as the new text allows.
-    pub fn reload(&mut self, diff: Diff, file: Option<Source>) {
-        if !same_hunks(&self.diff, &diff) {
-            self.replace_diff(diff);
+    /// Whether anything changed.
+    pub fn reload(&mut self, diff: Diff, file: Option<Source>) -> bool {
+        let diff_changed = self.reload_diff(diff);
+        let file_changed = self.file_view.is_some() && self.reload_file(file);
+        diff_changed || file_changed
+    }
+
+    /// The diff as it is now, if it's any different. The file view keeps
+    /// its text but has its marks redone from the new diff. Whether it was
+    /// different.
+    pub fn reload_diff(&mut self, diff: Diff) -> bool {
+        if self.diff.fingerprint() == diff.fingerprint() {
+            return false;
         }
+        self.replace_diff(diff);
+        if let Some(view) = self.file_view.take() {
+            let lines = view.lines.clone();
+            self.reopen_file_view(view, lines);
+        }
+        true
+    }
+
+    /// The text of the file the file view is on now, or `None` if it's
+    /// gone, which closes the view. Whether it changed.
+    pub fn reload_file(&mut self, file: Option<Source>) -> bool {
         let Some(view) = self.file_view.take() else {
-            return;
+            return false;
         };
         let Some(lines) = file else {
             self.message = Some(format!("{} is gone", view.path));
-            return;
+            return true;
         };
-        let file = self
-            .diff
-            .files
-            .iter()
-            .position(|f| f.new_path.as_deref() == Some(view.path.as_str()));
+        let changed = lines != view.lines;
+        self.reopen_file_view(view, lines);
+        changed
+    }
+
+    /// Whether a reload can go ahead without pulling something out from
+    /// under the user: not while they type, select, or have a pop-up,
+    /// prompt or page open over the diff, all of which a rebuild would
+    /// close or point at the wrong rows.
+    pub fn can_reload(&self) -> bool {
+        matches!(self.mode, Mode::Normal)
+            && self.help_scroll.is_none()
+            && !self.show_verdict
+            && self.walkthrough.is_none()
+            && self.theme_picker.is_none()
+            && self.comments_menu.is_none()
+            && self.dismiss_prompt.is_none()
+            && self.language_prompt.is_none()
+            && !self.ask.confirm_clear
+            && self.references.is_none()
+            && self.hover.is_none()
+    }
+
+    /// `view` again on `lines`, its marks from the diff as it is now, its
+    /// cursor and scroll kept as near as the new text allows.
+    fn reopen_file_view(&mut self, view: FileView, lines: Source) {
+        let file = self.diff.files.iter().position(|f| {
+            let path = match view.side {
+                Side::New => &f.new_path,
+                Side::Old => &f.old_path,
+            };
+            path.as_deref() == Some(view.path.as_str())
+        });
         let marks = match file {
-            Some(file) => marks(&self.diff.files[file], Side::New, lines.len()),
+            Some(file) => marks(&self.diff.files[file], view.side, lines.len()),
             None => vec![None; lines.len()],
         };
-        let mut fresh = FileView::new(view.path, Side::New, lines, file, marks);
+        let mut fresh = FileView::new(view.path, view.side, lines, file, marks);
         fresh.caret = view.caret;
         fresh.caret.line = fresh.caret.line.min(fresh.lines.len().saturating_sub(1));
         fresh.scroll = view.scroll.min(fresh.caret.line);
@@ -51,6 +101,7 @@ impl App {
         fresh.grammars = std::mem::take(&mut self.grammars);
         fresh.ask = std::mem::take(&mut self.ask);
         fresh.lsp_status = self.lsp_status.take();
+        fresh.updated = self.updated;
         fresh.show_sidebar = self.show_sidebar;
         fresh.compact = self.compact;
         fresh.focus = self.focus;
@@ -64,7 +115,8 @@ impl App {
         fresh.walking_files = self.walking_files.clone();
         fresh.walkthrough_slide = self.walkthrough_slide;
 
-        // Folded files stay folded, by path.
+        // Folded files stay folded, by path, and folded or widened hunks
+        // stay so, by id.
         let folded: HashMap<&str, bool> = self
             .diff
             .files
@@ -72,11 +124,29 @@ impl App {
             .zip(&self.collapsed)
             .map(|(f, &c)| (f.path(), c))
             .collect();
+        let mut hunks: HashMap<&HunkId, (usize, usize)> = HashMap::new();
+        for (i, f) in self.diff.files.iter().enumerate() {
+            for (j, h) in f.hunks.iter().enumerate() {
+                hunks.insert(&h.id, (i, j));
+            }
+        }
         for (i, f) in fresh.diff.files.iter().enumerate() {
             if let Some(&c) = folded.get(f.path()) {
                 fresh.collapsed[i] = c;
             }
+            for (j, h) in f.hunks.iter().enumerate() {
+                let Some(&(oi, oj)) = hunks.get(&h.id) else {
+                    continue;
+                };
+                if let Some(&fold) = self.hunk_folds.get(oi).and_then(|f| f.get(oj)) {
+                    fresh.hunk_folds[i][j] = fold;
+                }
+                if let Some(&e) = self.expanded.get(&(oi, oj)) {
+                    fresh.expanded.insert((i, j), e);
+                }
+            }
         }
+        fresh.rebuild_rows();
 
         let view_works = match self.view {
             View::Files => true,
@@ -133,19 +203,6 @@ impl App {
         fresh.message = None;
         *self = fresh;
     }
-}
-
-/// Whether two diffs have the same files with the same hunks, which means
-/// nothing the review hangs on moved.
-fn same_hunks(a: &Diff, b: &Diff) -> bool {
-    a.sections.len() == b.sections.len()
-        && a.files.len() == b.files.len()
-        && a.files.iter().zip(&b.files).all(|(x, y)| {
-            x.old_path == y.old_path
-                && x.new_path == y.new_path
-                && x.hunks.len() == y.hunks.len()
-                && x.hunks.iter().zip(&y.hunks).all(|(h, k)| h.id == k.id)
-        })
 }
 
 #[cfg(test)]
@@ -221,6 +278,64 @@ mod tests {
         assert_eq!(app.cursor, 4);
         let view = app.file_view.as_ref().unwrap();
         assert_eq!((view.lines.len(), view.line_no()), (5, 5));
+    }
+
+    #[test]
+    fn an_unchanged_diff_is_no_news() {
+        let mut app = app_in_file_view();
+        assert!(!app.reload_diff(before()));
+        assert!(!app.reload_file(Some(text(30))));
+        assert!(app.reload_file(Some(text(31))));
+    }
+
+    #[test]
+    fn folded_hunks_stay_folded_by_id() {
+        let mut app = app_in_file_view();
+        app.file_view = None;
+        app.hunk_folds[0][1] = true;
+        app.expanded.insert((0, 1), Default::default());
+        let after = Diff::new(vec![
+            file_at("a.rs", &[(2, "x"), (5, "edited"), (10, "y")]),
+            file_at("b.rs", &[(1, "z")]),
+        ]);
+        assert!(app.reload_diff(after));
+        assert_eq!(app.hunk_folds[0], [false, false, true]);
+        assert!(app.expanded.contains_key(&(0, 2)));
+    }
+
+    #[test]
+    fn the_old_side_keeps_its_text_when_the_diff_changes() {
+        let mut app = app_in_file_view();
+        let old = text(12);
+        let view = FileView::new(
+            "a.rs".into(),
+            Side::Old,
+            old.clone(),
+            Some(0),
+            vec![None; 12],
+        );
+        app.file_view = Some(view);
+        let after = Diff::new(vec![
+            file_at("b.rs", &[(1, "z")]),
+            file_at("a.rs", &[(2, "x")]),
+        ]);
+        assert!(app.reload_diff(after));
+        let view = app.file_view.as_ref().unwrap();
+        assert_eq!((view.side, view.file), (Side::Old, Some(1)));
+        assert_eq!(view.lines, old);
+    }
+
+    #[test]
+    fn waits_while_the_user_types_or_has_a_pop_up_open() {
+        let mut app = app_in_file_view();
+        assert!(app.can_reload());
+        app.help_scroll = Some(0);
+        assert!(!app.can_reload());
+        app.help_scroll = None;
+        app.mode = Mode::Search {
+            input: Default::default(),
+        };
+        assert!(!app.can_reload());
     }
 
     #[test]

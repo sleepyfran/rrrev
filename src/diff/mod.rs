@@ -111,6 +111,31 @@ impl Diff {
         }
     }
 
+    /// A hash of everything the diff shows: its sections, files, hunks and
+    /// lines, numbers included. Two diffs with the same one look the same,
+    /// so a reload that gets it back has nothing to do. The files' full
+    /// text is left out, as hashing it would be slow on a big diff, and an
+    /// edit to it nearly always moves or changes a hunk anyway.
+    pub fn fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for s in &self.sections {
+            (&s.title, &s.rationale, s.files.start, s.files.end).hash(&mut h);
+        }
+        for f in &self.files {
+            (&f.old_path, &f.new_path, f.status, f.is_binary).hash(&mut h);
+            for hunk in &f.hunks {
+                hunk.header.hash(&mut h);
+                for l in &hunk.lines {
+                    (l.kind, l.old_no, l.new_no, &l.content).hash(&mut h);
+                }
+            }
+            // So a hunk can't pass for the start of the next file's.
+            u8::MAX.hash(&mut h);
+        }
+        h.finish()
+    }
+
     /// The same diff, with the files' full text.
     pub fn with_sources(self, sources: Vec<Sources>) -> Self {
         let outlines = sources.iter().map(|_| Default::default()).collect();
@@ -377,7 +402,7 @@ fn content_hash(path: &str, hunk: &Hunk) -> u64 {
     })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FileStatus {
     Added,
     Deleted,
@@ -474,7 +499,7 @@ pub struct Hunk {
     pub lines: Vec<DiffLine>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LineKind {
     Context,
     Added,
