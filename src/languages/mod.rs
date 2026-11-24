@@ -315,6 +315,14 @@ mod tests {
     }
 
     #[test]
+    fn python_prefers_pyrefly_and_falls_back() {
+        let python = Registry::builtin().get("python").unwrap().clone();
+        let commands: Vec<_> = python.lsp.iter().map(|l| l.command.as_str()).collect();
+        assert_eq!(commands, ["pyrefly", "pyright-langserver"]);
+        assert_eq!(python.lsp[0].args, ["lsp"]);
+    }
+
+    #[test]
     fn bad_overrides_are_errors() {
         let err = Registry::builtin()
             .merge("[[language]]\nname = \"zig\"")
